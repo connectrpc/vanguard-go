@@ -1,0 +1,19 @@
+services:
+
+  proxy:
+    build:
+      dockerfile: ./docker/envoy/Dockerfile
+      args:
+        ENVOY_VARIANT: contrib-v1.26.2
+    depends_on:
+      hello_service:
+        condition: service_healthy
+    ports:
+    - "${PORT_PROXY:-10000}:10000"
+
+  hello_service:
+    build:
+      dockerfile: ./docker/hello/Dockerfile
+    ports:
+    - "${PORT:-8080}:8080"
+

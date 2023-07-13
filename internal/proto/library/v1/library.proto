@@ -1,0 +1,43 @@
+// Copyright 2021-2023 Buf Technologies, Inc.
+
+syntax = "proto3";
+
+package vanguard.library.v1;
+
+import "google/api/annotations.proto";
+import "google/api/httpbody.proto";
+
+service LibraryService {
+  rpc GetBook(GetBookRequest) returns (Book) {
+    option (google.api.http) = {
+      get : "/v1/{name=shelves/*/books/*}"
+    };
+  };
+  rpc CreateBook(CreateBookRequest) returns (Book) {
+    option (google.api.http) = {
+      post : "/v1/{parent=shelves/*}/books"
+      body : "book"
+    };
+  };
+}
+
+message Book {
+  // Resource name of the book. It must have the format of "shelves/*/books/*".
+  // For example: "shelves/shelf1/books/book2".
+  string name = 1;
+
+  // ... other properties
+}
+
+message GetBookRequest {
+  // Resource name of a book. For example: "shelves/shelf1/books/book2".
+  string name = 1;
+}
+
+message CreateBookRequest {
+  // Resource name of the parent resource where to create the book.
+  // For example: "shelves/shelf1".
+  string parent = 1;
+  // The Book resource to be created. Client must not set the `Book.name` field.
+  Book book = 2;
+}

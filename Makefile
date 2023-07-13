@@ -81,3 +81,7 @@ $(BIN)/license-header: Makefile
 $(BIN)/golangci-lint: Makefile
 	@mkdir -p $(@D)
 	GOBIN=$(abspath $(@D)) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.50.0
+
+.PHONY: vanguard-lib
+vanguard-lib: ## Build the vanguard library
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC="zig cc -target x86_64-linux" CXX="zig c++ -target x86_64-linux" bazel run @go_sdk//:bin/go build -- -buildmode=c-shared -buildvcs=false -v -o ./lib/vanguard.so ./cmd/vanguard-envoy
