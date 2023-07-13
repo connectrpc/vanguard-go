@@ -1,3 +1,17 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package extprocapp
 
 import (
@@ -22,6 +36,7 @@ func NewConfig(externalConfig ExternalConfig) (*Config, error) {
 	config := &Config{
 		H2CAddress: externalConfig.H2CAddress,
 		TLSAddress: externalConfig.TLSAddress,
+		TLSConfig:  nil,
 	}
 	if externalConfig.TLSCert != "" && externalConfig.TLSKey != "" {
 		cert, err := os.ReadFile(externalConfig.TLSCert)
@@ -36,10 +51,9 @@ func NewConfig(externalConfig ExternalConfig) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		config.TLSConfig = &tls.Config{
-			MinVersion:   tls.VersionTLS12,
-			Certificates: []tls.Certificate{certificate},
-		}
+		config.TLSConfig = new(tls.Config)
+		config.TLSConfig.MinVersion = tls.VersionTLS12
+		config.TLSConfig.Certificates = []tls.Certificate{certificate}
 	}
 	return config, nil
 }
