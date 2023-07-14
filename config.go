@@ -1,25 +1,28 @@
 // Copyright 2023 Buf Technologies, Inc.
+//
+// All rights reserved.
 
 package vanguard
 
 import (
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"time"
+
+	_ "github.com/bufbuild/vanguard/internal/gen/library/v1"
 
 	xds "github.com/cncf/xds/go/xds/type/v3"
 	"github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api"
-
-	//"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/anypb"
+	//"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 )
 
 type Config struct {
 	echoBody string
 	// other fields
 
+	outputProtocol protocolType
 }
 
 type Parser struct{}
@@ -41,6 +44,7 @@ func (p *Parser) Parse(any *anypb.Any) (interface{}, error) {
 	} else {
 		return nil, fmt.Errorf("prefix_localreply_body: expect string while got %T", prefix)
 	}
+	conf.outputProtocol = protocolTypeGRPC
 	return conf, nil
 }
 
@@ -62,24 +66,27 @@ func ConfigFactory(c interface{}) api.StreamFilterFactory {
 		panic("unexpected config type")
 	}
 
-	go func() {
-		for i := 0; i < 10; i++ {
-			time.Sleep(5 * time.Second)
-			fmt.Println("hello from config factory")
-			rsp, err := http.Get("http://localhost:8080")
-			if err != nil {
-				fmt.Println(err)
-			} else {
-				b, _ := io.ReadAll(rsp.Body)
-				fmt.Println(string(b))
-			}
+	mux := &mux{
+		config: conf,
+	}
+	fmt.Println("adding services")
+	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		sds := fd.Services()
+		for i := 0; i < sds.Len(); i++ {
+			sd := sds.Get(i)
+			fmt.Println(sd.FullName())
+			mux.addService(sd)
+			return true
 		}
-	}()
+		return true
+	})
+	fmt.Println("done adding services")
 
 	return func(callbacks api.FilterCallbackHandler) api.StreamFilter {
-		return &filter{
+		return &filterEnvoy{
+			mux: mux,
+
 			callbacks: callbacks,
-			config:    conf,
 		}
 	}
 }
