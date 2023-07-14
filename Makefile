@@ -46,7 +46,7 @@ generate: $(BIN)/license-header ## Regenerate code and licenses
 		<(git ls-files --cached --modified --others --no-empty-directory --exclude-standard | sort -u | grep -v $(LICENSE_IGNORE) ) \
 		<(git ls-files --deleted | sort -u) | \
 		xargs $(BIN)/license-header \
-			--license-type apache \
+			--license-type proprietary \
 			--copyright-holder "Buf Technologies, Inc." \
 			--year-range "$(COPYRIGHT_YEARS)"
 
@@ -80,4 +80,4 @@ $(BIN)/license-header: Makefile
 
 $(BIN)/golangci-lint: Makefile
 	@mkdir -p $(@D)
-	GOBIN=$(abspath $(@D)) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.50.0
+	GOBIN=$(abspath $(@D)) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.52.0
