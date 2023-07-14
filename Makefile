@@ -46,7 +46,7 @@ generate: $(BIN)/license-header ## Regenerate code and licenses
 		<(git ls-files --cached --modified --others --no-empty-directory --exclude-standard | sort -u | grep -v $(LICENSE_IGNORE) ) \
 		<(git ls-files --deleted | sort -u) | \
 		xargs $(BIN)/license-header \
-			--license-type apache \
+			--license-type proprietary \
 			--copyright-holder "Buf Technologies, Inc." \
 			--year-range "$(COPYRIGHT_YEARS)"
 
