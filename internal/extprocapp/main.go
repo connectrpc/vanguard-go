@@ -11,7 +11,7 @@ import (
 
 func Main(arguments []string) error {
 	flags := flag.NewFlagSet("extproc", flag.ContinueOnError)
-	h2cAddress := flags.String("h2c-address", ":8080", "address to listen for h2c connections on")
+	h2cAddress := flags.String("h2c-address", ":9000", "address to listen for h2c connections on")
 	tlsAddress := flags.String("tls-address", "", "address to listen for tls connections on")
 	tlsCertName := flags.String("tls-cert", "", "path to tls certificate")
 	tlsKeyName := flags.String("tls-key", "", "path to tls private key")

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"buf.build/gen/go/envoyproxy/envoy/bufbuild/connect-go/envoy/service/ext_proc/v3/ext_procv3connect"
+	corev3 "buf.build/gen/go/envoyproxy/envoy/protocolbuffers/go/envoy/config/core/v3"
 	ext_procv3 "buf.build/gen/go/envoyproxy/envoy/protocolbuffers/go/envoy/service/ext_proc/v3"
 	"github.com/bufbuild/connect-go"
 	"golang.org/x/net/http2"
@@ -43,15 +44,15 @@ func NewExternalProcessor(h2cAddress, tlsAddress string, tlsConfig *tls.Config) 
 
 func (proc *externalProcessor) Run(ctx context.Context) error {
 	_, handler := ext_procv3connect.NewExternalProcessorHandler(proc)
-	h2Server := new(http2.Server)
-	server := new(http.Server)
-	server.Addr = proc.h2cAddress
-	server.Handler = h2c.NewHandler(handler, h2Server)
-	server.BaseContext = func(net.Listener) context.Context {
-		return ctx
+	h2Server := &http2.Server{}
+	server := &http.Server{
+		Addr:    proc.h2cAddress,
+		Handler: h2c.NewHandler(handler, h2Server),
+		BaseContext: func(net.Listener) context.Context {
+			return ctx
+		},
+		ReadHeaderTimeout: 5 * time.Second,
 	}
-	// TODO: timeouts/etc.
-	server.ReadHeaderTimeout = 5 * time.Second
 
 	if err := http2.ConfigureServer(server, h2Server); err != nil {
 		return err
@@ -96,20 +97,20 @@ func (proc *externalProcessor) Process(
 		} else if err != nil {
 			return err
 		}
-		var response *ext_procv3.ProcessingResponse
+		response := &ext_procv3.ProcessingResponse{}
 		switch requestType := request.Request.(type) {
 		case *ext_procv3.ProcessingRequest_RequestHeaders:
-			response, err = proc.processRequestHeaders(ctx, requestType)
+			response.Response, err = proc.processRequestHeaders(ctx, requestType)
 		case *ext_procv3.ProcessingRequest_ResponseHeaders:
-			response, err = proc.processResponseHeaders(ctx, requestType)
+			response.Response, err = proc.processResponseHeaders(ctx, requestType)
 		case *ext_procv3.ProcessingRequest_RequestBody:
-			response, err = proc.processRequestBody(ctx, requestType)
+			response.Response, err = proc.processRequestBody(ctx, requestType)
 		case *ext_procv3.ProcessingRequest_ResponseBody:
-			response, err = proc.processResponseBody(ctx, requestType)
+			response.Response, err = proc.processResponseBody(ctx, requestType)
 		case *ext_procv3.ProcessingRequest_RequestTrailers:
-			response, err = proc.processRequestTrailers(ctx, requestType)
+			response.Response, err = proc.processRequestTrailers(ctx, requestType)
 		case *ext_procv3.ProcessingRequest_ResponseTrailers:
-			response, err = proc.processResponseTrailers(ctx, requestType)
+			response.Response, err = proc.processResponseTrailers(ctx, requestType)
 		default:
 			err = connect.NewError(connect.CodeInvalidArgument, errors.New("unknown request type"))
 		}
@@ -126,41 +127,79 @@ func (proc *externalProcessor) Process(
 func (proc *externalProcessor) processRequestHeaders(
 	_ context.Context,
 	_ *ext_procv3.ProcessingRequest_RequestHeaders,
-) (*ext_procv3.ProcessingResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not implemented"))
+) (*ext_procv3.ProcessingResponse_RequestHeaders, error) { //nolint:unparam
+	return &ext_procv3.ProcessingResponse_RequestHeaders{
+		RequestHeaders: &ext_procv3.HeadersResponse{
+			Response: &ext_procv3.CommonResponse{
+				Status: ext_procv3.CommonResponse_CONTINUE,
+			},
+		},
+	}, nil
 }
 
 func (proc *externalProcessor) processResponseHeaders(
 	_ context.Context,
 	_ *ext_procv3.ProcessingRequest_ResponseHeaders,
-) (*ext_procv3.ProcessingResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not implemented"))
+) (*ext_procv3.ProcessingResponse_ResponseHeaders, error) { //nolint:unparam
+	return &ext_procv3.ProcessingResponse_ResponseHeaders{
+		ResponseHeaders: &ext_procv3.HeadersResponse{
+			Response: &ext_procv3.CommonResponse{
+				Status: ext_procv3.CommonResponse_CONTINUE,
+				HeaderMutation: &ext_procv3.HeaderMutation{
+					SetHeaders: []*corev3.HeaderValueOption{
+						{
+							Header: &corev3.HeaderValue{
+								Key:   "Ext-Proc-Test",
+								Value: "This header was set using an external processor.",
+							},
+						},
+					},
+				},
+			},
+		},
+	}, nil
 }
 
 func (proc *externalProcessor) processRequestBody(
 	_ context.Context,
 	_ *ext_procv3.ProcessingRequest_RequestBody,
-) (*ext_procv3.ProcessingResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not implemented"))
+) (*ext_procv3.ProcessingResponse_RequestBody, error) { //nolint:unparam
+	return &ext_procv3.ProcessingResponse_RequestBody{
+		RequestBody: &ext_procv3.BodyResponse{
+			Response: &ext_procv3.CommonResponse{
+				Status: ext_procv3.CommonResponse_CONTINUE,
+			},
+		},
+	}, nil
 }
 
 func (proc *externalProcessor) processResponseBody(
 	_ context.Context,
 	_ *ext_procv3.ProcessingRequest_ResponseBody,
-) (*ext_procv3.ProcessingResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not implemented"))
+) (*ext_procv3.ProcessingResponse_ResponseBody, error) { //nolint:unparam
+	return &ext_procv3.ProcessingResponse_ResponseBody{
+		ResponseBody: &ext_procv3.BodyResponse{
+			Response: &ext_procv3.CommonResponse{
+				Status: ext_procv3.CommonResponse_CONTINUE,
+			},
+		},
+	}, nil
 }
 
 func (proc *externalProcessor) processRequestTrailers(
 	_ context.Context,
 	_ *ext_procv3.ProcessingRequest_RequestTrailers,
-) (*ext_procv3.ProcessingResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not implemented"))
+) (*ext_procv3.ProcessingResponse_RequestTrailers, error) { //nolint:unparam
+	return &ext_procv3.ProcessingResponse_RequestTrailers{
+		RequestTrailers: &ext_procv3.TrailersResponse{},
+	}, nil
 }
 
 func (proc *externalProcessor) processResponseTrailers(
 	_ context.Context,
 	_ *ext_procv3.ProcessingRequest_ResponseTrailers,
-) (*ext_procv3.ProcessingResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("not implemented"))
+) (*ext_procv3.ProcessingResponse_ResponseTrailers, error) { //nolint:unparam
+	return &ext_procv3.ProcessingResponse_ResponseTrailers{
+		ResponseTrailers: &ext_procv3.TrailersResponse{},
+	}, nil
 }

@@ -41,9 +41,10 @@ func NewConfig(externalConfig ExternalConfig) (*Config, error) {
 		if err != nil {
 			return nil, err
 		}
-		config.TLSConfig = new(tls.Config)
-		config.TLSConfig.MinVersion = tls.VersionTLS12
-		config.TLSConfig.Certificates = []tls.Certificate{certificate}
+		config.TLSConfig = &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{certificate},
+		}
 	}
 	return config, nil
 }
