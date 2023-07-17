@@ -22,7 +22,7 @@ type Config struct {
 	echoBody string
 	// other fields
 
-	outputProtocol protocolType
+	outputProtocol protocol
 }
 
 type Parser struct{}
@@ -44,7 +44,7 @@ func (p *Parser) Parse(any *anypb.Any) (interface{}, error) {
 	} else {
 		return nil, fmt.Errorf("prefix_localreply_body: expect string while got %T", prefix)
 	}
-	conf.outputProtocol = protocolTypeGRPC
+	conf.outputProtocol = protocolGRPC // TODO
 	return conf, nil
 }
 
@@ -66,9 +66,7 @@ func ConfigFactory(c interface{}) api.StreamFilterFactory {
 		panic("unexpected config type")
 	}
 
-	mux := &mux{
-		config: conf,
-	}
+	mux := newMux(conf)
 	fmt.Println("adding services")
 	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
 		sds := fd.Services()

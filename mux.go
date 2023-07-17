@@ -6,18 +6,41 @@ package vanguard
 
 import (
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 
 	"google.golang.org/genproto/googleapis/api/annotations"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type mux struct {
-	config *Config
+	config      *Config
+	codecs      map[string]codec
+	compressors map[string]compressor
 
 	mu    sync.Mutex // serialize updates to state
 	state atomic.Pointer[state]
+}
+
+func newMux(config *Config) *mux {
+	codecs := map[string]codec{
+		"proto": codecProto{},
+		"json": codecJSON{
+			MarshalOptions: protojson.MarshalOptions{
+				EmitUnpopulated: true,
+			},
+		},
+	}
+	compressors := map[string]compressor{
+		"gzip": &compressorGzip{},
+	}
+	return &mux{
+		config:      config,
+		codecs:      codecs,
+		compressors: compressors,
+	}
 }
 
 func (m *mux) addService(sd protoreflect.ServiceDescriptor) error {
@@ -32,6 +55,20 @@ func (m *mux) addService(sd protoreflect.ServiceDescriptor) error {
 
 	m.state.Store(state)
 	return nil
+}
+
+func (m *mux) getCodec(name string) (codec, error) {
+	if c, ok := m.codecs[name]; ok {
+		return c, nil
+	}
+	return nil, statusErrorf(http.StatusBadRequest, "codec %q doesn't exist", name)
+}
+
+func (m *mux) getCompressor(name string) (compressor, error) {
+	if c, ok := m.compressors[name]; ok {
+		return c, nil
+	}
+	return nil, statusErrorf(http.StatusBadRequest, "compressor %q doesn't exist", name)
 }
 
 type state struct {

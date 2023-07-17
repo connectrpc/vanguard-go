@@ -7,8 +7,8 @@ package vanguard
 // https://pkg.go.dev/github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api
 
 import (
+	"bytes"
 	"fmt"
-	"net/http"
 
 	"github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api"
 )
@@ -19,17 +19,14 @@ type filterEnvoy struct {
 	*mux
 	//api.PassThroughStreamFilter
 
-	callbacks      api.FilterCallbackHandler
-	path           string
-	contentType    string
-	inputProtocol  protocolType
-	outputProtocol protocolType
-}
+	callbacks   api.FilterCallbackHandler
+	path        string
+	contentType string
+	srcProtocol protocol
+	dstProtocol protocol
 
-func (f *filterEnvoy) encError(code int, msg string) api.StatusType {
-	headers := make(map[string]string)
-	f.callbacks.SendLocalReply(code, msg, headers, -1, "test-from-go")
-	return api.LocalReply
+	decode chunker
+	encode chunker
 }
 
 // Callbacks which are called in request path
@@ -48,50 +45,66 @@ func (f *filterEnvoy) DecodeHeaders(header api.RequestHeaderMap, endStream bool)
 	f.path, _ = header.Get(":path")
 	f.contentType, _ = header.Get("content-type")
 
-	switch {
-	case isGRPC(header.Protocol(), f.contentType):
-		f.inputProtocol = protocolTypeGRPC
-	case isGRPCWeb(f.contentType):
-		f.inputProtocol = protocolTypeGRPCWeb
-	case isREST(f.contentType):
-		f.inputProtocol = protocolTypeREST
-	default:
-		return f.encError(http.StatusUnsupportedMediaType, "Unsupported Media Type")
-	}
+	f.srcProtocol = classifyProtocol(header)
+	f.dstProtocol = f.config.outputProtocol
 
 	lexer := lexer{input: f.path}
 	if err := lexPath(&lexer); err != nil {
-		return f.encError(http.StatusInternalServerError, err.Error())
+		return f.encError(err)
 	}
 	toks := lexer.tokens()
-	switch f.inputProtocol {
-	case protocolTypeGRPC, protocolTypeGRPCWeb:
+	switch f.srcProtocol {
+	case protocolGRPC, protocolGRPCWeb:
 		name := toks.String()
 		md, err := state.getMethod(name)
 		if err != nil {
-			return f.encError(http.StatusInternalServerError, err.Error())
+			return f.encError(err)
 		}
 		_ = md
-	case protocolTypeREST:
+		f.decode = &envelopeChunker{
+			buffer: &bytes.Buffer{},
+			onChunk: func(chunk []byte) ([]byte, error) {
+				// ...
+
+				return chunk, nil
+			},
+		}
+	case protocolHTTPRule:
 		verb := header.Method()
 		method, params, err := state.path.search(toks, verb)
 		if err != nil {
-			return f.encError(http.StatusInternalServerError, err.Error())
+			return f.encError(err)
 		}
 		_ = method
 		_ = params
+	default:
+		return f.encError(errUnsupportedProtocol(f.srcProtocol))
 	}
 
-	// TODO: config for output protocol
-	f.outputProtocol = f.config.outputProtocol
+	switch f.dstProtocol {
+	case protocolGRPC, protocolGRPCWeb:
+		f.encode = &envelopeChunker{
+			buffer: &bytes.Buffer{},
+			onChunk: func(chunk []byte) ([]byte, error) {
+				// ...
 
+				return chunk, nil
+			},
+		}
+	default:
+		return f.encError(errUnsupportedProtocol(f.dstProtocol))
+	}
+
+	decodeHeader(f.srcProtocol, f.dstProtocol, header)
 	return api.Continue
 }
 
 //The callbacks can be implemented on demand
 
 func (f *filterEnvoy) DecodeData(buffer api.BufferInstance, endStream bool) api.StatusType {
-
+	if err := f.decode.Next(buffer, endStream); err != nil {
+		return f.encError(err)
+	}
 	return api.Continue
 }
 
@@ -117,11 +130,26 @@ func (f *filterEnvoy) EncodeData(buffer api.BufferInstance, endStream bool) api.
 	//		buffer.SetString("")
 	//	}
 	//}
+	if err := f.encode.Next(buffer, endStream); err != nil {
+		return f.encError(err)
+	}
 	return api.Continue
 }
 
 func (f *filterEnvoy) EncodeTrailers(trailers api.ResponseTrailerMap) api.StatusType {
+	// TODO
 	return api.Continue
 }
 
 func (f *filterEnvoy) OnDestroy(reason api.DestroyReason) {}
+
+func (f *filterEnvoy) encError(err error) api.StatusType {
+	serr := asStatusError(err)
+	code := serr.Code()
+	msg := serr.Error()
+
+	// TODO: per protocol error handling
+	headers := make(map[string]string)
+	f.callbacks.SendLocalReply(code, msg, headers, -1, "test-from-go")
+	return api.LocalReply
+}

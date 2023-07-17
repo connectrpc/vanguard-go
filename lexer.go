@@ -334,3 +334,21 @@ func lexPath(l *lexer) error {
 		}
 	}
 }
+
+func lexServiceName(l *lexer) error {
+	for {
+		switch r := l.next(); r {
+		case '/':
+			if err := l.emit(tokenSlash); err != nil {
+				return err
+			}
+			if err := lexPathSegment(l); err != nil {
+				return err
+			}
+		case eof:
+			return l.emit(tokenEOF)
+		default:
+			return l.errUnexpected()
+		}
+	}
+}

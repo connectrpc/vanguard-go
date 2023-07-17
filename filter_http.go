@@ -12,18 +12,18 @@ import (
 
 type filterHTTP struct {
 	*mux
+	*http.ResponseController
 
 	path              string
 	contentType       string
-	inputProtocol     protocolType
+	encInput          streamType
+	inputProtocol     protocol
+	outputProtocol    protocol
 	outputContentType string
-	ouputProtocol     protocolType
-
-	method *method
-	params params
+	methodDesc        protoreflect.MethodDescriptor
 }
 
-func (f *filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
+func (f filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	state := f.state.Load()
 	if state == nil {
 		http.Error(rsp, "Internal Server Error", http.StatusInternalServerError)
@@ -32,17 +32,8 @@ func (f *filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	f.path = req.URL.Path
 	f.contentType = req.Header.Get("Content-Type")
 
-	switch {
-	case isGRPC(req.Proto, f.contentType):
-		f.inputProtocol = protocolTypeGRPC
-	case isGRPCWeb(f.contentType):
-		f.inputProtocol = protocolTypeGRPCWeb
-	case isREST(f.contentType):
-		f.inputProtocol = protocolTypeREST
-	default:
-		http.Error(rsp, "Unsupported Media Type", http.StatusUnsupportedMediaType)
-		return // TODO
-	}
+	f.inputProtocol = classifyProtocol(headerMap(req.Header))
+	f.outputProtocol = f.config.outputProtocol
 
 	lexer := lexer{input: req.URL.Path}
 	if err := lexPath(&lexer); err != nil {
@@ -51,50 +42,74 @@ func (f *filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	}
 	toks := lexer.tokens()
 	switch f.inputProtocol {
-	case protocolTypeGRPC, protocolTypeGRPCWeb:
+	case protocolGRPC, protocolGRPCWeb:
 		name := toks.String()
-		md, err := state.getMethod(name)
+		methodDesc, err := state.getMethod(name)
 		if err != nil {
 			f.encError(rsp, err)
 			return
 		}
-		f.method = method
-		f.params = nil // no URL params for gRPC
-	case protocolTypeREST:
+		f.methodDesc = methodDesc
+		filter := &filterHTTPGRPC{
+			filterHTTP: f,
+			isWeb:      f.inputProtocol == protocolGRPCWeb,
+		}
+		filter.ServeHTTP(rsp, req)
+	case protocolHTTPRule:
 		verb := req.Method
 		method, params, err := state.path.search(toks, verb)
 		if err != nil {
 			f.encError(rsp, err)
 			return
 		}
-		f.method = method
-		f.params = params
+		f.methodDesc = method.desc
+		filter := &filterHTTPRule{
+			filterHTTP: f,
+			method:     method,
+			params:     params,
+		}
+		filter.ServeHTTP(rsp, req)
+	default:
+		f.encError(rsp, errUnsupportedProtocol(f.inputProtocol))
+		return
 	}
-
-	// TODO: config for output protocol
-	f.ouputProtocol = f.config.outputProtocol
 }
 
-func (f *filterHTTP) encError(rsp http.ResponseWriter, err error) {
+func (f filterHTTP) encError(rsp http.ResponseWriter, err error) {
+	serr := asStatusError(err)
+	code := serr.Code()
+	msg := serr.Error()
 	// TODO: encode error on f.protocolType
-	http.Error(rsp, err.Error(), http.StatusInternalServerError)
+	http.Error(rsp, msg, code)
 }
 
 type filterHTTPRule struct {
-	*filterHTTP
+	filterHTTP
 
 	method *method
 	params params
 }
 
 func (f *filterHTTPRule) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
+	// encode header
+	// encode body
+
+	// decode header
+	// decode body
+	// decode trailers
 }
 
 type filterHTTPGRPC struct {
-	*filterHTTP
+	filterHTTP
 
-	desc protoreflect.MethodDescriptor
+	isWeb bool
 }
 
 func (f *filterHTTPGRPC) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
+	// encode header
+	// encode body
+
+	// decode header
+	// decode body
+	// decode trailers
 }

@@ -1,11 +1,12 @@
 // Copyright 2021-2023 Buf Technologies, Inc.
+//
+// All rights reserved.
 
 syntax = "proto3";
 
 package vanguard.library.v1;
 
 import "google/api/annotations.proto";
-import "google/api/httpbody.proto";
 
 service LibraryService {
   rpc GetBook(GetBookRequest) returns (Book) {
