@@ -77,7 +77,7 @@ func TestEnvelopeChunker(t *testing.T) {
 				buffer: &bytes.Buffer{},
 				onChunk: func(msg []byte) ([]byte, error) {
 					chunks = append(chunks, msg)
-					return testcase.onMsg(msg)
+					return testcase.onChunk(msg)
 				},
 			}
 			outputs := [][]byte{}

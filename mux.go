@@ -5,6 +5,7 @@
 package vanguard
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"sync"
@@ -19,6 +20,7 @@ type mux struct {
 	config      *Config
 	codecs      map[string]codec
 	compressors map[string]compressor
+	buffers     bufferPool
 
 	mu    sync.Mutex // serialize updates to state
 	state atomic.Pointer[state]
@@ -62,6 +64,38 @@ func (m *mux) getCodec(name string) (codec, error) {
 		return c, nil
 	}
 	return nil, statusErrorf(http.StatusBadRequest, "codec %q doesn't exist", name)
+}
+
+func (m *mux) compress(b []byte, comp compressor) ([]byte, error) {
+	buffer := m.buffers.Get()
+	defer m.buffers.Put(buffer)
+
+	wc, err := comp.Compress(buffer)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := wc.Write(b); err != nil {
+		return nil, err
+	}
+	if err := wc.Close(); err != nil {
+		return nil, err
+	}
+	return append(b[:0], buffer.Bytes()...), nil
+
+}
+func (m *mux) decompress(b []byte, comp compressor) ([]byte, error) {
+	buffer := m.buffers.Get()
+	defer m.buffers.Put(buffer)
+
+	src := bytes.NewReader(b)
+	rc, err := comp.Decompress(src)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := buffer.ReadFrom(rc); err != nil {
+		return nil, err
+	}
+	return append(b[:0], buffer.Bytes()...), nil
 }
 
 func (m *mux) getCompressor(name string) (compressor, error) {

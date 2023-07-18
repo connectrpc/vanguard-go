@@ -10,15 +10,27 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+func NewFilterHandler(config *Config, handler http.Handler) http.Handler {
+	mux := newMux(config)
+
+	return http.HandlerFunc(func(rsp http.ResponseWriter, req *http.Request) {
+		filterHTTP{
+			mux:                mux,
+			ResponseController: http.NewResponseController(rsp),
+			handler:            handler,
+		}.ServeHTTP(rsp, req)
+	})
+}
+
 type filterHTTP struct {
 	*mux
 	*http.ResponseController
 
+	handler           http.Handler
 	path              string
 	contentType       string
-	encInput          streamType
-	inputProtocol     protocol
-	outputProtocol    protocol
+	srcProtocol       protocol
+	dstProtocol       protocol
 	outputContentType string
 	methodDesc        protoreflect.MethodDescriptor
 }
@@ -32,8 +44,8 @@ func (f filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	f.path = req.URL.Path
 	f.contentType = req.Header.Get("Content-Type")
 
-	f.inputProtocol = classifyProtocol(headerMap(req.Header))
-	f.outputProtocol = f.config.outputProtocol
+	f.srcProtocol = classifyProtocol(headerMap(req.Header))
+	f.dstProtocol = f.config.outputProtocol
 
 	lexer := lexer{input: req.URL.Path}
 	if err := lexPath(&lexer); err != nil {
@@ -41,7 +53,7 @@ func (f filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	toks := lexer.tokens()
-	switch f.inputProtocol {
+	switch f.srcProtocol {
 	case protocolGRPC, protocolGRPCWeb:
 		name := toks.String()
 		methodDesc, err := state.getMethod(name)
@@ -52,7 +64,7 @@ func (f filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		f.methodDesc = methodDesc
 		filter := &filterHTTPGRPC{
 			filterHTTP: f,
-			isWeb:      f.inputProtocol == protocolGRPCWeb,
+			isWeb:      f.srcProtocol == protocolGRPCWeb,
 		}
 		filter.ServeHTTP(rsp, req)
 	case protocolHTTPRule:
@@ -70,7 +82,7 @@ func (f filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		}
 		filter.ServeHTTP(rsp, req)
 	default:
-		f.encError(rsp, errUnsupportedProtocol(f.inputProtocol))
+		f.encError(rsp, errUnsupportedProtocol(f.srcProtocol))
 		return
 	}
 }

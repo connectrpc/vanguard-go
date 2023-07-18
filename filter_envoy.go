@@ -11,9 +11,9 @@ import (
 	"fmt"
 
 	"github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
-
-var UpdateUpstreamBody = "upstream response body updated by vanguard plugin"
 
 type filterEnvoy struct {
 	*mux
@@ -27,6 +27,14 @@ type filterEnvoy struct {
 
 	decode chunker
 	encode chunker
+	stream chunkstreamer
+
+	//decStream chunkstream // dec -> msg -> enc ->|
+	//encStream chunkstream // enc <- msg <- dec <-|
+
+	//codec      codec
+	//inputComp  compressor
+	//outputComp compressor
 }
 
 // Callbacks which are called in request path
@@ -48,6 +56,11 @@ func (f *filterEnvoy) DecodeHeaders(header api.RequestHeaderMap, endStream bool)
 	f.srcProtocol = classifyProtocol(header)
 	f.dstProtocol = f.config.outputProtocol
 
+	f.stream.onMsg = func(msg proto.Message) error {
+		fmt.Printf("onMsg: %v\n", msg)
+		return nil
+	}
+
 	lexer := lexer{input: f.path}
 	if err := lexPath(&lexer); err != nil {
 		return f.encError(err)
@@ -56,18 +69,22 @@ func (f *filterEnvoy) DecodeHeaders(header api.RequestHeaderMap, endStream bool)
 	switch f.srcProtocol {
 	case protocolGRPC, protocolGRPCWeb:
 		name := toks.String()
-		md, err := state.getMethod(name)
+		methodDesc, err := state.getMethod(name)
 		if err != nil {
 			return f.encError(err)
 		}
-		_ = md
-		f.decode = &envelopeChunker{
-			buffer: &bytes.Buffer{},
-			onChunk: func(chunk []byte) ([]byte, error) {
-				// ...
+		argsDesc := methodDesc.Input()
+		replyDesc := methodDesc.Output()
 
-				return chunk, nil
-			},
+		f.stream.args = dynamicpb.NewMessage(argsDesc)
+		f.stream.reply = dynamicpb.NewMessage(replyDesc)
+		f.stream.up = &upstreamGRPC{
+			mux:   f.mux,
+			isWeb: f.srcProtocol == protocolGRPCWeb,
+		}
+		f.decode = envelopeChunker{
+			buffer:  &bytes.Buffer{},
+			onChunk: f.stream.Decode,
 		}
 	case protocolHTTPRule:
 		verb := header.Method()
@@ -75,27 +92,44 @@ func (f *filterEnvoy) DecodeHeaders(header api.RequestHeaderMap, endStream bool)
 		if err != nil {
 			return f.encError(err)
 		}
-		_ = method
-		_ = params
+		argsDesc := method.desc.Input()
+		replyDesc := method.desc.Output()
+
+		f.stream.args = dynamicpb.NewMessage(argsDesc)
+		f.stream.reply = dynamicpb.NewMessage(replyDesc)
+		f.stream.up = &upstreamHTTPRule{
+			mux:    f.mux,
+			method: method,
+			params: params,
+		}
+		f.decode = endStreamChunker{
+			buffer:  &bytes.Buffer{},
+			onChunk: f.stream.Decode,
+		}
 	default:
 		return f.encError(errUnsupportedProtocol(f.srcProtocol))
 	}
 
 	switch f.dstProtocol {
 	case protocolGRPC, protocolGRPCWeb:
-		f.encode = &envelopeChunker{
-			buffer: &bytes.Buffer{},
-			onChunk: func(chunk []byte) ([]byte, error) {
-				// ...
-
-				return chunk, nil
-			},
+		f.stream.down = &downstreamGRPC{
+			mux:   f.mux,
+			isWeb: f.dstProtocol == protocolGRPCWeb,
+		}
+		f.encode = envelopeChunker{
+			buffer:  &bytes.Buffer{},
+			onChunk: f.stream.Encode,
 		}
 	default:
 		return f.encError(errUnsupportedProtocol(f.dstProtocol))
 	}
-
+	if err := f.stream.up.DecodeHeader(header); err != nil {
+		return f.encError(err)
+	}
 	decodeHeader(f.srcProtocol, f.dstProtocol, header)
+	if err := f.stream.down.EncodeHeader(header); err != nil {
+		return f.encError(err)
+	}
 	return api.Continue
 }
 
@@ -113,23 +147,20 @@ func (f *filterEnvoy) DecodeTrailers(trailers api.RequestTrailerMap) api.StatusT
 }
 
 func (f *filterEnvoy) EncodeHeaders(header api.ResponseHeaderMap, endStream bool) api.StatusType {
-	//if f.path == "/update_upstream_response" {
-	//	header.Set("Content-Length", strconv.Itoa(len(UpdateUpstreamBody)))
-	//}
 	header.Set("Rsp-Header-From-Go", "bar-test")
+
+	if err := f.stream.down.DecodeHeader(header); err != nil {
+		return f.encError(err)
+	}
+	encodeHeader(f.srcProtocol, f.dstProtocol, header)
+	if err := f.stream.up.EncodeHeader(header); err != nil {
+		return f.encError(err)
+	}
 	return api.Continue
 }
 
 // Callbacks which are called in response path
 func (f *filterEnvoy) EncodeData(buffer api.BufferInstance, endStream bool) api.StatusType {
-	//if f.path == "/update_upstream_response" {
-	//	if endStream {
-	//		buffer.SetString(UpdateUpstreamBody)
-	//	} else {
-	//		// TODO implement buffer->Drain, buffer.SetString means buffer->Drain(buffer.Len())
-	//		buffer.SetString("")
-	//	}
-	//}
 	if err := f.encode.Next(buffer, endStream); err != nil {
 		return f.encError(err)
 	}
@@ -137,7 +168,7 @@ func (f *filterEnvoy) EncodeData(buffer api.BufferInstance, endStream bool) api.
 }
 
 func (f *filterEnvoy) EncodeTrailers(trailers api.ResponseTrailerMap) api.StatusType {
-	// TODO
+	encodeTrailer(f.srcProtocol, f.dstProtocol, trailers)
 	return api.Continue
 }
 

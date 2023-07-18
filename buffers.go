@@ -124,12 +124,16 @@ type buffer interface {
 	Reset()
 }
 
+type chunker interface {
+	Next(data buffer, endStream bool) error
+}
+
 type envelopeChunker struct {
 	buffer  *bytes.Buffer
 	onChunk func(src []byte) ([]byte, error)
 }
 
-func (c *envelopeChunker) Next(data buffer, _ bool) error {
+func (c envelopeChunker) Next(data buffer, _ bool) error {
 	_, _ = c.buffer.Write(data.Bytes())
 	data.Reset()
 
@@ -155,6 +159,25 @@ func (c *envelopeChunker) Next(data buffer, _ bool) error {
 	return nil
 }
 
-type chunker interface {
-	Next(data buffer, isEnd bool) error
+type endStreamChunker struct {
+	buffer  *bytes.Buffer
+	onChunk func(src []byte) ([]byte, error)
+}
+
+func (c endStreamChunker) Next(data buffer, endStream bool) error {
+	_, _ = c.buffer.Write(data.Bytes())
+	data.Reset()
+	if !endStream {
+		return nil
+	}
+	msg := c.buffer.Bytes()
+	rsp, err := c.onChunk(msg)
+	if err != nil {
+		return err
+	}
+	if _, err := data.Write(rsp); err != nil {
+		return err
+	}
+	c.buffer.Reset()
+	return nil
 }
