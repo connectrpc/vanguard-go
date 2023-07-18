@@ -4,7 +4,7 @@
 
 From the root project folder build the plugin with:
 ```sh
-make plugin
+docker compose -f ./build/docker-compose.yaml up
 ```
 
 Then run with docker compse as:

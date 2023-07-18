@@ -34,10 +34,6 @@ test: build ## Run unit tests
 build: generate ## Build all packages
 	$(GO) build ./...
 
-.PHONY: plugin
-plugin: ## Build the plugin
-	docker compose -f ./build/docker-compose.yaml up
-
 .PHONY: generate
 generate: $(BIN)/license-header ## Regenerate code and licenses
 	@# We want to operate on a list of modified and new files, excluding
