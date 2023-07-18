@@ -2,3 +2,5 @@
 *.pprof
 *.svg
 cover.out
+
+lib/

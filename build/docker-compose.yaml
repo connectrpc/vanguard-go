@@ -1,0 +1,16 @@
+services:
+  go_plugin_compile:
+    build:
+      dockerfile: ./Dockerfile
+      target: golang-base
+    command: >
+      bash -c "
+      ls -lah
+      && go build -o vanguard.so -buildmode=c-shared ./cmd/vanguard-envoy
+      && mv ./vanguard.so /output"
+    working_dir: /source
+    environment:
+    - GOFLAGS=-buildvcs=false
+    volumes:
+    - ..:/source
+    - ../lib:/output
