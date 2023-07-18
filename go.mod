@@ -5,6 +5,7 @@ go 1.19
 require (
 	github.com/cncf/xds/go v0.0.0-20230607035331-e9ce68804cb4
 	github.com/envoyproxy/envoy v1.26.2
+	golang.org/x/exp v0.0.0-20230713183714-613f0c0eb8a1
 	google.golang.org/protobuf v1.31.0
 )
 

@@ -1,28 +1,30 @@
-// Copyright 2021-2023 Buf Technologies, Inc.
+// Copyright 2023 Buf Technologies, Inc.
 //
 // All rights reserved.
 
 package main
 
 import (
-	"log"
 	"net/http"
-	"net/http/httputil"
+	"os"
 	"time"
+
+	"golang.org/x/exp/slog"
 )
 
 func main() {
-	s := &http.Server{
+	svr := &http.Server{
 		Addr: ":8080",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := httputil.DumpRequest(r, true)
-			log.Printf("%s", b)
-			w.Write([]byte("Hello, World!"))
+		Handler: http.HandlerFunc(func(rsp http.ResponseWriter, _ *http.Request) {
+			_, _ = rsp.Write([]byte("Hello, World!"))
 		}),
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
 		MaxHeaderBytes: 1 << 20,
 	}
-	log.Printf("Starting server on %s\n", s.Addr)
-	log.Fatal(s.ListenAndServe())
+	slog.Info("Starting server", slog.String("address", svr.Addr))
+	if err := svr.ListenAndServe(); err != nil {
+		slog.Error(err.Error())
+		os.Exit(1)
+	}
 }

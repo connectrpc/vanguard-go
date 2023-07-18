@@ -12,14 +12,14 @@ func NewFilterHandler(config *Config, handler http.Handler) http.Handler {
 	mux := newMux(config)
 
 	return http.HandlerFunc(func(rsp http.ResponseWriter, req *http.Request) {
-		f := &filterHTTP{
+		filter := &filterHTTP{
 			mux:                mux,
 			ResponseWriter:     rsp,
-			ResponseController: http.NewResponseController(rsp),
+			ResponseController: http.NewResponseController(rsp), //nolint:bodyclose
 		}
 
 		handler.ServeHTTP(rsp, req)
-		_ = f.Flush()
+		_ = filter.Flush()
 	})
 }
 
