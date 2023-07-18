@@ -6,11 +6,9 @@ services:
     command: >
       bash -c "
       ls -lah
-      && go build -o vanguard.so -buildmode=c-shared ./cmd/vanguard-envoy
-      && mv ./vanguard.so /output"
+      && go build -o ./lib/vanguard.so -buildmode=c-shared ./lib/vanguard"
     working_dir: /source
     environment:
     - GOFLAGS=-buildvcs=false
     volumes:
     - ..:/source
-    - ../lib:/output

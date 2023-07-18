@@ -2,5 +2,4 @@
 *.pprof
 *.svg
 cover.out
-
-lib/
+lib/*.so
