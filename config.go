@@ -64,10 +64,9 @@ func (p *Parser) Merge(parent interface{}, child interface{}) interface{} {
 
 func ConfigFactory(c interface{}) api.StreamFilterFactory {
 	conf := c.(*Config) //nolint:errcheck,forcetypeassert
-	mux := newMux(conf)
+	mux := NewMux(conf)
 
-	mux := newMux(conf)
-	fmt.Println("adding services")
+	// TODO: add services dynamically
 	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
 		sds := fd.Services()
 		for i := 0; i < sds.Len(); i++ {
@@ -78,11 +77,10 @@ func ConfigFactory(c interface{}) api.StreamFilterFactory {
 		}
 		return true
 	})
-	fmt.Println("done adding services")
 
 	return func(callbacks api.FilterCallbackHandler) api.StreamFilter {
 		return &filterEnvoy{
-			mux: mux,
+			Mux: mux,
 
 			callbacks: callbacks,
 		}

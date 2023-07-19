@@ -1,4 +1,4 @@
-// Copyright 2021-2023 Buf Technologies, Inc.
+// Copyright 2023 Buf Technologies, Inc.
 //
 // All rights reserved.
 

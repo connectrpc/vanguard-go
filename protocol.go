@@ -43,7 +43,7 @@ func (p protocol) String() string {
 }
 
 func classifyProtocol(header header) protocol {
-	contentType, ok := header.Get("Content-Type")
+	contentType, _ := header.Get("Content-Type")
 	switch {
 	case strings.HasPrefix(contentType, "application/grpc-web"):
 		return protocolGRPCWeb
@@ -51,44 +51,13 @@ func classifyProtocol(header header) protocol {
 		return protocolGRPC
 	case strings.HasPrefix(contentType, "application/connect"):
 		return protocolConnectStream
-	case ok:
+	default:
 		if _, ok := header.Get("Connect-Protocol-Version"); ok {
 			return protocolConnectUnary
 		}
 		return protocolHTTPRule
-	default:
-		return protocolUnknown
-	}
-}
-
-func (p protocol) getCodecName(header header) string {
-	contentType, _ := header.Get("Content-Type")
-	switch p {
-	case protocolGRPC, protocolGRPCWeb, protocolConnectStream:
-		_, name, ok := strings.Cut(contentType, "+")
-		if !ok {
-			return "proto"
-		}
-		return name
-	case protocolConnectUnary, protocolHTTPRule:
-		return strings.TrimPrefix(contentType, "application/")
-	default:
-		return ""
-	}
-}
-func (p protocol) getCompressorName(header header) string {
-	switch p {
-	case protocolGRPC, protocolGRPCWeb:
-		encoding, _ := header.Get("Grpc-Encoding")
-		return encoding
-	case protocolConnectStream:
-		encoding, _ := header.Get("Connect-Content-Encoding")
-		return encoding
-	case protocolConnectUnary, protocolHTTPRule:
-		encoding, _ := header.Get("Content-Encoding")
-		return encoding
-	default:
-		return ""
+		//default:
+		//	return protocolUnknown
 	}
 }
 
@@ -220,7 +189,8 @@ func decodeHeaderGRPCWebToGRPC(header header) {
 }
 
 func decodeHeaderHTTPRuleToGRPC(header header) {
-	//
+	header.Set("Content-Type", "application/grpc+proto")
+	// TODO: decode header
 }
 
 // src <- dst
@@ -241,28 +211,6 @@ func encodeTrailer(src, dst protocol, header header) {
 	}
 }
 
-//type encoderFunc func([]byte, proto.Message) ([]byte, error)
-//type decoderFunc func([]byte, proto.Message) error
-//
-//type chunkstream struct {
-//	msg   proto.Message
-//	dec   decoderFunc
-//	onMsg func(proto.Message) error
-//	enc   encoderFunc
-//}
-//
-//func (c chunkstream) onChunk(b []byte) ([]byte, error) {
-//	if err := c.dec(b, c.msg); err != nil {
-//		return nil, err
-//	}
-//	if c.onMsg != nil {
-//		if err := c.onMsg(c.msg); err != nil {
-//			return nil, err
-//		}
-//	}
-//	return c.enc(b[:0], c.msg)
-//}
-
 // A stream is one half of a full stream.
 // Upstream decodes the recv message and encodes the send message.
 // Downstream encodes the recv message and decodes the send message.
@@ -274,12 +222,29 @@ func encodeTrailer(src, dst protocol, header header) {
 type stream interface {
 	DecodeHeader(header) error
 	Decode([]byte, proto.Message) error // bytes -> msg
+	DecodeTrailer(header) error
 	EncodeHeader(header) error
 	Encode([]byte, proto.Message) ([]byte, error) // msg -> bytes
 	EncodeTrailer(header) error
-	// EncodeStatus() error
+	// EncodeStatus(buffer, error) error
 }
 type msgFunc func(proto.Message) error
+
+type upstream interface {
+	DecodeHeader(buffer buffer, header header) error
+	DecodeMessage(buffer buffer, msg proto.Message) error
+	EncodeHeader(buffer buffer, header header) error
+	EncodeMessage(buffer buffer, msg proto.Message) error
+	EncodeTrailer(buffer buffer, header header) error
+	EncodeStatus(buffer buffer, header header, err error) error
+}
+type downstream interface {
+	EncodeHeader(buffer buffer, header header) error
+	EncodeMessage(buffer buffer, msg proto.Message) error
+	DecodeHeader(buffer buffer, header header) error
+	DecodeMessage(buffer buffer, msg proto.Message) error
+	DecodeTrailer(buffer buffer, header header) error
+}
 
 func process(src, dst stream, msg proto.Message, onMsg msgFunc, b []byte) ([]byte, error) {
 	if err := src.Decode(b, msg); err != nil {
@@ -302,15 +267,15 @@ type chunkstreamer struct {
 	onMsg msgFunc
 }
 
-func (c chunkstreamer) Decode(b []byte) ([]byte, error) {
+func (c *chunkstreamer) Decode(b []byte) ([]byte, error) {
 	return process(c.up, c.down, c.args, c.onMsg, b)
 }
-func (c chunkstreamer) Encode(b []byte) ([]byte, error) {
+func (c *chunkstreamer) Encode(b []byte) ([]byte, error) {
 	return process(c.down, c.up, c.reply, c.onMsg, b)
 }
 
 type downstreamGRPC struct {
-	*mux
+	*Mux
 
 	codec   codec
 	encComp compressor // recv
@@ -318,8 +283,26 @@ type downstreamGRPC struct {
 	isWeb   bool
 }
 
-func (d *downstreamGRPC) EncodeHeader(header) error {
+func (d *downstreamGRPC) EncodeHeader(header header) error {
+	contentType, ok := header.Get("Content-Type")
+	if !ok {
+		// Default to JSON
+		contentType = "application/json"
+		header.Set("Content-Type", contentType)
+	}
+	_, codecName, ok := strings.Cut(contentType, "+")
+	if !ok {
+		codecName = "proto"
+	}
+	codec, err := d.getCodec(codecName)
+	if err != nil {
+		return err
+	}
+	d.codec = codec
 
+	header.Set("Grpc-Accept-Encoding", "identity")
+
+	// TODO: encoding...
 	return nil
 }
 func (d *downstreamGRPC) Encode(b []byte, msg proto.Message) ([]byte, error) { // msg -> bytes
@@ -347,7 +330,7 @@ func (d *downstreamGRPC) DecodeHeader(header) error {
 func (d *downstreamGRPC) Decode(b []byte, msg proto.Message) (err error) {
 	// TODO: flags..
 	isCompressed := b[0]&0x01 == 1
-	if !isCompressed {
+	if isCompressed {
 		comp := d.decComp
 		if comp == nil {
 			return errDecompressorNotFound()
@@ -362,12 +345,14 @@ func (d *downstreamGRPC) Decode(b []byte, msg proto.Message) (err error) {
 	return d.codec.Unmarshal(b, msg)
 }
 func (d *downstreamGRPC) EncodeTrailer(header) error {
-	// convert grpc status to error?
+	return nil
+}
+func (d *downstreamGRPC) DecodeTrailer(header) error {
 	return nil
 }
 
 type upstreamGRPC struct {
-	*mux
+	*Mux
 
 	codec   codec
 	decComp compressor
@@ -377,6 +362,9 @@ type upstreamGRPC struct {
 
 func (u *upstreamGRPC) DecodeHeader(header) error { return nil }
 func (u *upstreamGRPC) Decode([]byte, proto.Message) error { // bytes -> msg
+	return nil
+}
+func (u *upstreamGRPC) DecodeTrailer(header) error {
 	return nil
 }
 func (u *upstreamGRPC) EncodeHeader(header) error {
@@ -390,7 +378,7 @@ func (u *upstreamGRPC) EncodeTrailer(header) error {
 }
 
 type upstreamHTTPRule struct {
-	*mux
+	*Mux
 
 	codec   codec
 	decComp compressor
@@ -402,15 +390,20 @@ type upstreamHTTPRule struct {
 }
 
 func (u *upstreamHTTPRule) DecodeHeader(header header) error {
-	contentType, _ := header.Get("Content-Type")
+	contentType, ok := header.Get("Content-Type")
+	if !ok {
+		// Default to JSON
+		contentType = "application/json"
+		header.Set("Content-Type", contentType)
+	}
 	codec, err := u.getCodec(strings.TrimPrefix(contentType, "application/"))
 	if err != nil {
 		return err
 	}
 	u.codec = codec
 
-	encoding, _ := header.Get("Content-Encoding")
-	if len(encoding) > 0 && encoding != "identity" {
+	encoding, ok := header.Get("Content-Encoding")
+	if ok && encoding != "identity" {
 		comp, err := u.getCompressor(encoding)
 		if err != nil {
 			return err
@@ -426,8 +419,10 @@ func (u *upstreamHTTPRule) Decode(b []byte, msg proto.Message) (err error) {
 			return err
 		}
 	}
-	if err := u.codec.Unmarshal(b, msg); err != nil {
-		return err
+	if len(b) > 0 {
+		if err := u.codec.Unmarshal(b, msg); err != nil {
+			return err
+		}
 	}
 	if u.recv == 0 {
 		if err := u.params.set(msg); err != nil {
@@ -463,6 +458,10 @@ func (u *upstreamHTTPRule) Encode(b []byte, msg proto.Message) ([]byte, error) {
 	return b, nil
 }
 func (u *upstreamHTTPRule) EncodeTrailer(header) error {
+	// TODO: clear map?
+	return nil
+}
+func (u *upstreamHTTPRule) DecodeTrailer(header) error {
 	// TODO: clear map?
 	return nil
 }

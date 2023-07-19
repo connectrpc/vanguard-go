@@ -16,7 +16,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-type mux struct {
+type Mux struct {
 	config      *Config
 	codecs      map[string]codec
 	compressors map[string]compressor
@@ -26,7 +26,7 @@ type mux struct {
 	state atomic.Pointer[state]
 }
 
-func newMux(config *Config) *mux {
+func NewMux(config *Config) *Mux {
 	codecs := map[string]codec{
 		"proto": codecProto{},
 		"json": codecJSON{
@@ -38,14 +38,14 @@ func newMux(config *Config) *mux {
 	compressors := map[string]compressor{
 		"gzip": &compressorGzip{},
 	}
-	return &mux{
+	return &Mux{
 		config:      config,
 		codecs:      codecs,
 		compressors: compressors,
 	}
 }
 
-func (m *mux) addService(sd protoreflect.ServiceDescriptor) error {
+func (m *Mux) addService(sd protoreflect.ServiceDescriptor) error {
 	// Load the state for writing.
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -59,14 +59,14 @@ func (m *mux) addService(sd protoreflect.ServiceDescriptor) error {
 	return nil
 }
 
-func (m *mux) getCodec(name string) (codec, error) {
+func (m *Mux) getCodec(name string) (codec, error) {
 	if c, ok := m.codecs[name]; ok {
 		return c, nil
 	}
 	return nil, statusErrorf(http.StatusBadRequest, "codec %q doesn't exist", name)
 }
 
-func (m *mux) compress(b []byte, comp compressor) ([]byte, error) {
+func (m *Mux) compress(b []byte, comp compressor) ([]byte, error) {
 	buffer := m.buffers.Get()
 	defer m.buffers.Put(buffer)
 
@@ -83,7 +83,7 @@ func (m *mux) compress(b []byte, comp compressor) ([]byte, error) {
 	return append(b[:0], buffer.Bytes()...), nil
 
 }
-func (m *mux) decompress(b []byte, comp compressor) ([]byte, error) {
+func (m *Mux) decompress(b []byte, comp compressor) ([]byte, error) {
 	buffer := m.buffers.Get()
 	defer m.buffers.Put(buffer)
 
@@ -98,7 +98,7 @@ func (m *mux) decompress(b []byte, comp compressor) ([]byte, error) {
 	return append(b[:0], buffer.Bytes()...), nil
 }
 
-func (m *mux) getCompressor(name string) (compressor, error) {
+func (m *Mux) getCompressor(name string) (compressor, error) {
 	if c, ok := m.compressors[name]; ok {
 		return c, nil
 	}
@@ -120,7 +120,9 @@ func (s *state) getMethod(name string) (protoreflect.MethodDescriptor, error) {
 
 func (s *state) clone() *state {
 	if s == nil {
-		return &state{}
+		return &state{
+			path: newPath(),
+		}
 	}
 	methods := make(map[string]protoreflect.MethodDescriptor, len(s.methodByName))
 	for k, v := range s.methodByName {

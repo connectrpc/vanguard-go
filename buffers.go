@@ -1,4 +1,4 @@
-// Copyright 2021-2023 Buf Technologies, Inc.
+// Copyright 2023 Buf Technologies, Inc.
 //
 // All rights reserved.
 
@@ -29,55 +29,21 @@ func (p *bufferPool) Put(buffer *bytes.Buffer) {
 	p.Pool.Put(buffer)
 }
 
-type bufferReader struct {
-	data []byte
-	err  error
-	next func() ([]byte, error)
-	//msg proto.Message
-	//rCodec codec
-	//wCodec codec
-
-}
-
-func (r *bufferReader) Read(p []byte) (int, error) {
-	if r.err != nil {
-		return 0, r.err
-	}
-	if r.data != nil {
-		r.data, r.err = r.next()
-		if r.err != nil {
-			return 0, r.err
-		}
-	}
-	n := copy(p, r.data)
-	r.data = r.data[n:]
-	if len(r.data) == 0 {
-		r.data = nil
-	}
-	return n, nil
-
-	//if err := r.rCodec.Unmarshal(data, r.msg); err != nil {
-	//	r.rerr = err
-	//	return 0, r.err
-	//}
-
-	//if err := r.wCodec.MarshalAppend(p, r.msg); err != nil {
-	// read next
-	// unmarshal
-	// apply filter
-	// marshal to protocol
-	// return
-	//return 0, nil
+func read(dst *bytes.Buffer, r io.Reader) (int, error) {
+	dst.Grow(bytes.MinRead)
+	b := dst.Bytes()
+	b = b[len(b):cap(b)]
+	n, err := r.Read(b)
+	_, _ = dst.Write(b[:n])
+	return n, err
 }
 
 func readAll(dst *bytes.Buffer, r io.Reader, maxRecvSize uint32) error {
+	var total int64
 	for {
-		dst.Grow(bytes.MinRead)
-		b := dst.Bytes()
-		b = b[len(b):cap(b)]
-		n, err := r.Read(b)
-		_, _ = dst.Write(b[:n])
-		if uint32(n) > maxRecvSize {
+		n, err := read(dst, r)
+		total += int64(n)
+		if total > int64(maxRecvSize) {
 			return errRecvSize
 		}
 		if err != nil {
@@ -89,24 +55,26 @@ func readAll(dst *bytes.Buffer, r io.Reader, maxRecvSize uint32) error {
 	}
 }
 
-func readEnvelope(dst *bytes.Buffer, r io.Reader, maxRecvSize uint32) (uint8, error) {
+func readEnvelope(dst *bytes.Buffer, r io.Reader, maxRecvSize uint32) error {
 	var header [5]byte
 	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return 0, err
+		return err
 	}
 
 	size := binary.BigEndian.Uint32(header[1:5])
 	if size > maxRecvSize {
-		return 0, errRecvSize
+		return errRecvSize
 	}
-	dst.Grow(int(size))
+	dst.Grow(int(size) + 5)
+	_, _ = dst.Write(header[:])
+
 	b := dst.Bytes()
 	b = b[len(b) : len(b)+int(size)]
 	if _, err := io.ReadFull(r, b); err != nil {
-		return 0, err
+		return err
 	}
 	_, _ = dst.Write(b)
-	return header[0], nil
+	return nil
 }
 
 func putUint32(buffer buffer, p uint32) {
@@ -180,4 +148,82 @@ func (c endStreamChunker) Next(data buffer, endStream bool) error {
 	}
 	c.buffer.Reset()
 	return nil
+}
+
+type envelopeReader struct {
+	reader      io.Reader
+	buffer      *bytes.Buffer
+	onChunk     func(src []byte) ([]byte, error)
+	maxRecvSize uint32
+}
+
+func (c *envelopeReader) Read(p []byte) (int, error) {
+	if c.buffer.Len() == 0 {
+		if err := readEnvelope(c.buffer, c.reader, c.maxRecvSize); err != nil {
+			return 0, err
+		}
+		msg := c.buffer.Bytes()
+		rsp, err := c.onChunk(msg)
+		if err != nil {
+			return 0, err
+		}
+		c.buffer.Reset()
+		_, _ = c.buffer.Write(rsp)
+	}
+	return c.buffer.Read(p)
+}
+
+type envelopeWriter struct {
+	writer      io.Writer
+	buffer      *bytes.Buffer
+	onChunk     func(src []byte) ([]byte, error)
+	maxRecvSize uint32
+}
+
+func (c *envelopeWriter) Write(p []byte) (int, error) {
+	_, _ = c.buffer.Write(p)
+
+	b := c.buffer.Bytes()
+	for len(b) >= 5 {
+		size := binary.BigEndian.Uint32(b[1:5])
+		if len(b) < int(size)+5 {
+			break
+		}
+		msg := b[:size+5]
+		b = b[size+5:]
+
+		rsp, err := c.onChunk(msg)
+		if err != nil {
+			return 0, err
+		}
+		if len(rsp) > 0 {
+			if _, err := c.writer.Write(rsp); err != nil {
+				return 0, err
+			}
+		}
+	}
+	return len(p), nil
+}
+
+type endStreamReader struct {
+	reader      io.Reader
+	buffer      *bytes.Buffer
+	onChunk     func(src []byte) ([]byte, error)
+	maxRecvSize uint32
+}
+
+func (c endStreamReader) Read(p []byte) (int, error) {
+	if c.buffer.Len() == 0 {
+		if err := readAll(c.buffer, c.reader, c.maxRecvSize); err != nil {
+			return 0, err
+		}
+		msg := c.buffer.Bytes()
+		rsp, err := c.onChunk(msg)
+		if err != nil {
+			return 0, err
+		}
+		c.buffer.Reset()
+		_, _ = c.buffer.Write(rsp)
+	}
+	return c.buffer.Read(p)
 }

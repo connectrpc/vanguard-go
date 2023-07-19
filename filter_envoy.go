@@ -16,7 +16,7 @@ import (
 )
 
 type filterEnvoy struct {
-	*mux
+	*Mux
 	//api.PassThroughStreamFilter
 
 	callbacks   api.FilterCallbackHandler
@@ -72,7 +72,7 @@ func (f *filterEnvoy) DecodeHeaders(header api.RequestHeaderMap, endStream bool)
 		f.stream.args = dynamicpb.NewMessage(argsDesc)
 		f.stream.reply = dynamicpb.NewMessage(replyDesc)
 		f.stream.up = &upstreamGRPC{
-			mux:   f.mux,
+			Mux:   f.Mux,
 			isWeb: f.srcProtocol == protocolGRPCWeb,
 		}
 		f.decode = envelopeChunker{
@@ -91,7 +91,7 @@ func (f *filterEnvoy) DecodeHeaders(header api.RequestHeaderMap, endStream bool)
 		f.stream.args = dynamicpb.NewMessage(argsDesc)
 		f.stream.reply = dynamicpb.NewMessage(replyDesc)
 		f.stream.up = &upstreamHTTPRule{
-			mux:    f.mux,
+			Mux:    f.Mux,
 			method: method,
 			params: params,
 		}
@@ -106,7 +106,7 @@ func (f *filterEnvoy) DecodeHeaders(header api.RequestHeaderMap, endStream bool)
 	switch f.dstProtocol {
 	case protocolGRPC, protocolGRPCWeb:
 		f.stream.down = &downstreamGRPC{
-			mux:   f.mux,
+			Mux:   f.Mux,
 			isWeb: f.dstProtocol == protocolGRPCWeb,
 		}
 		f.encode = envelopeChunker{
@@ -161,7 +161,13 @@ func (f *filterEnvoy) EncodeData(buffer api.BufferInstance, endStream bool) api.
 }
 
 func (f *filterEnvoy) EncodeTrailers(trailers api.ResponseTrailerMap) api.StatusType {
+	if err := f.stream.down.DecodeTrailer(trailers); err != nil {
+		return f.encError(err)
+	}
 	encodeTrailer(f.srcProtocol, f.dstProtocol, trailers)
+	if err := f.stream.up.EncodeTrailer(trailers); err != nil {
+		return f.encError(err)
+	}
 	return api.Continue
 }
 
