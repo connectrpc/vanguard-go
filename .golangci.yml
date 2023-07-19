@@ -3,6 +3,9 @@ run:
 linters-settings:
   errcheck:
     check-type-assertions: true
+  exhaustruct:
+    include:
+      - 'github\.com/bufbuild/vanguard\..*[cC]onfig'
   forbidigo:
     forbid:
       - '^fmt\.Print'
