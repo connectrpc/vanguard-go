@@ -28,13 +28,6 @@ type filterEnvoy struct {
 	decode chunker
 	encode chunker
 	stream chunkstreamer
-
-	//decStream chunkstream // dec -> msg -> enc ->|
-	//encStream chunkstream // enc <- msg <- dec <-|
-
-	//codec      codec
-	//inputComp  compressor
-	//outputComp compressor
 }
 
 // Callbacks which are called in request path

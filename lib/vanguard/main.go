@@ -1,4 +1,6 @@
 // Copyright 2023 Buf Technologies, Inc.
+//
+// All rights reserved.
 
 package main
 
@@ -9,11 +11,9 @@ import (
 
 const Name = "vanguard"
 
-func init() {
+func init() { //nolint:gochecknoinits
 	http.RegisterHttpFilterConfigFactory(Name, vanguard.ConfigFactory)
 	http.RegisterHttpFilterConfigParser(&vanguard.Parser{})
-	//http.RegisterHttpFilterConfigFactoryAndParser(
-	//	Name, vanguard.ConfigFactory, &vanguard.Parser{})
 }
 
 func main() {}

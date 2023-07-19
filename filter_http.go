@@ -14,16 +14,20 @@ func NewFilterHandler(config *Config, handler http.Handler) http.Handler {
 	mux := newMux(config)
 
 	return http.HandlerFunc(func(rsp http.ResponseWriter, req *http.Request) {
-		filterHTTP{
+		filter := &filterHTTP{
 			mux:                mux,
-			ResponseController: http.NewResponseController(rsp),
-			handler:            handler,
-		}.ServeHTTP(rsp, req)
+			ResponseWriter:     rsp,
+			ResponseController: http.NewResponseController(rsp), //nolint:bodyclose
+		}
+
+		handler.ServeHTTP(rsp, req)
+		_ = filter.Flush()
 	})
 }
 
 type filterHTTP struct {
 	*mux
+	http.ResponseWriter
 	*http.ResponseController
 
 	handler           http.Handler
@@ -33,6 +37,10 @@ type filterHTTP struct {
 	dstProtocol       protocol
 	outputContentType string
 	methodDesc        protoreflect.MethodDescriptor
+}
+
+func (f *filterHTTP) Unwrap() http.ResponseWriter {
+	return f.ResponseWriter
 }
 
 func (f filterHTTP) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
@@ -124,4 +132,4 @@ func (f *filterHTTPGRPC) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	// decode header
 	// decode body
 	// decode trailers
-}
+

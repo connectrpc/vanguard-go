@@ -23,18 +23,19 @@ type Config struct {
 	// other fields
 
 	outputProtocol protocol
+	maxRecvMsgSize uint32
 }
 
 type Parser struct{}
 
-func (p *Parser) Parse(any *anypb.Any) (interface{}, error) {
+func (p *Parser) Parse(msg *anypb.Any) (interface{}, error) {
 	configStruct := &xds.TypedStruct{}
-	if err := any.UnmarshalTo(configStruct); err != nil {
+	if err := msg.UnmarshalTo(configStruct); err != nil {
 		return nil, err
 	}
 
 	v := configStruct.Value
-	conf := &Config{}
+	var conf Config
 	prefix, ok := v.AsMap()["prefix_localreply_body"]
 	if !ok {
 		return nil, errors.New("missing prefix_localreply_body")
@@ -45,12 +46,13 @@ func (p *Parser) Parse(any *anypb.Any) (interface{}, error) {
 		return nil, fmt.Errorf("prefix_localreply_body: expect string while got %T", prefix)
 	}
 	conf.outputProtocol = protocolGRPC // TODO
+	conf.maxRecvMsgSize = 1024 * 1024  // TODO
 	return conf, nil
 }
 
 func (p *Parser) Merge(parent interface{}, child interface{}) interface{} {
-	parentConfig := parent.(*Config)
-	childConfig := child.(*Config)
+	parentConfig := parent.(*Config) //nolint:errcheck,forcetypeassert
+	childConfig := child.(*Config)   //nolint:errcheck,forcetypeassert
 
 	// copy one, do not update parentConfig directly.
 	newConfig := *parentConfig
@@ -61,10 +63,8 @@ func (p *Parser) Merge(parent interface{}, child interface{}) interface{} {
 }
 
 func ConfigFactory(c interface{}) api.StreamFilterFactory {
-	conf, ok := c.(*Config)
-	if !ok {
-		panic("unexpected config type")
-	}
+	conf := c.(*Config) //nolint:errcheck,forcetypeassert
+	mux := newMux(conf)
 
 	mux := newMux(conf)
 	fmt.Println("adding services")

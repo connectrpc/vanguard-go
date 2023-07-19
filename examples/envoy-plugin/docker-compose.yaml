@@ -2,9 +2,11 @@ services:
 
   proxy:
     build:
-      dockerfile: ./docker/envoy/Dockerfile
+      context: ../../
+      dockerfile: ./examples/envoy-plugin/envoy/Dockerfile
       args:
         ENVOY_VARIANT: contrib-v1.26.2
+        ENVOY_CONFIG: examples/envoy-plugin/envoy.yaml
     depends_on:
       hello_service:
         condition: service_healthy
@@ -13,7 +15,8 @@ services:
 
   hello_service:
     build:
-      dockerfile: ./docker/hello/Dockerfile
+      context: ../../
+      dockerfile: ./examples/envoy-plugin/hello/Dockerfile
     ports:
     - "${PORT:-8080}:8080"
 
