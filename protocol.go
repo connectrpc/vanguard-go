@@ -138,6 +138,12 @@ func errDecompressorNotFound() statusError {
 		err:  errors.New("missing decompressor"),
 	}
 }
+func errUnsupportedProtocolConversion(src, dst protocol) statusError {
+	return statusError{
+		code: http.StatusUnsupportedMediaType,
+		err:  fmt.Errorf("unsupported protocol conversion: %s -> %s", src, dst),
+	}
+}
 
 func grpcStatusCodeToHTTP(c int) int {
 	var codes = [...]int{
@@ -168,20 +174,69 @@ func grpcErrorf(code int, msg string, args ...any) error {
 	return statusErrorf(grpcStatusCodeToHTTP(code), msg, args...)
 }
 
-type converter struct {
+type convertKey struct {
 	src protocol
 	dst protocol
 }
 
+type converter interface {
+	DecodeHeader(header)
+	EncodeHeader(header)
+	EncodeTrailer(header)
+}
+
+func convert(src, dst protocol) (converter, error) {
+	x := convertKey{src: src, dst: dst}
+	switch x {
+	case convertKey{protocolGRPCWeb, protocolGRPC}:
+		return convertGRPCWebToGRPC{}, nil
+	case convertKey{protocolHTTPRule, protocolGRPC}:
+		return convertHTTPRuleToGRPC{}, nil
+	}
+	return nil, errUnsupportedProtocolConversion(src, dst)
+}
+
+type convertHTTPRuleToGRPC struct{}
+
+func (c convertHTTPRuleToGRPC) DecodeHeader(header header) {
+
+}
+func (c convertHTTPRuleToGRPC) EncodeHeader(header header) {
+
+}
+func (c convertHTTPRuleToGRPC) EncodeTrailer(header header) {
+
+}
+
+type convertGRPCWebToGRPC struct{}
+
+func (c convertGRPCWebToGRPC) DecodeHeader(header header) {
+	codecName := "proto"
+	if contentType, ok := header.Get("Content-Type"); ok {
+		_, part, ok := strings.Cut(contentType, "+")
+		if ok {
+			codecName = part
+		}
+	}
+	header.Set("Content-Type", "application/grpc+"+codecName)
+
+}
+func (c convertGRPCWebToGRPC) EncodeHeader(header header) {
+	codecName := "proto"
+	if contentType, ok := header.Get("Content-Type"); ok {
+		_, part, ok := strings.Cut(contentType, "+")
+		if ok {
+			codecName = part
+		}
+	}
+	header.Set("Content-Type", "application/grpc+"+codecName)
+}
+func (c convertGRPCWebToGRPC) EncodeTrailer(header header) {
+	// TODO: delete trailers...
+}
+
 // src -> dst
 func decodeHeader(src, dst protocol, header header) {
-	x := converter{src: src, dst: dst}
-	switch x {
-	case converter{protocolGRPCWeb, protocolGRPC}:
-		decodeHeaderGRPCWebToGRPC(header)
-	case converter{protocolHTTPRule, protocolGRPC}:
-		decodeHeaderHTTPRuleToGRPC(header)
-	}
 }
 
 func decodeHeaderGRPCWebToGRPC(header header) {
