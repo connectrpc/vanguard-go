@@ -5,13 +5,19 @@
 package vanguard
 
 import (
-	"errors"
-	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
+)
 
-	"google.golang.org/protobuf/types/known/anypb"
+type Protocol string
+
+const (
+	ProtocolGRPC    Protocol = "grpc"
+	ProtocolGRPCWeb Protocol = "grpc-web"
+	ProtocolHTTP    Protocol = "http"
+	ProtocolConnect Protocol = "connect"
 )
 
 type protocol int
@@ -22,7 +28,7 @@ const (
 	protocolGRPCWeb                // https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-WEB.md
 	protocolConnectUnary           // https://connect.build/docs/protocol/#unary-request-response-rpcs
 	protocolConnectStream          // https://connect.build/docs/protocol/#streaming-rpcs
-	protocolHTTPRule               // https://github.com/googleapis/googleapis/blob/master/google/api/http.proto
+	protocolHTTP                   // https://github.com/googleapis/googleapis/blob/master/google/api/http.proto
 )
 
 func (p protocol) String() string {
@@ -35,28 +41,37 @@ func (p protocol) String() string {
 		return "connect-unary"
 	case protocolConnectStream:
 		return "connect-stream"
-	case protocolHTTPRule:
+	case protocolHTTP:
 		return "http-rule"
 	default:
 		return "unknown"
 	}
 }
 
-func classifyProtocol(header header) protocol {
+func todoErrorWriter(w io.Writer, hdr responseHeader, err error) {
+	panic(err)
+}
+
+func classifyProtocol(header header) (protocol, errorWriter) {
 	contentType, _ := header.Get("Content-Type")
 	switch {
 	case strings.HasPrefix(contentType, "application/grpc-web"):
-		return protocolGRPCWeb
+		return protocolGRPCWeb, todoErrorWriter
 	case strings.HasPrefix(contentType, "application/grpc"):
-		return protocolGRPC
+		return protocolGRPC, grpcErrorWriter
 	case strings.HasPrefix(contentType, "application/connect"):
-		return protocolConnectStream
+		return protocolConnectStream, todoErrorWriter
 	default:
 		if _, ok := header.Get("Connect-Protocol-Version"); ok {
-			return protocolConnectUnary
+			return protocolConnectUnary, todoErrorWriter
 		}
-		return protocolHTTPRule
+		return protocolHTTP, newHTTPErrorWriter(contentType)
 	}
+}
+
+type protocaller interface {
+	Protocol() protocol
+	EncodeError(io.Writer, responseHeader, error)
 }
 
 type header interface {
@@ -210,82 +225,4 @@ func makeResponseHeaderHTTP(rsp http.ResponseWriter) responseHeaderHTTP {
 
 func (h responseHeaderHTTP) WriteStatus(statusCode int) {
 	h.rsp.WriteHeader(statusCode)
-}
-
-type statusError struct {
-	CodeHTTP int // http status code
-	CodeGRPC int // grpc status code
-	Details  []*anypb.Any
-	err      error
-}
-
-func statusErrorf(codeHTTP, codeGRPC int, msg string, args ...any) *statusError {
-	return &statusError{
-		CodeHTTP: codeHTTP,
-		CodeGRPC: codeGRPC,
-		err:      fmt.Errorf(msg, args...),
-	}
-}
-
-func (s statusError) Error() string {
-	return s.err.Error()
-}
-func asStatusError(err error) *statusError {
-	var statusErr statusError
-	if !errors.As(err, &statusErr) {
-		statusErr.CodeHTTP = http.StatusInternalServerError
-		statusErr.CodeGRPC = 13 // codes.Internal
-		statusErr.err = err
-	}
-	return &statusErr
-}
-func errUnsupportedProtocol(p protocol) statusError {
-	return statusError{
-		CodeHTTP: http.StatusUnsupportedMediaType,
-		CodeGRPC: 12, // codes.Unimplemented
-		err:      fmt.Errorf("unsupported protocol: %s", p),
-	}
-}
-func errDecompressorNotFound() statusError {
-	return statusError{
-		CodeHTTP: http.StatusInternalServerError,
-		CodeGRPC: 13, // codes.Internal
-		err:      errors.New("missing decompressor"),
-	}
-}
-func errUnsupportedProtocolConversion(src, dst protocol) statusError {
-	return statusError{
-		CodeHTTP: http.StatusUnsupportedMediaType,
-		CodeGRPC: 12, // codes.Unimplemented
-		err:      fmt.Errorf("unsupported protocol conversion: %s -> %s", src, dst),
-	}
-}
-
-func grpcStatusCodeToHTTP(c int) int {
-	var codes = [...]int{
-		http.StatusOK,                  // 0 OK
-		http.StatusRequestTimeout,      // 1 Canceled
-		http.StatusInternalServerError, // 2 Unknown
-		http.StatusBadRequest,          // 3 InvalidArgument
-		http.StatusGatewayTimeout,      // 4 DeadlineExceeded
-		http.StatusNotFound,            // 5 NotFound
-		http.StatusConflict,            // 6 AlreadyExists
-		http.StatusForbidden,           // 7 PermissionDenied
-		http.StatusTooManyRequests,     // 8 ResourceExhausted
-		http.StatusBadRequest,          // 9 FailedPrecondition
-		http.StatusConflict,            // 10 Aborted
-		http.StatusBadRequest,          // 11 OutOfRange
-		http.StatusNotImplemented,      // 12 Unimplemented
-		http.StatusInternalServerError, // 13 Internal
-		http.StatusServiceUnavailable,  // 14 Unavailable
-		http.StatusInternalServerError, // 15 DataLoss
-		http.StatusUnauthorized,        // 16 Unauthenticated
-	}
-	if int(c) > len(codes) {
-		return http.StatusInternalServerError
-	}
-	return codes[c]
-}
-func grpcErrorf(code int, msg string, args ...any) error {
-	return statusErrorf(grpcStatusCodeToHTTP(code), code, msg, args...)
 }

@@ -5,18 +5,17 @@
 package vanguard
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
-	"google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
-type upstreamHTTPRule struct {
+type upstreamHTTP struct {
 	*Mux
 
 	codec   codec
@@ -28,10 +27,10 @@ type upstreamHTTPRule struct {
 	send    int32
 }
 
-var _ upstream = (*upstreamHTTPRule)(nil)
+var _ upstream = (*upstreamHTTP)(nil)
 
-func (u *upstreamHTTPRule) Protocol() protocol { return protocolHTTPRule }
-func (u *upstreamHTTPRule) DecodeHeader(hdr requestHeader) error {
+func (u *upstreamHTTP) Protocol() protocol { return protocolHTTP }
+func (u *upstreamHTTP) DecodeHeader(hdr requestHeader) error {
 	contentType, ok := hdr.Get("Content-Type")
 	if !ok {
 		// Default to JSON
@@ -54,7 +53,7 @@ func (u *upstreamHTTPRule) DecodeHeader(hdr requestHeader) error {
 	}
 	return nil
 }
-func (u *upstreamHTTPRule) DecodeMessage(b []byte, msg proto.Message) (err error) {
+func (u *upstreamHTTP) DecodeMessage(b []byte, msg proto.Message) (err error) {
 	if comp := u.decComp; comp != nil {
 		b, err = u.decompress(b, comp)
 		if err != nil {
@@ -74,7 +73,7 @@ func (u *upstreamHTTPRule) DecodeMessage(b []byte, msg proto.Message) (err error
 	u.recv++
 	return nil
 }
-func (u *upstreamHTTPRule) EncodeHeader(hdr responseHeader) error {
+func (u *upstreamHTTP) EncodeHeader(hdr responseHeader) error {
 	encoding, _ := hdr.Get("Content-Encoding")
 	if len(encoding) > 0 && encoding != "identity" {
 		comp, err := u.getCompressor(encoding)
@@ -85,7 +84,7 @@ func (u *upstreamHTTPRule) EncodeHeader(hdr responseHeader) error {
 	}
 	return nil
 }
-func (u *upstreamHTTPRule) EncodeMessage(b []byte, msg proto.Message) ([]byte, error) {
+func (u *upstreamHTTP) EncodeMessage(b []byte, msg proto.Message) ([]byte, error) {
 	b, err := u.codec.MarshalAppend(b, msg)
 	if err != nil {
 		return nil, err
@@ -99,50 +98,41 @@ func (u *upstreamHTTPRule) EncodeMessage(b []byte, msg proto.Message) ([]byte, e
 	u.send++
 	return b, nil
 }
-func (u *upstreamHTTPRule) EncodeTrailer(hdr header) error {
+func (u *upstreamHTTP) EncodeTrailer(hdr header) error {
 	// TODO: clear map?
 	return nil
 }
-func (u *upstreamHTTPRule) EncodeError(rsp io.Writer, hdr responseHeader, err error) {
-	statusCode := http.StatusInternalServerError
-	status := &status.Status{
-		Code:    1, // internal
-		Message: err.Error(),
-	}
-	if se := (*statusError)(nil); errors.As(err, &se) {
-		statusCode = se.CodeHTTP
-		status.Code = int32(se.CodeGRPC)
-		status.Details = se.Details
-	}
 
-	hdr.WriteStatus(statusCode)
-	fmt.Println("got status", status)
+func newHTTPErrorWriter(contentType string) errorWriter {
+	return func(body io.Writer, hdr responseHeader, err error) {
+		var codec codec = codecJSON{
+			MarshalOptions: protojson.MarshalOptions{
+				EmitUnpopulated: true,
+			},
+		}
+		if contentType == "application/protobuf" {
+			codec = codecProto{}
+		} else {
+			contentType = "application/json"
+		}
 
-	b, err := u.codec.MarshalAppend(nil, status)
-	if err != nil {
-		panic(err)
-	}
-	_, _ = rsp.Write(b)
-}
+		cerr := asError(err)
 
-func encodeErrorHTTP(rsp http.ResponseWriter, err error) {
-	statusCode := http.StatusInternalServerError
-	status := &status.Status{
-		Code:    1, // internal
-		Message: err.Error(),
-	}
-	if se := (*statusError)(nil); errors.As(err, &se) {
-		statusCode = se.CodeHTTP
-		status.Code = int32(se.CodeGRPC)
-		status.Details = se.Details
-	}
+		statusCode := rpcStatusCodeToHTTP(cerr.Code())
+		if errors.Is(err, errMethodNotAllowed) {
+			statusCode = http.StatusMethodNotAllowed
+		}
+		status := grpcStatusFromError(err)
 
-	rsp.WriteHeader(statusCode)
-	fmt.Println("got status", status)
-
-	b, err := json.Marshal(status)
-	if err != nil {
-		panic(err)
+		hdr.Set("Content-Type", contentType)
+		hdr.Set("Content-Encoding", "identity")
+		bin, err := codec.MarshalAppend(nil, status)
+		if err != nil {
+			statusCode = http.StatusInternalServerError
+			hdr.Set("Content-Type", "application/json")
+			bin = []byte(`{"code": 12, "message":"` + err.Error() + `"}`)
+		}
+		hdr.WriteStatus(statusCode)
+		_, _ = body.Write(bin)
 	}
-	_, _ = rsp.Write(b)
 }

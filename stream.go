@@ -19,21 +19,18 @@ type convertKey struct {
 }
 
 type converter interface {
-	Upstream() protocol
-	Downstream() protocol
 	DecodeHeader(requestHeader) error
 	EncodeHeader(io.Writer, responseHeader) error
 	EncodeTrailer(io.Writer, responseHeader) error
-	//EncodeError(io.Writer, responseHeader, error) error
 }
 
-func convert(mux *Mux, src, dst protocol) (converter, error) {
+func (m *Mux) convert(src, dst protocol) (converter, error) {
 	x := convertKey{src: src, dst: dst}
 	switch x {
 	//case convertKey{protocolGRPCWeb, protocolGRPC}:
 	//	return convertGRPCWebToGRPC{}, nil
-	case convertKey{protocolHTTPRule, protocolGRPC}:
-		return convertHTTPToGRPC{Mux: mux}, nil
+	case convertKey{protocolHTTP, protocolGRPC}:
+		return convertHTTPToGRPC{Mux: m}, nil
 	}
 	return nil, errUnsupportedProtocolConversion(src, dst)
 }
@@ -76,16 +73,13 @@ func (c convertGRPCWebToGRPC) EncodeTrailer(header header) {
 type msgFunc func(proto.Message) error
 
 type upstream interface {
-	Protocol() protocol
 	DecodeHeader(requestHeader) error
 	DecodeMessage([]byte, proto.Message) error
 	EncodeHeader(responseHeader) error
 	EncodeMessage([]byte, proto.Message) ([]byte, error)
 	EncodeTrailer(header) error
-	EncodeError(io.Writer, responseHeader, error)
 }
 type downstream interface {
-	Protocol() protocol
 	EncodeHeader(requestHeader) error
 	EncodeMessage([]byte, proto.Message) ([]byte, error)
 	DecodeHeader(responseHeader) error

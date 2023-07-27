@@ -15,10 +15,9 @@ import (
 	"strconv"
 	"strings"
 
+	connect "github.com/bufbuild/connect-go"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	_ "google.golang.org/genproto/googleapis/api/httpbody"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -635,7 +634,9 @@ func (m *method) parseQueryParams(values url.Values) (params, error) {
 	for key, vs := range values {
 		fds := fieldPath(fieldDescs, strings.Split(key, ".")...)
 		if fds == nil {
-			return nil, status.Errorf(codes.InvalidArgument, "unknown query param %q", key)
+			return nil, errorf(
+				connect.CodeInvalidArgument,
+				"unknown query param %q", key)
 		}
 
 		for _, v := range vs {
@@ -695,8 +696,8 @@ func (v *variable) index(toks tokens) int {
 }
 
 var (
-	errNotFound = statusErrorf(http.StatusNotFound, 12 /* unimplemented */, "method not allowed")
-	errMethod   = statusErrorf(http.StatusMethodNotAllowed, 12 /* unimplemented */, "method not allowed")
+	errNotFound         = errorf(connect.CodeNotFound, "not found")
+	errMethodNotAllowed = errorf(connect.CodeUnimplemented, "method not allowed")
 )
 
 // Depth first search preferring path segments over variables.
@@ -711,7 +712,7 @@ func (p *path) search(toks tokens, verb string) (*method, params, error) {
 		if m := p.methodAll; m != nil {
 			return m, nil, nil
 		}
-		return nil, nil, errMethod
+		return nil, nil, errMethodNotAllowed
 	}
 
 	// capture path segment
@@ -720,7 +721,6 @@ func (p *path) search(toks tokens, verb string) (*method, params, error) {
 		if m, ps, err := next.search(toks[2:], verb); err == nil {
 			return m, ps, nil
 		} else if err != errNotFound {
-			fmt.Println("err", err)
 			return nil, nil, err
 		}
 	}

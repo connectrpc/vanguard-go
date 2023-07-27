@@ -8,15 +8,16 @@ import "testing"
 
 func TestConvert(t *testing.T) {
 	upstream := []protocol{
-		protocolHTTPRule,
+		protocolHTTP,
 	}
 	downstream := []protocol{
 		protocolGRPC,
 	}
+	m := &Mux{}
 
 	for _, u := range upstream {
 		for _, d := range downstream {
-			_, err := convert(nil, u, d)
+			_, err := m.convert(u, d)
 			if err != nil {
 				t.Errorf("convert(%s, %s) failed: %v", u, d, err)
 			}

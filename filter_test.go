@@ -97,7 +97,25 @@ func TestFilterRuleGRPC(t *testing.T) {
 		request: httptest.NewRequest("PUT", "/v1/shelves/1/books/1", nil),
 		want: want{
 			code: http.StatusMethodNotAllowed,
-			body: `{"code":12,"message":"method not allowed"}`,
+			body: `{"code":12,"message":"method not allowed","details":[]}`,
+		},
+	}, {
+		name:    "error",
+		request: httptest.NewRequest("GET", "/v1/shelves/1/books/1", nil),
+		stream: []msgDir{
+			msgIn{
+				method: "/vanguard.library.v1.LibraryService/GetBook",
+				msg:    &library.GetBookRequest{Name: "shelves/1/books/1"},
+			},
+			msgOut{
+				err: connect.NewError(
+					connect.CodePermissionDenied,
+					fmt.Errorf("permission denied")),
+			},
+		},
+		want: want{
+			code: http.StatusForbidden,
+			body: `{"code":7,"message":"permission denied","details":[]}`,
 		},
 	}}
 	opts := cmp.Options{protocmp.Transform()}

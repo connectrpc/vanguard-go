@@ -18,34 +18,26 @@ type RegisterOption func() // TODO
 func (m *Mux) RegisterHTTPHandler(
 	handler http.Handler,
 	services []protoreflect.ServiceDescriptor,
-	downstream protocol,
+	downstreamProtocol protocol,
 	opts ...RegisterOption,
 ) error {
 
 	hd := func(
 		rsp http.ResponseWriter,
 		req *http.Request,
-		upstream protocol,
+		upstreamProtocol protocol,
 		method *method,
 		params params,
-	) {
-		conv, err := convert(m, upstream, downstream)
+	) error {
+		filter, err := newFilterHTTP(m, req, rsp, method, params, upstreamProtocol, downstreamProtocol)
 		if err != nil {
-			http.Error(rsp, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		filter, err := newFilterHTTP(m, req, rsp, conv, method, params)
-		if err != nil {
-			http.Error(rsp, err.Error(), http.StatusInternalServerError)
-			return
+			return err
 		}
 
 		reqHdr := makeRequestHeaderHTTP(req)
 		rspHdr := makeResponseHeaderHTTP(rsp)
 		if err := filter.decodeHeader(reqHdr); err != nil {
-			filter.stream.up.EncodeError(rsp, rspHdr, err)
-			return
+			return err
 		}
 
 		filterRsp := &filterHTTPResponseWriter{
@@ -60,15 +52,13 @@ func (m *Mux) RegisterHTTPHandler(
 		handler.ServeHTTP(filterRsp, req)
 
 		if err := filter.encodeTrailer(rspHdr); err != nil {
-			filter.stream.up.EncodeError(rsp, rspHdr, err)
-			return
+			return err
 		}
 
 		if err := filterRsp.TryFlush(true); err != nil {
-			filter.stream.up.EncodeError(rsp, rspHdr, err)
-			return
+			return err
 		}
-
+		return nil
 	}
 
 	// Load the state for writing.
@@ -100,24 +90,27 @@ type filterHTTP struct {
 
 func newFilterHTTP(
 	mux *Mux, req *http.Request, rsp http.ResponseWriter,
-	conv converter, method *method, params params,
+	method *method, params params, upstreamProtocol, downstreamProtocol protocol,
 ) (*filterHTTP, error) {
+	conv, err := mux.convert(upstreamProtocol, downstreamProtocol)
+	if err != nil {
+		return nil, err
+	}
+
 	f := &filterHTTP{
 		Mux:     mux,
 		req:     req,
 		rsp:     rsp,
 		convert: conv,
 	}
-	upstreamProtocol := conv.Upstream()
-	downstreamProtocol := conv.Downstream()
 
 	// Create the stream
 	switch upstreamProtocol {
 	case protocolGRPC, protocolGRPCWeb:
 		panic("TODO")
 
-	case protocolHTTPRule:
-		f.stream.up = &upstreamHTTPRule{
+	case protocolHTTP:
+		f.stream.up = &upstreamHTTP{
 			Mux:    mux,
 			method: method,
 			params: params,
@@ -136,8 +129,8 @@ func newFilterHTTP(
 	switch downstreamProtocol {
 	case protocolGRPC:
 		f.stream.down = &downstreamGRPC{
-			Mux:        f.Mux,
-			methodDesc: f.stream.desc,
+			Mux:    f.Mux,
+			method: method,
 		}
 		f.encode = &envelopeWriter{
 			writer:      f.rsp,
@@ -208,10 +201,12 @@ func (f *filterHTTPResponseWriter) Write(data []byte) (int, error) {
 func (f *filterHTTPResponseWriter) WriteHeader(statusCode int) {
 	hdr := makeResponseHeaderHTTP(f.rsp)
 	if err := f.encodeHeader(hdr); err != nil {
-		f.stream.up.EncodeError(f.rsp, hdr, err)
-		return
+		panic(err) // TODO
 	}
-	f.rsp.WriteHeader(statusCode)
+	if statusCode != 200 {
+		// Delay status code until body is written.
+		f.rsp.WriteHeader(statusCode)
+	}
 }
 func (f *filterHTTPResponseWriter) encodeHeader(hdr responseHeader) error {
 	if err := f.stream.down.DecodeHeader(hdr); err != nil {

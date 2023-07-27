@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/bufbuild/connect-go"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -49,74 +50,61 @@ func NewMux(config *Config) *Mux {
 }
 
 type handleFunc func(
-	http.ResponseWriter,
-	*http.Request,
-	protocol,
-	*method, params,
-)
+	http.ResponseWriter, *http.Request, protocol, *method, params,
+) error
 
 // ServeHTTP implements http.Handler.
 func (m *Mux) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	reqHdr := makeRequestHeaderHTTP(req)
-	upstreamProtocol := classifyProtocol(reqHdr)
+	rspHdr := makeResponseHeaderHTTP(rsp)
 
-	if err := m.serveHTTP(rsp, req, upstreamProtocol); err != nil {
-		// TODO: light error handling...
-		switch upstreamProtocol {
-		case protocolHTTPRule:
-			encodeErrorHTTP(rsp, err)
-		default:
-			http.Error(rsp, err.Error(), http.StatusInternalServerError)
-		}
-
-	}
-}
-
-func (m *Mux) serveHTTP(rsp http.ResponseWriter, req *http.Request, upstreamProtocol protocol) error {
+	upstreamProtocol, errorWriter := classifyProtocol(reqHdr)
 	if upstreamProtocol == protocolUnknown {
-		return errUnsupportedProtocol(upstreamProtocol)
+		errorWriter(rsp, rspHdr, errUnsupportedProtocol(upstreamProtocol))
+		return
 	}
 
 	lexer := lexer{input: req.URL.Path}
 	if err := lexPath(&lexer); err != nil {
-		return err
+		errorWriter(rsp, rspHdr, err)
+		return
 	}
 	toks := lexer.tokens()
 
 	state := m.state.Load()
 	if state == nil {
-		return fmt.Errorf("mux not initialized")
+		err := errorf(connect.CodeInternal, "mux not initialized")
+		errorWriter(rsp, rspHdr, err)
+		return
 	}
-
 	verb := req.Method
 	method, params, err := state.path.search(toks, verb) // GRPC, GRPCWeb, HTTPRule
 	if err != nil {
-		//
-		return err
+		errorWriter(rsp, rspHdr, err)
+		return
 	}
-
 	switch upstreamProtocol {
 	case protocolGRPC, protocolGRPCWeb:
-		_ = method
 		panic("TODO")
-
-	case protocolHTTPRule:
+	case protocolHTTP:
 		queryParams, err := method.parseQueryParams(req.URL.Query())
 		if err != nil {
-			return err
+			errorWriter(rsp, rspHdr, err)
+			return
 		}
 		params = append(params, queryParams...)
-
 	default:
-		return errUnsupportedProtocol(upstreamProtocol)
+		panic("TODO")
 	}
-
 	hd, err := state.pickMethodHandler(method.name)
 	if err != nil {
-		return err
+		errorWriter(rsp, rspHdr, err)
+		return
 	}
-	hd(rsp, req, upstreamProtocol, method, params)
-	return nil
+	if err := hd(rsp, req, upstreamProtocol, method, params); err != nil {
+		errorWriter(rsp, rspHdr, err)
+		return
+	}
 }
 
 //func (m *Mux) addService(sd protoreflect.ServiceDescriptor, hd handleFunc) error {
@@ -137,7 +125,7 @@ func (m *Mux) getCodec(name string) (codec, error) {
 	if c, ok := m.codecs[name]; ok {
 		return c, nil
 	}
-	return nil, statusErrorf(http.StatusBadRequest, 2, "codec %q doesn't exist", name)
+	return nil, errorf(connect.CodeInternal, "unknown codec %q", name)
 }
 
 func (m *Mux) compress(b []byte, comp compressor) ([]byte, error) {
@@ -172,11 +160,13 @@ func (m *Mux) decompress(b []byte, comp compressor) ([]byte, error) {
 	return append(b[:0], buffer.Bytes()...), nil
 }
 
+// getCompressor returns the compressor for the given name.
+// https://github.com/grpc/grpc/blob/master/doc/compression.md
 func (m *Mux) getCompressor(name string) (compressor, error) {
 	if c, ok := m.compressors[name]; ok {
 		return c, nil
 	}
-	return nil, statusErrorf(http.StatusBadRequest, 2, "compressor %q doesn't exist", name)
+	return nil, errorf(connect.CodeUnimplemented, "unknown compressor %q", name)
 }
 
 type state struct {
