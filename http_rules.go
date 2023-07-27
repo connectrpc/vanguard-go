@@ -127,7 +127,7 @@ func newPath() *path {
 }
 
 type method struct {
-	desc    protoreflect.MethodDescriptor
+	desc    protoreflect.MethodDescriptor    // protobuf method descriptor
 	name    string                           // /{ServiceName}/{MethodName}
 	body    []protoreflect.FieldDescriptor   // body
 	vars    [][]protoreflect.FieldDescriptor // variables on path
@@ -695,8 +695,8 @@ func (v *variable) index(toks tokens) int {
 }
 
 var (
-	errNotFound = status.Error(codes.NotFound, "not found")
-	errMethod   = status.Error(codes.InvalidArgument, "method not allowed")
+	errNotFound = statusErrorf(http.StatusNotFound, 12 /* unimplemented */, "method not allowed")
+	errMethod   = statusErrorf(http.StatusMethodNotAllowed, 12 /* unimplemented */, "method not allowed")
 )
 
 // Depth first search preferring path segments over variables.
@@ -719,6 +719,9 @@ func (p *path) search(toks tokens, verb string) (*method, params, error) {
 	if next, ok := p.segments[segment]; ok {
 		if m, ps, err := next.search(toks[2:], verb); err == nil {
 			return m, ps, nil
+		} else if err != errNotFound {
+			fmt.Println("err", err)
+			return nil, nil, err
 		}
 	}
 
@@ -730,6 +733,9 @@ func (p *path) search(toks tokens, verb string) (*method, params, error) {
 
 		m, ps, err := v.next.search(toks[l:], verb)
 		if err != nil {
+			if err != errNotFound {
+				return nil, nil, err
+			}
 			continue
 		}
 

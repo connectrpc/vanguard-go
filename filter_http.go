@@ -11,24 +11,40 @@ import (
 	"net/http"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-func (m *Mux) WrapHandler(handler http.Handler) http.Handler {
-	return http.HandlerFunc(func(rsp http.ResponseWriter, req *http.Request) {
-		state := m.state.Load()
-		if state == nil {
-			http.Error(rsp, "Internal Server Error", http.StatusInternalServerError)
+type RegisterOption func() // TODO
+
+func (m *Mux) RegisterHTTPHandler(
+	handler http.Handler,
+	services []protoreflect.ServiceDescriptor,
+	downstream protocol,
+	opts ...RegisterOption,
+) error {
+
+	hd := func(
+		rsp http.ResponseWriter,
+		req *http.Request,
+		upstream protocol,
+		method *method,
+		params params,
+	) {
+		conv, err := convert(m, upstream, downstream)
+		if err != nil {
+			http.Error(rsp, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		filter := &filterHTTP{
-			Mux: m,
-			req: req,
-			rsp: rsp,
+		filter, err := newFilterHTTP(m, req, rsp, conv, method, params)
+		if err != nil {
+			http.Error(rsp, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		if err := filter.decodeHeader(headerMap(req.Header)); err != nil {
-			filter.encodeError(err)
+
+		reqHdr := makeRequestHeaderHTTP(req)
+		rspHdr := makeResponseHeaderHTTP(rsp)
+		if err := filter.decodeHeader(reqHdr); err != nil {
+			filter.stream.up.EncodeError(rsp, rspHdr, err)
 			return
 		}
 
@@ -43,17 +59,31 @@ func (m *Mux) WrapHandler(handler http.Handler) http.Handler {
 
 		handler.ServeHTTP(filterRsp, req)
 
-		if err := filter.encodeTrailer(headerMap(rsp.Header())); err != nil {
-			filter.encodeError(err)
+		if err := filter.encodeTrailer(rspHdr); err != nil {
+			filter.stream.up.EncodeError(rsp, rspHdr, err)
 			return
 		}
 
 		if err := filterRsp.TryFlush(true); err != nil {
-			filter.encodeError(err)
+			filter.stream.up.EncodeError(rsp, rspHdr, err)
 			return
 		}
 
-	})
+	}
+
+	// Load the state for writing.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.state.Load().clone()
+
+	for _, sd := range services {
+		if err := state.addService(sd, hd); err != nil {
+			return err
+		}
+	}
+
+	m.state.Store(state)
+	return nil
 }
 
 type filterHTTP struct {
@@ -62,89 +92,52 @@ type filterHTTP struct {
 	req *http.Request
 	rsp http.ResponseWriter
 
-	path              string
-	contentType       string
-	srcProtocol       protocol
-	dstProtocol       protocol
-	outputContentType string
-	methodDesc        protoreflect.MethodDescriptor
-
-	decode io.Reader
-	encode io.Writer
-	stream chunkstreamer
+	convert converter
+	decode  io.Reader
+	encode  io.Writer
+	stream  chunkstreamer
 }
 
-func (f *filterHTTP) decodeHeader(header header) error {
-	state := f.state.Load()
-	if state == nil {
-		return fmt.Errorf("missing state")
+func newFilterHTTP(
+	mux *Mux, req *http.Request, rsp http.ResponseWriter,
+	conv converter, method *method, params params,
+) (*filterHTTP, error) {
+	f := &filterHTTP{
+		Mux:     mux,
+		req:     req,
+		rsp:     rsp,
+		convert: conv,
 	}
+	upstreamProtocol := conv.Upstream()
+	downstreamProtocol := conv.Downstream()
 
-	f.path = f.req.URL.Path
-	f.contentType, _ = header.Get("Content-Type")
-
-	f.srcProtocol = classifyProtocol(headerMap(f.req.Header))
-	f.dstProtocol = f.config.outputProtocol
-
-	lexer := lexer{input: f.path}
-	if err := lexPath(&lexer); err != nil {
-		return err
-	}
-	toks := lexer.tokens()
-	switch f.srcProtocol {
+	// Create the stream
+	switch upstreamProtocol {
 	case protocolGRPC, protocolGRPCWeb:
-		name := toks.String()
-		methodDesc, err := state.getMethod(name)
-		if err != nil {
-			return err
-		}
-		argsDesc := methodDesc.Input()
-		replyDesc := methodDesc.Output()
-
-		f.stream.args = dynamicpb.NewMessage(argsDesc)
-		f.stream.reply = dynamicpb.NewMessage(replyDesc)
-		f.methodDesc = methodDesc
 		panic("TODO")
 
 	case protocolHTTPRule:
-		verb := f.req.Method
-		method, params, err := state.path.search(toks, verb)
-		if err != nil {
-			return err
-		}
-		argsDesc := method.desc.Input()
-		replyDesc := method.desc.Output()
-
-		f.stream.args = dynamicpb.NewMessage(argsDesc)
-		f.stream.reply = dynamicpb.NewMessage(replyDesc)
 		f.stream.up = &upstreamHTTPRule{
-			Mux:    f.Mux,
+			Mux:    mux,
 			method: method,
 			params: params,
 		}
+		f.stream.desc = method.desc
 		f.decode = &endStreamReader{
-			reader:      f.req.Body,
+			reader:      req.Body,
 			buffer:      &bytes.Buffer{},
 			onChunk:     f.stream.Decode,
-			maxRecvSize: f.config.maxRecvMsgSize,
+			maxRecvSize: mux.config.maxRecvMsgSize,
 		}
-		f.methodDesc = method.desc
 	default:
-		return errUnsupportedProtocol(f.srcProtocol)
+		return nil, errUnsupportedProtocol(upstreamProtocol)
 	}
 
-	switch f.dstProtocol {
+	switch downstreamProtocol {
 	case protocolGRPC:
-		// TODO: move to DecodeHeader...
-		f.req.ProtoMajor = 2
-		f.req.ProtoMinor = 0
-		f.req.Method = http.MethodPost
-		serviceDesc := f.methodDesc.Parent()
-		name := "/" + string(serviceDesc.FullName()) +
-			"/" + string(f.methodDesc.Name())
-		f.req.URL.Path = name
 		f.stream.down = &downstreamGRPC{
-			Mux: f.Mux,
+			Mux:        f.Mux,
+			methodDesc: f.stream.desc,
 		}
 		f.encode = &envelopeWriter{
 			writer:      f.rsp,
@@ -153,43 +146,57 @@ func (f *filterHTTP) decodeHeader(header header) error {
 			maxRecvSize: f.config.maxRecvMsgSize,
 		}
 	default:
-		return errUnsupportedProtocol(f.srcProtocol)
+		return nil, errUnsupportedProtocol(downstreamProtocol)
 	}
-	if err := f.stream.up.DecodeHeader(header); err != nil {
+	// check
+	if f.stream.up == nil {
+		return nil, fmt.Errorf("missing upstream stream")
+	}
+	if f.stream.down == nil {
+		return nil, fmt.Errorf("missing downstream stream")
+	}
+	if f.stream.desc == nil {
+		return nil, fmt.Errorf("missing method descriptor")
+	}
+	if f.decode == nil {
+		return nil, fmt.Errorf("missing decode reader")
+	}
+	if f.encode == nil {
+		return nil, fmt.Errorf("missing encode writer")
+	}
+	return f, nil
+}
+
+func (f *filterHTTP) decodeHeader(hdr requestHeader) error {
+	if err := f.stream.up.DecodeHeader(hdr); err != nil {
 		return err
 	}
-	decodeHeader(f.srcProtocol, f.dstProtocol, header)
-	if err := f.stream.down.EncodeHeader(header); err != nil {
+	if err := f.convert.DecodeHeader(hdr); err != nil {
+		return err
+	}
+	if err := f.stream.down.EncodeHeader(hdr); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (f *filterHTTP) encodeTrailer(trailers header) error {
-	if err := f.stream.down.DecodeTrailer(trailers); err != nil {
+func (f *filterHTTP) encodeTrailer(hdr responseHeader) error {
+	if err := f.stream.down.DecodeTrailer(hdr); err != nil {
 		return err
 	}
-	encodeTrailer(f.srcProtocol, f.dstProtocol, trailers)
-	if err := f.stream.up.EncodeTrailer(trailers); err != nil {
+	if err := f.convert.EncodeTrailer(f.rsp, hdr); err != nil {
+		return err
+	}
+	if err := f.stream.up.EncodeTrailer(hdr); err != nil {
 		return err
 	}
 	return nil
-}
-
-func (f *filterHTTP) encodeError(err error) {
-	serr := asStatusError(err)
-	code := serr.Code()
-	msg := serr.Error()
-	// TODO: encode error on f.protocolType
-	http.Error(f.rsp, msg, code)
 }
 
 type filterHTTPResponseWriter struct {
 	*filterHTTP
 
 	controller *http.ResponseController
-	header     http.Header
-	buffer     *bytes.Buffer
 }
 
 func (f *filterHTTPResponseWriter) Header() http.Header {
@@ -197,37 +204,23 @@ func (f *filterHTTPResponseWriter) Header() http.Header {
 }
 func (f *filterHTTPResponseWriter) Write(data []byte) (int, error) {
 	return f.encode.Write(data)
-	//n, err := f.buffer.Write(data)
-	//if err != nil {
-	//	return n, err
-	//}
-	//if err := f.encode.Next(f.buffer, false); err != nil {
-	//	return 0, err
-	//}
-	//if f.buffer.Len() > 0 {
-	//	if _, err := f.buffer.WriteTo(f.rsp); err != nil {
-	//		return n, err
-	//	}
-	//}
-	//return n, nil
 }
 func (f *filterHTTPResponseWriter) WriteHeader(statusCode int) {
-	header := headerMap(f.rsp.Header())
-	for k, v := range f.header {
-		header[k] = v
-	}
-	f.rsp.WriteHeader(statusCode)
-	if err := f.encodeHeader(header); err != nil {
-		f.encodeError(err)
+	hdr := makeResponseHeaderHTTP(f.rsp)
+	if err := f.encodeHeader(hdr); err != nil {
+		f.stream.up.EncodeError(f.rsp, hdr, err)
 		return
 	}
+	f.rsp.WriteHeader(statusCode)
 }
-func (f *filterHTTPResponseWriter) encodeHeader(header header) error {
-	if err := f.stream.down.DecodeHeader(header); err != nil {
+func (f *filterHTTPResponseWriter) encodeHeader(hdr responseHeader) error {
+	if err := f.stream.down.DecodeHeader(hdr); err != nil {
 		return err
 	}
-	encodeHeader(f.srcProtocol, f.dstProtocol, header)
-	if err := f.stream.up.EncodeHeader(header); err != nil {
+	if err := f.convert.EncodeHeader(f.rsp, hdr); err != nil {
+		return err
+	}
+	if err := f.stream.up.EncodeHeader(hdr); err != nil {
 		return err
 	}
 	return nil
@@ -236,42 +229,22 @@ func (f *filterHTTPResponseWriter) Unwrap() http.ResponseWriter {
 	return f.rsp
 }
 func (f *filterHTTPResponseWriter) TryFlush(eof bool) error {
-	//if err := f.encode.Next(f.buffer, eof); err != nil {
-	//	return err
-	//}
-	//if _, err := f.buffer.WriteTo(f.rsp); err != nil {
-	//	return nil
-	//}
 	return f.controller.Flush()
 }
-func (f *filterHTTPResponseWriter) Flush() {} // nop
+
+// Flush is a no-op, buffering is handled by the filter.
+func (f *filterHTTPResponseWriter) Flush() {}
 
 type filterHTTPRequestReader struct {
 	*filterHTTP
 
-	buffer *bytes.Buffer
-	body   io.ReadCloser
+	body io.ReadCloser // reference to the original body
 }
 
 func (f *filterHTTPRequestReader) Read(p []byte) (int, error) {
 	n, err := f.decode.Read(p)
 	return n, err
-	//if f.buffer.Len() == 0 {
-	//	f.buffer.Reset() // reclaim
-
-	//	n, err := read(f.buffer, f.body)
-	//	if err != nil {
-	//		return n, err
-	//	}
-	//	if err := f.decode.Next(f.buffer, false); err != nil {
-	//		return 0, err
-	//	}
-	//}
-	//return f.buffer.Read(p)
 }
 func (f *filterHTTPRequestReader) Close() error {
-	//if err := f.decode.Next(f.buffer, true); err != nil {
-	//	return err
-	//}
 	return f.body.Close()
 }

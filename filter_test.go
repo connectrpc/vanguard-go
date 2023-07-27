@@ -48,23 +48,23 @@ func TestFilterRuleGRPC(t *testing.T) {
 
 	fmux := NewMux(
 		&Config{
-			outputProtocol: protocolGRPC,
+			//outputProtocol: protocolGRPC,
 			maxRecvMsgSize: 1024 * 1024 * 1024,
 		}, //nolint:exhaustivestruct
 	)
-	handler := fmux.WrapHandler(gRPCOnlyMux)
 
 	t.Log("adding services:")
+	services := []protoreflect.ServiceDescriptor{}
 	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
 		sds := fd.Services()
 		for i := 0; i < sds.Len(); i++ {
-			sd := sds.Get(i)
-			t.Log("\t", sd.FullName())
-			fmux.addService(sd)
+			services = append(services, sds.Get(i))
+			t.Log("  ", sds.Get(i).FullName())
 			return true
 		}
 		return true
 	})
+	fmux.RegisterHTTPHandler(gRPCOnlyMux, services, protocolGRPC)
 
 	type want struct {
 		code int
@@ -92,6 +92,13 @@ func TestFilterRuleGRPC(t *testing.T) {
 			code: http.StatusOK,
 			msg:  &library.Book{Name: "shelves/1/books/1"},
 		},
+	}, {
+		name:    "methodNotAllowed",
+		request: httptest.NewRequest("PUT", "/v1/shelves/1/books/1", nil),
+		want: want{
+			code: http.StatusMethodNotAllowed,
+			body: `{"code":12,"message":"method not allowed"}`,
+		},
 	}}
 	opts := cmp.Options{protocmp.Transform()}
 	for _, testcase := range tests {
@@ -107,7 +114,7 @@ func TestFilterRuleGRPC(t *testing.T) {
 			t.Log(req.Method, req.URL.String())
 
 			rsp := httptest.NewRecorder()
-			handler.ServeHTTP(rsp, req)
+			fmux.ServeHTTP(rsp, req)
 
 			//t.Log(rsp.Code)
 			//t.Log(rsp.Body.String())

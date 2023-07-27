@@ -6,7 +6,7 @@ package vanguard
 
 // https://pkg.go.dev/github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api
 
-import (
+/*import (
 	"bytes"
 	"fmt"
 
@@ -182,4 +182,4 @@ func (f *filterEnvoy) encError(err error) api.StatusType {
 	headers := make(map[string]string)
 	f.callbacks.SendLocalReply(code, msg, headers, -1, "test-from-go")
 	return api.LocalReply
-}
+}*/

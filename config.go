@@ -5,16 +5,9 @@
 package vanguard
 
 import (
-	"errors"
-	"fmt"
-
 	_ "github.com/bufbuild/vanguard/internal/gen/library/v1"
-
-	xds "github.com/cncf/xds/go/xds/type/v3"
-	"github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/known/anypb"
+	//xds "github.com/cncf/xds/go/xds/type/v3"
+	//"github.com/envoyproxy/envoy/contrib/golang/filters/http/source/go/pkg/api"
 	//"github.com/envoyproxy/envoy/contrib/golang/common/go/api"
 )
 
@@ -26,7 +19,7 @@ type Config struct {
 	maxRecvMsgSize uint32
 }
 
-type Parser struct{}
+/*type Parser struct{}
 
 func (p *Parser) Parse(msg *anypb.Any) (interface{}, error) {
 	configStruct := &xds.TypedStruct{}
@@ -85,4 +78,4 @@ func ConfigFactory(c interface{}) api.StreamFilterFactory {
 			callbacks: callbacks,
 		}
 	}
-}
+}*/
