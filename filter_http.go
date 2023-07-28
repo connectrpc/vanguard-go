@@ -55,7 +55,7 @@ func (m *Mux) RegisterHTTPHandler(
 			return err
 		}
 
-		if err := filterRsp.TryFlush(true); err != nil {
+		if err := filterRsp.flush(true); err != nil {
 			return err
 		}
 		return nil
@@ -84,7 +84,7 @@ type filterHTTP struct {
 
 	convert converter
 	decode  io.Reader
-	encode  io.Writer
+	encode  WriteFlusher
 	stream  chunkstreamer
 }
 
@@ -137,6 +137,18 @@ func newFilterHTTP(
 			buffer:      &bytes.Buffer{},
 			onChunk:     f.stream.Encode,
 			maxRecvSize: f.config.maxRecvMsgSize,
+		}
+	case protocolHTTP:
+		f.stream.down = &downstreamHTTP{
+			Mux:    mux,
+			method: method,
+			params: params,
+		}
+		f.encode = &endStreamWriter{
+			writer:      rsp,
+			buffer:      &bytes.Buffer{},
+			onChunk:     f.stream.Encode,
+			maxRecvSize: mux.config.maxRecvMsgSize,
 		}
 	default:
 		return nil, errUnsupportedProtocol(downstreamProtocol)
@@ -223,12 +235,16 @@ func (f *filterHTTPResponseWriter) encodeHeader(hdr responseHeader) error {
 func (f *filterHTTPResponseWriter) Unwrap() http.ResponseWriter {
 	return f.rsp
 }
-func (f *filterHTTPResponseWriter) TryFlush(eof bool) error {
+func (f *filterHTTPResponseWriter) flush(isEOF bool) error {
+	if err := f.encode.Flush(isEOF); err != nil {
+		return err
+	}
 	return f.controller.Flush()
 }
 
-// Flush is a no-op, buffering is handled by the filter.
-func (f *filterHTTPResponseWriter) Flush() {}
+func (f *filterHTTPResponseWriter) Flush() {
+	_ = f.flush(false)
+}
 
 type filterHTTPRequestReader struct {
 	*filterHTTP

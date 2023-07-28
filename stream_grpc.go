@@ -87,15 +87,15 @@ func (s *downstreamGRPC) EncodeHeader(hdr requestHeader) error {
 	}
 	return nil
 }
-func (d *downstreamGRPC) EncodeMessage(b []byte, msg proto.Message) ([]byte, error) { // msg -> bytes
+func (s *downstreamGRPC) EncodeMessage(b []byte, msg proto.Message) ([]byte, error) { // msg -> bytes
 	b = append(b, 0, 0, 0, 0, 0)
-	b, err := d.codec.MarshalAppend(b, msg)
+	b, err := s.codec.MarshalAppend(b, msg)
 	if err != nil {
 		return nil, err
 	}
 	// TODO: minCompressSize
-	if comp := d.encComp; comp != nil && len(b) > 0 {
-		c, err := d.compress(b[5:], comp)
+	if comp := s.encComp; comp != nil && len(b) > 0 {
+		c, err := s.compress(b[5:], comp)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +134,7 @@ func (s *downstreamGRPC) DecodeMessage(b []byte, msg proto.Message) (err error) 
 	}
 	return s.codec.Unmarshal(b, msg)
 }
-func (d *downstreamGRPC) DecodeTrailer(hdr header) error {
+func (s *downstreamGRPC) DecodeTrailer(hdr header) error {
 	return nil
 }
 

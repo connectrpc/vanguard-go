@@ -6,7 +6,9 @@ package vanguard
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -25,7 +27,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
-func TestFilterRuleGRPC(t *testing.T) {
+func TestFilterRestToRPC(t *testing.T) {
 	t.Parallel()
 
 	var overide overrideMap
@@ -97,7 +99,10 @@ func TestFilterRuleGRPC(t *testing.T) {
 		request: httptest.NewRequest("PUT", "/v1/shelves/1/books/1", nil),
 		want: want{
 			code: http.StatusMethodNotAllowed,
-			body: `{"code":12,"message":"method not allowed","details":[]}`,
+			msg: &status.Status{
+				Code:    int32(connect.CodeUnimplemented),
+				Message: "method not allowed",
+			},
 		},
 	}, {
 		name:    "error",
@@ -115,7 +120,10 @@ func TestFilterRuleGRPC(t *testing.T) {
 		},
 		want: want{
 			code: http.StatusForbidden,
-			body: `{"code":7,"message":"permission denied","details":[]}`,
+			msg: &status.Status{
+				Code:    int32(connect.CodePermissionDenied),
+				Message: "permission denied",
+			},
 		},
 	}}
 	opts := cmp.Options{protocmp.Transform()}
@@ -176,8 +184,220 @@ func TestFilterRuleGRPC(t *testing.T) {
 	}
 }
 
+func TestFilterRPCToRest(t *testing.T) {
+	t.Parallel()
+
+	mux := NewMux(
+		&Config{
+			maxRecvMsgSize: 1024 * 1024 * 1024,
+		}, //nolint:exhaustivestruct
+	)
+
+	var overide overrideMap
+	rest := http.HandlerFunc(func(rsp http.ResponseWriter, req *http.Request) {
+		stream, ok := overide.get(req.Header.Get("test"))
+		if !ok {
+			http.Error(rsp, "missing testcase", http.StatusBadRequest)
+			return
+		}
+
+		urlstr := req.URL.String()
+		contentType := req.Header.Get("Content-Type")
+		encoding := req.Header.Get("Content-Encoding")
+		acceptEncoding := req.Header.Get("Accept-Encoding")
+
+		var input io.Reader = req.Body
+		if encoding != "" {
+			comp, err := mux.getCompressor(encoding)
+			if err != nil {
+				rsp.WriteHeader(http.StatusBadRequest)
+				t.Error(err)
+				return
+			}
+			input, err = comp.Decompress(input)
+			if err != nil {
+				rsp.WriteHeader(http.StatusBadRequest)
+				t.Error(err)
+				return
+			}
+		}
+
+		b, err := io.ReadAll(input)
+		if err != nil {
+			http.Error(rsp, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		in, out := stream[0].(msgIn), stream[1].(msgOut)
+		if in.method != "" && urlstr != in.method {
+			err := fmt.Errorf("rest url expected %s, got %s", in.method, urlstr)
+			http.Error(rsp, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if in.verb != "" && req.Method != in.verb {
+			err := fmt.Errorf("rest verb expected %s, got %s", in.method, urlstr)
+			http.Error(rsp, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		msg := in.msg.ProtoReflect().New().Interface()
+		if len(b) > 0 {
+			var codec codec = codecJSON{}
+			if contentType == "application/protobuf" {
+				codec = codecProto{}
+			}
+			if err := codec.Unmarshal(b, msg); err != nil {
+				http.Error(rsp, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+
+		if out.err != nil {
+			rspHdr := makeResponseHeaderHTTP(rsp)
+			errWriter := newHTTPErrorWriter(contentType)
+			errWriter(rsp, rspHdr, out.err)
+			return
+		}
+
+		var output io.Writer = rsp
+		codec := codecJSON{}
+		if acceptEncoding != "" {
+			comp, err := mux.getCompressor(acceptEncoding)
+			if err != nil {
+				rsp.WriteHeader(http.StatusInternalServerError)
+				t.Error(err)
+				return
+			}
+			xoutput, err := comp.Compress(output)
+			if err != nil {
+				rsp.WriteHeader(http.StatusInternalServerError)
+				t.Error(err)
+				return
+			}
+			defer xoutput.Close()
+			output = xoutput
+		}
+		b, err = codec.MarshalAppend(nil, out.msg)
+		if err != nil {
+			rsp.WriteHeader(http.StatusInternalServerError)
+			t.Error(err)
+		}
+		output.Write(b)
+	})
+
+	t.Log("adding services:")
+	services := []protoreflect.ServiceDescriptor{}
+	protoregistry.GlobalFiles.RangeFiles(func(fd protoreflect.FileDescriptor) bool {
+		sds := fd.Services()
+		for i := 0; i < sds.Len(); i++ {
+			services = append(services, sds.Get(i))
+			t.Log("  ", sds.Get(i).FullName())
+			return true
+		}
+		return true
+	})
+	mux.RegisterHTTPHandler(rest, services, protocolHTTP)
+
+	svr := httptest.NewUnstartedServer(mux)
+	svr.EnableHTTP2 = true
+	svr.StartTLS()
+	defer t.Cleanup(svr.Close)
+
+	client := libraryv1connect.NewLibraryServiceClient(svr.Client(), svr.URL, connect.WithGRPC())
+
+	type want struct {
+		code connect.Code
+		body string
+		msg  proto.Message
+	}
+	tests := []struct {
+		name   string
+		call   func(t *testing.T) (connect.AnyResponse, error)
+		stream []msgDir
+		want   want
+	}{{
+		name: "get",
+		call: func(t *testing.T) (connect.AnyResponse, error) {
+			req := connect.NewRequest(&library.GetBookRequest{Name: "shelves/1/books/1"})
+			req.Header().Set("test", t.Name())
+			return client.GetBook(context.Background(), req)
+		},
+		stream: []msgDir{
+			msgIn{
+				method: "/vanguard.library.v1.LibraryService/GetBook",
+				msg:    &library.GetBookRequest{Name: "shelves/1/books/1"},
+			},
+			msgOut{
+				msg: &library.Book{Name: "shelves/1/books/1"},
+			},
+		},
+		want: want{
+			code: http.StatusOK,
+			msg:  &library.Book{Name: "shelves/1/books/1"},
+		},
+		/*}, {
+		name: "error",
+		call: func(t *testing.T) (connect.AnyResponse, error) {
+			req := connect.NewRequest(&library.GetBookRequest{Name: "shelves/1/books/1"})
+			req.Header().Set("test", t.Name())
+			return client.GetBook(context.Background(), req)
+		},
+		stream: []msgDir{
+			msgIn{
+				method: "/vanguard.library.v1.LibraryService/GetBook",
+				msg:    &library.GetBookRequest{Name: "shelves/1/books/1"},
+			},
+			msgOut{
+				err: connect.NewError(
+					connect.CodePermissionDenied,
+					fmt.Errorf("permission denied")),
+			},
+		},
+		want: want{
+			code: http.StatusForbidden,
+			body: `{"code":7,"message":"permission denied","details":[]}`,
+		},*/
+	}}
+	opts := cmp.Options{protocmp.Transform()}
+	for _, testcase := range tests {
+		testcase := testcase
+		t.Run(testcase.name, func(t *testing.T) {
+			t.Parallel()
+
+			overide.set(t.Name(), testcase.stream)
+			defer overide.del(t.Name())
+
+			rsp, err := testcase.call(t)
+			t.Log(rsp)
+			t.Log(err)
+
+			if wantCode := testcase.want.code; wantCode != 0 {
+				cerr := &connect.Error{}
+				if !errors.As(err, &cerr) {
+					t.Fatal(err)
+				}
+				code := cerr.Code()
+				if wantCode != code {
+					t.Errorf("expected %d got %d", wantCode, code)
+				}
+				return
+			}
+
+			if testcase.want.msg != nil {
+				msg := rsp.Any()
+				t.Log("got msg", msg)
+				diff := cmp.Diff(msg, testcase.want.msg, opts...)
+				if diff != "" {
+					t.Error(diff)
+				}
+			}
+		})
+	}
+}
+
 type msgIn struct {
 	method string
+	verb   string // POST, GET, etc.
 	msg    proto.Message
 }
 
@@ -196,6 +416,13 @@ type overrideMap struct {
 	sync.Map
 }
 
+func (o *overrideMap) get(testcase string) ([]msgDir, bool) {
+	val, ok := o.Load(testcase)
+	if !ok {
+		return nil, false
+	}
+	return val.([]msgDir), true
+}
 func (o *overrideMap) set(testcase string, stream []msgDir) {
 	o.Store(testcase, stream)
 }

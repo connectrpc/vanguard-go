@@ -204,6 +204,7 @@ func (c *envelopeWriter) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+func (c *envelopeWriter) Flush(bool) error { return nil }
 
 type endStreamReader struct {
 	reader      io.Reader
@@ -226,4 +227,32 @@ func (c endStreamReader) Read(p []byte) (int, error) {
 		_, _ = c.buffer.Write(rsp)
 	}
 	return c.buffer.Read(p)
+}
+
+type endStreamWriter struct {
+	writer      io.Writer
+	buffer      *bytes.Buffer
+	onChunk     func(src []byte) ([]byte, error)
+	maxRecvSize uint32
+}
+
+type WriteFlusher interface {
+	io.Writer
+	Flush(bool) error
+}
+
+func (c endStreamWriter) Write(p []byte) (int, error) {
+	return c.buffer.Write(p)
+}
+func (c endStreamWriter) Flush(isEOF bool) error {
+	if !isEOF {
+		return nil
+	}
+	b := c.buffer.Bytes()
+	b, err := c.onChunk(b)
+	if err != nil {
+		return err
+	}
+	_, err = c.writer.Write(b)
+	return err
 }

@@ -84,7 +84,13 @@ func (m *Mux) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		return
 	}
 	switch upstreamProtocol {
-	case protocolGRPC, protocolGRPCWeb:
+	case protocolGRPC:
+		// TODO: validate request?
+		if req.ProtoMajor != 2 {
+			errorWriter(rsp, rspHdr, fmt.Errorf("unsupported protocol version: %d", req.ProtoMajor))
+			return
+		}
+	case protocolGRPCWeb:
 		panic("TODO")
 	case protocolHTTP:
 		queryParams, err := method.parseQueryParams(req.URL.Query())
@@ -106,20 +112,6 @@ func (m *Mux) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		return
 	}
 }
-
-//func (m *Mux) addService(sd protoreflect.ServiceDescriptor, hd handleFunc) error {
-//	// Load the state for writing.
-//	m.mu.Lock()
-//	defer m.mu.Unlock()
-//	state := m.state.Load().clone()
-//
-//	if err := state.addService(sd, hd); err != nil {
-//		return err
-//	}
-//
-//	m.state.Store(state)
-//	return nil
-//}
 
 func (m *Mux) getCodec(name string) (codec, error) {
 	if c, ok := m.codecs[name]; ok {

@@ -6,7 +6,6 @@ package vanguard
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -102,6 +101,26 @@ func (u *upstreamHTTP) EncodeTrailer(hdr header) error {
 	// TODO: clear map?
 	return nil
 }
+
+type downstreamHTTP struct {
+	*Mux
+
+	codec   codec
+	decComp compressor
+	encComp compressor
+	params  params  // params taken from EncodeMessage
+	method  *method // Method needs to be built
+	recv    int32
+	send    int32
+}
+
+var _ downstream = (*downstreamHTTP)(nil)
+
+func (s *downstreamHTTP) EncodeHeader(requestHeader) error                    { return nil }
+func (s *downstreamHTTP) EncodeMessage([]byte, proto.Message) ([]byte, error) { return nil, nil }
+func (s *downstreamHTTP) DecodeHeader(responseHeader) error                   { return nil }
+func (s *downstreamHTTP) DecodeMessage([]byte, proto.Message) error           { return nil }
+func (s *downstreamHTTP) DecodeTrailer(header) error                          { return nil }
 
 func newHTTPErrorWriter(contentType string) errorWriter {
 	return func(body io.Writer, hdr responseHeader, err error) {
