@@ -1,7 +1,3 @@
-// Copyright 2023 Buf Technologies, Inc.
-//
-// All rights reserved.
-
 package vanguard
 
 import (
@@ -10,8 +6,11 @@ import (
 )
 
 // parsePathTemplate parses the given path template into a routePath.
+//
+//nolint:unused
 func parsePathTemplate(path string) (routePath, error) {
 	// TODO
+	_ = path
 	return nil, errors.New("TODO")
 }
 

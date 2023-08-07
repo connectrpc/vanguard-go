@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+//nolint:gochecknoglobals
 var (
 	varRefCounter atomic.Int64
 )
@@ -29,23 +30,25 @@ type router struct {
 // HTTP rule. Only the rule itself is added. If the rule indicates additional
 // bindings, they are ignored. To add routes for all bindings, callers must
 // invoke this method for each rule.
+//
+//nolint:unused
 func (r *router) addRoute(config *methodConfig, rule *annotations.HttpRule) error {
 	var method, template string
-	switch p := rule.Pattern.(type) {
+	switch pattern := rule.Pattern.(type) {
 	case *annotations.HttpRule_Get:
-		method, template = http.MethodGet, p.Get
+		method, template = http.MethodGet, pattern.Get
 	case *annotations.HttpRule_Put:
-		method, template = http.MethodPut, p.Put
+		method, template = http.MethodPut, pattern.Put
 	case *annotations.HttpRule_Post:
-		method, template = http.MethodPost, p.Post
+		method, template = http.MethodPost, pattern.Post
 	case *annotations.HttpRule_Delete:
-		method, template = http.MethodDelete, p.Delete
+		method, template = http.MethodDelete, pattern.Delete
 	case *annotations.HttpRule_Patch:
-		method, template = http.MethodPatch, p.Patch
+		method, template = http.MethodPatch, pattern.Patch
 	case *annotations.HttpRule_Custom:
-		method, template = p.Custom.GetKind(), p.Custom.GetPath()
+		method, template = pattern.Custom.GetKind(), pattern.Custom.GetPath()
 	default:
-		return fmt.Errorf("invalid type of pattern for HTTP rule: %T", p)
+		return fmt.Errorf("invalid type of pattern for HTTP rule: %T", pattern)
 	}
 	if method == "" {
 		return fmt.Errorf("invalid HTTP rule: method is blank")
@@ -117,6 +120,8 @@ func (r *router) indexVars(target *routeTarget, path routePath, varsIndex varsIn
 
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
+//
+//nolint:unused
 func (r *router) match(req *http.Request) (*routeTarget, map[varMarker]string) {
 	path := strings.Split(req.URL.Path, "/")
 	var verb string
@@ -344,12 +349,15 @@ func (m routeMethods) insert(method string, target *routeTarget) *routeTarget {
 }
 
 type routeTarget struct {
-	config           *methodConfig
-	requestBodyPath  []protoreflect.FieldDescriptor
+	config *methodConfig
+	//nolint:unused
+	requestBodyPath []protoreflect.FieldDescriptor
+	//nolint:unused
 	responseBodyPath []protoreflect.FieldDescriptor
 	vars             map[varMarker][]protoreflect.FieldDescriptor
 }
 
+//nolint:unused
 func makeTarget(config *methodConfig, requestBody, responseBody string) (*routeTarget, error) {
 	requestBodyPath, err := computePath(config.descriptor.Input(), requestBody)
 	if err != nil {
@@ -490,11 +498,13 @@ func computePath(msg protoreflect.MessageDescriptor, path string) ([]protoreflec
 	return result, nil
 }
 
+//nolint:unused
 type alreadyExistsError struct {
 	existing            *routeTarget
 	pathPattern, method string
 }
 
+//nolint:unused
 func (a alreadyExistsError) Error() string {
 	return fmt.Sprintf("target for %s, method %s already exists: %s", a.pathPattern, a.method, a.existing.config.descriptor.FullName())
 }

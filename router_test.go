@@ -15,7 +15,8 @@ import (
 )
 
 func TestRouteTrie_Insert(t *testing.T) {
-	r := initRouter(t)
+	t.Parallel()
+	router := initRouter(t)
 
 	// TODO: verify properties of the constructed trie to make sure it looks correct
 
@@ -23,9 +24,9 @@ func TestRouteTrie_Insert(t *testing.T) {
 	for _, route := range routes {
 		target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", http.MethodGet, route)}}}
 		varsIndex := varsIndex{}
-		err := r.indexVars(target, route, varsIndex, map[string]struct{}{})
+		err := router.indexVars(target, route, varsIndex, map[string]struct{}{})
 		require.NoError(t, err)
-		existing, err := r.root.insert(newStack(route), nil, http.MethodGet, target, varsIndex)
+		existing, err := router.root.insert(newStack(route), nil, http.MethodGet, target, varsIndex)
 		require.NoError(t, err)
 		require.NotNil(t, existing)
 		require.NotSame(t, existing, target)
@@ -34,6 +35,7 @@ func TestRouteTrie_Insert(t *testing.T) {
 }
 
 func TestRouteTrie_FindTarget(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		path         []string
 		verb         string
@@ -111,11 +113,13 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 	trie := &initRouter(t).root
 
 	for _, testCase := range testCases {
+		testCase := testCase
 		uri := "/" + strings.Join(testCase.path, "/")
 		if testCase.verb != "" {
 			uri += ":" + testCase.verb
 		}
 		t.Run(uri, func(t *testing.T) {
+			t.Parallel()
 			var present, absent []string
 			if testCase.expectedPath != "" {
 				present = []string{http.MethodGet, http.MethodPost}
@@ -124,24 +128,28 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				absent = []string{http.MethodGet, http.MethodPost, http.MethodDelete, http.MethodPut}
 			}
 			for _, method := range present {
+				method := method
 				t.Run(method, func(t *testing.T) {
+					t.Parallel()
 					target, vars := trie.findTarget("", testCase.path, testCase.verb, method, varAccumulator{})
 					require.NotNil(t, target)
 					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.config.descriptor.Name())
 					require.Equal(t, len(testCase.expectedVars), len(vars))
-					for k, v := range vars {
-						varPath := target.vars[k]
+					for marker, value := range vars {
+						varPath := target.vars[marker]
 						names := make([]string, len(varPath))
 						for i := range varPath {
 							names[i] = string(varPath[i].Name())
 						}
 						name := strings.Join(names, ".")
-						require.Equal(t, testCase.expectedVars[name], v)
+						require.Equal(t, testCase.expectedVars[name], value)
 					}
 				})
 			}
 			for _, method := range absent {
+				method := method
 				t.Run(method, func(t *testing.T) {
+					t.Parallel()
 					target, vars := trie.findTarget("", testCase.path, testCase.verb, method, varAccumulator{})
 					require.Nil(t, target)
 					require.Nil(t, vars)
@@ -151,6 +159,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 	}
 }
 
+//nolint:gochecknoglobals
 var routes = []routePath{
 	// /foo/bar/baz/buzz
 	{
@@ -212,19 +221,19 @@ var routes = []routePath{
 func initRouter(t *testing.T) *router {
 	t.Helper()
 
-	var r router
+	var ret router
 	for _, route := range routes {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", method, route)}}}
 			varsIndex := varsIndex{}
-			err := r.indexVars(target, route, varsIndex, map[string]struct{}{})
+			err := ret.indexVars(target, route, varsIndex, map[string]struct{}{})
 			require.NoError(t, err)
-			existing, err := r.root.insert(newStack(route), nil, method, target, varsIndex)
+			existing, err := ret.root.insert(newStack(route), nil, method, target, varsIndex)
 			require.NoError(t, err)
 			require.Nil(t, existing)
 		}
 	}
-	return &r
+	return &ret
 }
 
 type fakeMethodDescriptor struct {

@@ -11,6 +11,7 @@ import (
 )
 
 func TestRoutePath_String(t *testing.T) {
+	t.Parallel()
 	var testCases = []struct {
 		pathStr    string
 		patternStr string
@@ -98,7 +99,9 @@ func TestRoutePath_String(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
+		testCase := testCase
 		t.Run(testCase.pathStr, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, testCase.pathStr, testCase.path.String())
 			assert.Equal(t, testCase.patternStr, testCase.path.PatternString())
 		})
