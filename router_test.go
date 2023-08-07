@@ -16,17 +16,16 @@ import (
 
 func TestRouteTrie_Insert(t *testing.T) {
 	t.Parallel()
-	router := initRouter(t)
+	trie := initTrie(t)
 
 	// TODO: verify properties of the constructed trie to make sure it looks correct
 
 	// Inserting redundant rules returns existing target
 	for _, route := range routes {
 		target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", http.MethodGet, route)}}}
-		varsIndex := varsIndex{}
-		err := router.indexVars(target, route, varsIndex, map[string]struct{}{})
+		_, err := indexVars(target, route, 0, map[string]struct{}{})
 		require.NoError(t, err)
-		existing, err := router.root.insert(newStack(route), nil, http.MethodGet, target, varsIndex)
+		existing, err := trie.insert(newStack(route), http.MethodGet, target)
 		require.NoError(t, err)
 		require.NotNil(t, existing)
 		require.NotSame(t, existing, target)
@@ -66,6 +65,11 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			path:         []string{"foo", "bar", "1", "baz", "2", "buzz", "3"},
 			expectedPath: "/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
 			expectedVars: map[string]string{"name": "1", "child.id": "2", "child.thing.id": "3"},
+		},
+		{
+			path:         []string{"foo", "bar", "baz", "123"},
+			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}",
+			expectedVars: map[string]string{"thing.id": "123", "cat": ""},
 		},
 		{
 			path:         []string{"foo", "bar", "baz", "123", "buzz"},
@@ -108,9 +112,26 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			path: []string{"foo", "bob", "bar", "baz", "123", "details"},
 			verb: "do",
 		},
+		{
+			path:         []string{"foo", "blah", "A", "B", "C", "foo", "D", "E", "F", "G", "foo", "H", "I", "J", "K", "L", "M"},
+			verb:         "details",
+			expectedPath: "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
+			expectedVars: map[string]string{
+				"longest_var": "A/B/C/foo/D/E/F/G/foo/H/I/J/K/L/M",
+				"long_var.a":  "A/B/C/foo/D",
+				"medium.a":    "A/B/C/foo",
+				"short.aa":    "A",
+				"short.ab":    "C",
+				"long_var.b":  "E/F/G/foo/H/I/J/K/L/M",
+				"medium.b":    "E/F/G/foo",
+				"short.ba":    "E",
+				"short.bb":    "G",
+				"last":        "H/I/J/K/L/M",
+			},
+		},
 	}
 
-	trie := &initRouter(t).root
+	trie := initTrie(t)
 
 	for _, testCase := range testCases {
 		testCase := testCase
@@ -131,18 +152,20 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target, vars := trie.findTarget("", testCase.path, testCase.verb, method, varAccumulator{})
+					target := trie.findTarget(testCase.path, testCase.verb, method)
 					require.NotNil(t, target)
 					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.config.descriptor.Name())
+					vars := computeVarValues(testCase.path, target)
 					require.Equal(t, len(testCase.expectedVars), len(vars))
-					for marker, value := range vars {
-						varPath := target.vars[marker]
-						names := make([]string, len(varPath))
-						for i := range varPath {
-							names[i] = string(varPath[i].Name())
+					for _, varMatch := range vars {
+						names := make([]string, len(varMatch.varPath))
+						for i, fld := range varMatch.varPath {
+							names[i] = string(fld.Name())
 						}
 						name := strings.Join(names, ".")
-						require.Equal(t, testCase.expectedVars[name], value)
+						expectedValue, ok := testCase.expectedVars[name]
+						require.True(t, ok)
+						require.Equal(t, expectedValue, varMatch.value)
 					}
 				})
 			}
@@ -150,9 +173,8 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target, vars := trie.findTarget("", testCase.path, testCase.verb, method, varAccumulator{})
+					target := trie.findTarget(testCase.path, testCase.verb, method)
 					require.Nil(t, target)
-					require.Nil(t, vars)
 				})
 			}
 		})
@@ -216,24 +238,49 @@ var routes = []routePath{
 		}}},
 		{segment: "details"},
 	},
+	// /foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details
+	{
+		{segment: "foo"}, {segment: "blah"},
+		{variable: routePathVar{varPath: "longest_var", segments: routePath{
+			{variable: routePathVar{varPath: "long_var.a", segments: routePath{
+				{variable: routePathVar{varPath: "medium.a", segments: routePath{
+					{variable: routePathVar{varPath: "short.aa"}},
+					{segment: "*"},
+					{variable: routePathVar{varPath: "short.ab"}},
+					{segment: "foo"},
+				}}},
+				{segment: "*"},
+			}}},
+			{variable: routePathVar{varPath: "long_var.b", segments: routePath{
+				{variable: routePathVar{varPath: "medium.b", segments: routePath{
+					{variable: routePathVar{varPath: "short.ba"}},
+					{segment: "*"},
+					{variable: routePathVar{varPath: "short.bb"}},
+					{segment: "foo"},
+				}}},
+				{variable: routePathVar{varPath: "last", segments: routePath{
+					{segment: "**"},
+				}}},
+			}}},
+		}}},
+		{verb: "details"},
+	},
 }
 
-func initRouter(t *testing.T) *router {
+func initTrie(t *testing.T) *routeTrie {
 	t.Helper()
-
-	var ret router
+	var trie routeTrie
 	for _, route := range routes {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", method, route)}}}
-			varsIndex := varsIndex{}
-			err := ret.indexVars(target, route, varsIndex, map[string]struct{}{})
+			_, err := indexVars(target, route, 0, map[string]struct{}{})
 			require.NoError(t, err)
-			existing, err := ret.root.insert(newStack(route), nil, method, target, varsIndex)
+			existing, err := trie.insert(newStack(route), method, target)
 			require.NoError(t, err)
 			require.Nil(t, existing)
 		}
 	}
-	return &ret
+	return &trie
 }
 
 type fakeMethodDescriptor struct {

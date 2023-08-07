@@ -96,6 +96,36 @@ func TestRoutePath_String(t *testing.T) {
 				{segment: "details"},
 			},
 		},
+		{
+			pathStr:    "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
+			patternStr: "/foo/blah/*/*/*/foo/*/*/*/*/foo/**:details",
+			path: routePath{
+				{segment: "foo"}, {segment: "blah"},
+				{variable: routePathVar{varPath: "longest_var", segments: routePath{
+					{variable: routePathVar{varPath: "long_var.a", segments: routePath{
+						{variable: routePathVar{varPath: "medium.a", segments: routePath{
+							{variable: routePathVar{varPath: "short.aa"}},
+							{segment: "*"},
+							{variable: routePathVar{varPath: "short.ab"}},
+							{segment: "foo"},
+						}}},
+						{segment: "*"},
+					}}},
+					{variable: routePathVar{varPath: "long_var.b", segments: routePath{
+						{variable: routePathVar{varPath: "medium.b", segments: routePath{
+							{variable: routePathVar{varPath: "short.ba"}},
+							{segment: "*"},
+							{variable: routePathVar{varPath: "short.bb"}},
+							{segment: "foo"},
+						}}},
+						{variable: routePathVar{varPath: "last", segments: routePath{
+							{segment: "**"},
+						}}},
+					}}},
+				}}},
+				{verb: "details"},
+			},
+		},
 	}
 
 	for _, testCase := range testCases {
