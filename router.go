@@ -7,6 +7,7 @@ package vanguard
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"google.golang.org/genproto/googleapis/api/annotations"
@@ -131,7 +132,12 @@ func (trie *routeTrie) insert(stack *routeStack, method string, target *routeTar
 //
 //nolint:unused
 func (trie *routeTrie) match(req *http.Request) (*routeTarget, []routeTargetVarMatch) {
-	path := strings.Split(req.URL.Path, "/")
+	unescapedPath, err := url.PathUnescape(req.URL.Path)
+	if err != nil {
+		// TODO: arrange to return 400 Bad Request status code
+		return nil, nil
+	}
+	path := strings.Split(unescapedPath, "/")
 	var verb string
 	if len(path) > 0 {
 		lastElement := path[len(path)-1]

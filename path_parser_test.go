@@ -151,13 +151,13 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	}{
 		{
 			path:       "/foo=~bar~/a_b_c[xyz]&123\\456/%7c_%3f_%3e/`a|b|c`/\"d,e,f\"/<'abc'>/r.t.f/j#j/k$k/l@l/a!a/s^s/(x-y-z)/{var={abc}/{def=**}}:baz",
-			resultPath: "/foo%3D~bar~/a_b_c%5Bxyz%5D%26123%5C456/%7C_%3F_%3E/%60a%7Cb%7Cc%60/%22d%2Ce%2Cf%22/%3C%27abc%27%3E/r.t.f/j%23j/k%24k/l%40l/a%21a/s%5Es/%28x-y-z%29/{var={abc}/{def=**}}:baz",
-			// no error, but lots of encoding for special/reserved characters
+			resultPath: "/foo=~bar~/a_b_c[xyz]&123\\456/|_?_>/`a|b|c`/\"d,e,f\"/<'abc'>/r.t.f/j#j/k$k/l@l/a!a/s^s/(x-y-z)/{var={abc}/{def=**}}:baz",
+			// no error, but special chars to decode
 		},
 		{
-			path:       "/%66%6f%6f/%30%39%41%5a%61%7a/%5f%2D%2e%7e%25",
-			resultPath: "/foo/09AZaz/_-.~%25",
-			// no error, but we normalize unnecessary percent-encoded characters
+			path:       "/%66%6f%6f/%30%39%41%5a%61%7a/%5f%2D%2e%7e%25%20123",
+			resultPath: "/foo/09AZaz/_-.~% 123",
+			// no error, but special chars to decode
 		},
 		{
 			path:        "/foo/bar/baz?abc=def",
@@ -185,7 +185,7 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		},
 		{
 			path:       "/foo/bar:baz%12xyz%abcde",
-			resultPath: "/foo/bar:baz%12xyz%ABcde",
+			resultPath: "/foo/bar:baz\x12xyz\xabcde",
 			// no error, but we capitalize URL-encoded chars
 		},
 		{

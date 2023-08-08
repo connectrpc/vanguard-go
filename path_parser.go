@@ -6,8 +6,8 @@ package vanguard
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
-	"unicode"
 )
 
 // parsePathTemplate parses the given path template into a routePath.
@@ -202,14 +202,18 @@ func (p routePath) normalize(state pathValidationState) error {
 			if elem.segment == "**" {
 				state = stateSeenDoubleWildcard
 			} else if elem.segment != "*" {
-				elem.segment = canonicalizePathElement(elem.segment)
+				if unescaped, err := url.PathUnescape(elem.segment); err == nil {
+					elem.segment = unescaped
+				}
 			}
 		case elem.verb != "":
 			if state == stateSeenVerb {
 				return fmt.Errorf("colon-delimited verb must appear only once and be on final path component")
 			}
 			state = stateSeenVerb
-			elem.verb = canonicalizePathElement(elem.verb)
+			if unescaped, err := url.PathUnescape(elem.verb); err == nil {
+				elem.verb = unescaped
+			}
 		case elem.variable.varPath != "":
 			subPath := elem.variable.segments
 			if len(subPath) == 0 {
@@ -223,77 +227,6 @@ func (p routePath) normalize(state pathValidationState) error {
 		}
 	}
 	return nil
-}
-
-const hexDigits = "0123456789ABCDEF"
-
-func canonicalizePathElement(elem string) string {
-	var sb strings.Builder
-	// used to capitalize URL-encoded characters
-	var specialCharRemaining int
-	var prevSpecialChar byte
-	var prevIndex int
-	// we don't use range because we want to iterate bytes, not runes
-	for i := 0; i < len(elem); i++ {
-		char := elem[i]
-		if specialCharRemaining > 0 {
-			specialCharRemaining--
-			if specialCharRemaining != 0 {
-				prevSpecialChar = char
-				continue
-			}
-			left, right := strings.IndexRune(hexDigits, unicode.ToUpper(rune(prevSpecialChar))), strings.IndexRune(hexDigits, unicode.ToUpper(rune(char)))
-			decodedChar := (left << 4) | right
-			replace := left != -1 && right != -1 && (isIdentifier(rune(decodedChar)) || strings.ContainsRune("-.~", rune(decodedChar)))
-			capitalize := unicode.IsLower(rune(prevSpecialChar)) || unicode.IsLower(rune(char))
-			if (replace || capitalize) && sb.Len() == 0 {
-				// initialize sb up to this point of the string
-				sb.WriteString(elem[:prevIndex])
-			}
-			if replace || capitalize || sb.Len() > 0 {
-				switch {
-				case replace:
-					sb.WriteRune(rune(decodedChar))
-				case capitalize:
-					sb.WriteString(strings.ToUpper(elem[prevIndex : i+1]))
-				default:
-					sb.WriteString(elem[prevIndex : i+1])
-				}
-			}
-			continue
-		}
-
-		if char == '%' {
-			specialCharRemaining = 2
-			prevIndex = i
-			continue
-		}
-		replace := !isIdentifier(rune(char)) && !strings.ContainsRune("-.~%", rune(char))
-		if replace && sb.Len() == 0 {
-			// initialize sb up to this point of the string
-			sb.WriteString(elem[:i])
-		}
-		if replace || sb.Len() > 0 {
-			switch {
-			case replace:
-				sb.WriteByte('%')
-				sb.WriteByte(hexDigits[(char>>4)&0xf])
-				sb.WriteByte(hexDigits[char&0xf])
-			default:
-				sb.WriteByte(char)
-			}
-		}
-		if specialCharRemaining > 0 {
-			specialCharRemaining--
-		}
-		if char == '%' {
-			specialCharRemaining = 2
-		}
-	}
-	if sb.Len() > 0 {
-		return sb.String()
-	}
-	return elem // nothing to replace
 }
 
 type routePathElement struct {
