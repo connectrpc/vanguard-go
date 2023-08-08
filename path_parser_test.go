@@ -50,24 +50,54 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		{
 			desc:        &fakeMethodDescriptor{},
 			path:        "/foo/bar/",
-			expectedErr: "syntax error at column 10: expected path component literal", // must not end in slash
+			expectedErr: "syntax error at column 10: expected path value", // must not end in slash
 		},
-		//{
-		//	desc:        &fakeMethodDescriptor{},
-		//	path:        "/foo/bar:baz/buzz",
-		//	expectedErr: "syntax error at column 13: expecting EOF", // ":baz" verb can only come at the very end
-		//},
-		//{
-		//	desc:        &fakeMethodDescriptor{},
-		//	path:        "/foo/{bar/baz}/buzz",
-		//	expectedErr: "syntax error at column 10: expecting '}'", // invalid field path
-		//},
-		//{
-		//	desc: &fakeMethodDescriptor{},
-		//	path: "/foo/bar:baz%12xyz%abcde",
-		//	//resultPath: "/foo/bar:baz%12xyz%ABcde",
-		//	// no error
-		//},
+		{
+			desc:        &fakeMethodDescriptor{},
+			path:        "/foo/bar:baz/buzz",
+			expectedErr: "syntax error at column 13: expected EOF", // ":baz" verb can only come at the very end
+		},
+		{
+			desc:        &fakeMethodDescriptor{},
+			path:        "/foo/{bar/baz}/buzz",
+			expectedErr: "syntax error at column 10: expected '}', got '/'", // invalid field path
+		},
+		{
+			desc: &fakeMethodDescriptor{},
+			path: "/foo/bar:baz%12xyz%abcde",
+			segments: pathSegments{
+				{val: "foo"},
+				{val: "bar"},
+				{val: "baz%12xyz%abcde", isVerb: true},
+			},
+			//resultPath: "/foo/bar:baz%12xyz%ABcde",
+			// no error
+		},
+		{
+			desc: &fakeMethodDescriptor{
+				in: &fakeMessageDescriptor{
+					fields: &fakeFieldDescriptors{
+						fields: map[protoreflect.Name]protoreflect.FieldDescriptor{
+							"hello": &fakeFieldDescriptor{
+								name: "hello",
+							},
+						},
+					},
+				},
+			},
+			path: "/{hello}/world",
+			segments: pathSegments{
+				{val: "*"},
+				{val: "world"},
+			},
+			variables: pathVariables{
+				{varPath: []protoreflect.FieldDescriptor{
+					&fakeFieldDescriptor{
+						name: "hello",
+					},
+				}, start: 0, end: 1},
+			},
+		},
 		//{
 		//	desc:        &fakeMethodDescriptor{},
 		//	path:        "/foo/bar%55:baz%1",

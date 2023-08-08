@@ -42,18 +42,14 @@ type pathVariables []pathVariable
 func parsePathTemplate(descriptor protoreflect.MethodDescriptor, template string) (
 	pathSegments, pathVariables, error,
 ) {
-	toks, err := lex(template)
-	if err != nil {
-		return nil, nil, err
-	}
-	p := &parser{toks: toks, desc: descriptor, seenVars: make(map[string]bool)}
-	if err := p.consume(tokenSlash); err != nil {
+	parser := &parser{toks: lex(template), desc: descriptor, seenVars: make(map[string]bool)}
+	if err := parser.consume(tokenSlash); err != nil {
 		return nil, nil, err // empty path is not allowed.
 	}
-	if err := p.parseSegments(); err != nil {
+	if err := parser.parseSegments(); err != nil {
 		return nil, nil, err
 	}
-	return p.segments, p.variables, nil
+	return parser.segments, parser.variables, nil
 }
 
 // parser holds the state for the recursive descent path template parser.
@@ -67,6 +63,14 @@ type parser struct {
 	variables      pathVariables                 // output variables.
 }
 
+func (p *parser) errUnexpected() error {
+	tok := p.current()
+	if tok.typ == tokenError {
+		return fmt.Errorf("syntax error at column %v: %s", tok.pos+1, tok.val)
+	}
+	return fmt.Errorf("unexpected token at column %v: '%s'", tok.pos+1, tok.val)
+}
+
 func (p *parser) next() token {
 	if p.pos >= len(p.toks) {
 		return token{typ: tokenEOF}
@@ -75,6 +79,7 @@ func (p *parser) next() token {
 	p.pos++
 	return t
 }
+func (p *parser) current() token { return p.toks[p.pos-1] }
 func (p *parser) assert(typ tokenType) (token, error) {
 	t := p.next()
 	if t.typ != typ {
@@ -86,9 +91,6 @@ func (p *parser) consume(typ tokenType) error {
 	_, err := p.assert(typ)
 	return err
 }
-func (p *parser) errUnexpected() error {
-	return fmt.Errorf("unexpected token %q", p.toks[p.pos-1])
-}
 
 func (p *parser) parseSegments() error {
 	for {
@@ -96,6 +98,7 @@ func (p *parser) parseSegments() error {
 			return err
 		}
 		tok := p.next()
+		//nolint:exhaustive
 		switch tok.typ {
 		case tokenEOF:
 			return nil
@@ -120,6 +123,7 @@ func (p *parser) parseSegments() error {
 func (p *parser) parseSegment() error {
 	tok := p.next()
 	seg := pathSegment{val: tok.val}
+	//nolint:exhaustive
 	switch tok.typ {
 	case tokenStarStar:
 		p.seenDoubleStar = true
@@ -146,6 +150,7 @@ func (p *parser) parseVariable() error {
 	}
 	variable := pathVariable{varPath: varPath, start: len(p.segments)}
 
+	//nolint:exhaustive
 	switch tok = p.next(); tok.typ {
 	case tokenVariableEnd:
 		seg := pathSegment{val: "*"} // default capture.

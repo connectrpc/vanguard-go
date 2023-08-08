@@ -67,10 +67,7 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if err != nil {
 		return err
 	}
-	if err := trie.insert(method, target, segments); err != nil {
-		return err
-	}
-	return nil
+	return trie.insert(method, target, segments)
 }
 
 func (trie *routeTrie) getVerb(verb string) routeMethods {
@@ -96,11 +93,8 @@ func (trie *routeTrie) getChild(segment string) *routeTrie {
 	return child
 }
 
-// insert inserts the given target into the trie using the given method and paths. The
-// paths represent a stack. When a path element corresponds to a variable, that variable's
-// path is pushed to the top of the stack. Invocations of this function always work on the
-// first element of the path at the top of the stack. The function is recursive: after an
-// element is processed, a sub-trie handles the next element.
+// insert the target into the trie using the given method and segment path.
+// The path is followed until the final segment is reached.
 func (trie *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
 	cursor := trie
 	var methods routeMethods
@@ -194,14 +188,6 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 
 type routeMethods map[string]*routeTarget
 
-func (m routeMethods) insert(method string, target *routeTarget) *routeTarget {
-	if existing, ok := m[method]; ok {
-		return existing
-	}
-	m[method] = target
-	return nil
-}
-
 type routeTarget struct {
 	config *methodConfig
 	//nolint:unused
@@ -211,16 +197,12 @@ type routeTarget struct {
 	vars             pathVariables
 }
 
-type routeTargetVar struct {
-	varPath    []protoreflect.FieldDescriptor
-	start, end int
-}
-
 type routeTargetVarMatch struct {
 	varPath []protoreflect.FieldDescriptor
 	value   string
 }
 
+//nolint:unused
 func makeTarget(config *methodConfig, requestBody, responseBody string, variables pathVariables) (*routeTarget, error) {
 	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
@@ -298,13 +280,11 @@ func resolvePathToDescriptors(msg protoreflect.MessageDescriptor, path string) (
 	return result, nil
 }
 
-//nolint:unused
 type alreadyExistsError struct {
 	existing            *routeTarget
 	pathPattern, method string
 }
 
-//nolint:unused
 func (a alreadyExistsError) Error() string {
 	return fmt.Sprintf("target for %s, method %s already exists: %s", a.pathPattern, a.method, a.existing.config.descriptor.FullName())
 }

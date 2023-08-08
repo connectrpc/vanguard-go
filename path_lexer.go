@@ -30,10 +30,9 @@ const (
 	tokenVariableStart           // {
 	tokenVariableEnd             // }
 	tokenEqual                   // =
-	tokenLiteral                 // a-z A-Z 0-9 - _ .
+	tokenLiteral                 // a-z A-Z 0-9 - _ . %
 	tokenFieldPath               // a-z A-Z 0-9 - _ .
 	tokenVerb                    // :
-	tokenPath                    // a-z A-Z 0-9 - _ . ~ ! $ & ' ( ) * + , ; = @
 	tokenEOF
 )
 
@@ -49,7 +48,6 @@ var tokenNames = [...]string{
 	tokenLiteral:       "literal",
 	tokenFieldPath:     "fieldpath",
 	tokenVerb:          ":",
-	tokenPath:          "path",
 	tokenEOF:           "eof",
 }
 
@@ -63,6 +61,7 @@ func (t tokenType) String() string {
 type token struct {
 	val string
 	typ tokenType
+	pos int
 }
 
 func (t token) String() string {
@@ -89,12 +88,10 @@ type lexer struct {
 }
 
 // lex the input template into tokens.
-func lex(input string) (tokens, error) {
+func lex(input string) tokens {
 	l := &lexer{input: input}
-	if err := l.lexTemplate(); err != nil {
-		return nil, err
-	}
-	return l.toks, nil
+	_ = l.lexTemplate()
+	return l.toks
 }
 
 const eof = -1
@@ -141,91 +138,90 @@ func (l *lexer) acceptRun(isValid func(r rune) bool) int {
 	return i
 }
 
-func (l *lexer) emit(typ tokenType) error {
-	tok := token{typ: typ, val: l.input[l.start:l.pos]}
+func (l *lexer) emit(typ tokenType) bool {
+	tok := token{typ: typ, val: l.input[l.start:l.pos], pos: l.start}
 	l.toks = append(l.toks, tok)
 	l.start = l.pos
-	return nil
+	return typ != tokenError
+}
+func (l *lexer) emitError(tmpl string, args ...any) bool {
+	tok := token{
+		typ: tokenError, val: fmt.Sprintf(tmpl, args...), pos: l.start,
+	}
+	l.toks = append(l.toks, tok)
+	l.start = l.pos
+	return false
+}
+func (l *lexer) emitUnexpected() bool {
+	return l.emitError("unexpected %q", l.current())
+}
+func (l *lexer) emitExpected(expected rune) bool {
+	return l.emitError("expected %q, got %q", expected, l.current())
+}
+func (l *lexer) emitShort() bool {
+	return l.emitError("short read %q", l.current())
 }
 
-func (l *lexer) errf(tmpl string, args ...any) error {
-	if err := l.emit(tokenError); err != nil {
-		return err
-	}
-	return fmt.Errorf("syntax error at column %v: %s", l.pos-l.width+1, fmt.Sprintf(tmpl, args...))
-}
-func (l *lexer) errUnexpected() error {
-	return l.errf("unexpected %q", l.current())
-}
-func (l *lexer) errExpected(expected rune) error {
-	return l.errf("expected %q, got %q", expected, l.current())
-}
-func (l *lexer) errShort() error {
-	return l.errf("short read %q", l.current())
-}
 func isIdent(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsNumber(r) || r == '_' || r == '-'
 }
-
-func isLiteral(r rune) bool {
+func isFieldPath(r rune) bool {
 	return isIdent(r) || r == '.'
 }
+func isLiteral(r rune) bool {
+	return isIdent(r) || r == '.' || r == '%' // url encoded char.
+}
 
-func (l *lexer) lexLiteral() error {
+func (l *lexer) lexLiteral() bool {
 	if i := l.acceptRun(isLiteral); i == 0 {
-		return l.errShort()
+		return l.emitShort()
 	}
 	return l.emit(tokenLiteral)
 }
 
-func (l *lexer) lexFieldPath() error {
-	if i := l.acceptRun(isLiteral); i == 0 {
-		return l.errShort()
+func (l *lexer) lexFieldPath() bool {
+	if i := l.acceptRun(isFieldPath); i == 0 {
+		return l.emitShort()
 	}
 	return l.emit(tokenFieldPath)
 }
 
-func (l *lexer) lexVerb() error {
-	if err := l.lexLiteral(); err != nil {
-		return err
+func (l *lexer) lexVerb() bool {
+	if !l.lexLiteral() {
+		return false
 	}
 	if r := l.next(); r == eof {
 		return l.emit(tokenEOF)
 	}
-	return l.errUnexpected()
+	return l.emitError("expected EOF") // unexpected character.
 }
 
-func (l *lexer) lexVariable() error {
+func (l *lexer) lexVariable() bool {
 	char := l.next()
 	if char != '{' {
-		return l.errUnexpected()
+		return l.emitExpected('{')
 	}
-	if err := l.emit(tokenVariableStart); err != nil {
-		return err
-	}
-	if err := l.lexFieldPath(); err != nil {
-		return err
+	l.emit(tokenVariableStart)
+	if !l.lexFieldPath() {
+		return false
 	}
 
 	char = l.next()
 	if char == '=' {
-		if err := l.emit(tokenEqual); err != nil {
-			return err
-		}
-
-		if err := l.lexSegments(); err != nil {
-			return err
+		l.emit(tokenEqual)
+		if !l.lexSegments() {
+			return false
 		}
 		char = l.next()
 	}
 
 	if char != '}' {
-		return l.errUnexpected()
+		return l.emitExpected('}')
 	}
 	return l.emit(tokenVariableEnd)
 }
 
-func (l *lexer) lexSegment() error {
+func (l *lexer) lexSegment() bool {
 	char := l.next()
 	switch {
 	case unicode.IsLetter(char):
@@ -241,48 +237,39 @@ func (l *lexer) lexSegment() error {
 		l.backup()
 		return l.lexVariable()
 	default:
-		return l.errf("expected path component literal")
+		return l.emitError("expected path value")
 	}
 }
 
-func (l *lexer) lexSegments() error {
+func (l *lexer) lexSegments() bool {
 	for {
-		if err := l.lexSegment(); err != nil {
-			return err
+		if !l.lexSegment() {
+			return false
 		}
 		if r := l.next(); r != '/' {
 			l.backup() // unknown
-			return nil
+			return true
 		}
-		if err := l.emit(tokenSlash); err != nil {
-			return err
-		}
+		l.emit(tokenSlash)
 	}
 }
 
-func (l *lexer) lexTemplate() error {
+func (l *lexer) lexTemplate() bool {
 	if r := l.next(); r != '/' {
-		return l.errExpected('/')
+		return l.emitExpected('/')
 	}
-	if err := l.emit(tokenSlash); err != nil {
-		return err
+	l.emit(tokenSlash)
+	if !l.lexSegments() {
+		return false
 	}
-	if err := l.lexSegments(); err != nil {
-		return err
-	}
-
 	switch r := l.next(); r {
 	case ':':
-		if err := l.emit(tokenVerb); err != nil {
-			return err
-		}
+		l.emit(tokenVerb)
 		return l.lexVerb()
 	case eof:
-		if err := l.emit(tokenEOF); err != nil {
-			return err
-		}
-		return nil
+		l.emit(tokenEOF)
+		return false
 	default:
-		return l.errUnexpected()
+		return l.emitUnexpected()
 	}
 }
