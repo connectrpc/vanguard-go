@@ -71,9 +71,9 @@ func (l *lexer) consume(t tokenType) (string, bool) {
 
 func (l *lexer) consumeAll(types ...tokenType) (string, int) {
 	var count int
-	var sb strings.Builder
+	start := l.position()
 	for {
-		peeked, peekedStr := l.peek()
+		peeked, _ := l.peek()
 		var found bool
 		for _, t := range types {
 			if t == peeked {
@@ -82,11 +82,11 @@ func (l *lexer) consumeAll(types ...tokenType) (string, int) {
 			}
 		}
 		if !found {
-			return sb.String(), count
+			end := l.position()
+			return l.input[start:end], count
 		}
 		l.next() // consume the peeked token
 		count++
-		sb.WriteString(peekedStr)
 	}
 }
 

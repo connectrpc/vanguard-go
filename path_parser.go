@@ -228,8 +228,7 @@ func (p routePath) normalize(state pathValidationState) error {
 const hexDigits = "0123456789ABCDEF"
 
 func sanitizePathElement(elem string) string {
-	// lazily initialized if and only if we have to rewrite the string
-	var sb *strings.Builder
+	var sb strings.Builder
 	// used to capitalize URL-encoded characters
 	var specialCharRemaining int
 	// we don't use range because we want to iterate bytes, not runes
@@ -239,11 +238,11 @@ func sanitizePathElement(elem string) string {
 		// validate when parsing the URL that "%" is an already-URL-encoded char
 		replace := !isIdentifier(rune(char)) && !strings.ContainsRune("-.~%", rune(char))
 		capitalize := specialCharRemaining > 0 && unicode.IsLower(rune(char))
-		if (replace || capitalize) && sb == nil {
-			sb = &strings.Builder{}
+		if (replace || capitalize) && sb.Len() == 0 {
+			// initialize sb up to this point of the string
 			sb.WriteString(elem[:i])
 		}
-		if sb != nil {
+		if replace || capitalize || sb.Len() > 0 {
 			switch {
 			case replace:
 				sb.WriteByte('%')
@@ -262,7 +261,7 @@ func sanitizePathElement(elem string) string {
 			specialCharRemaining = 2
 		}
 	}
-	if sb != nil {
+	if sb.Len() > 0 {
 		return sb.String()
 	}
 	return elem // nothing to replace
