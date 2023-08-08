@@ -58,22 +58,42 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if template == "" {
 		return fmt.Errorf("invalid HTTP rule: path template is blank")
 	}
-	path, err := parsePathTemplate(template)
+
+	segments, variables, err := parsePathTemplate(config.descriptor, template)
 	if err != nil {
 		return err
 	}
-	target, err := makeTarget(config, rule.Body, rule.ResponseBody)
+	target, err := makeTarget(config, rule.Body, rule.ResponseBody, variables)
 	if err != nil {
 		return err
 	}
-	if _, err := indexVars(target, path, 0, map[string]struct{}{}); err != nil {
+	if err := trie.insert(method, target, segments); err != nil {
 		return err
 	}
-	existing, err := trie.insert(newStack(path), method, target)
-	if existing != nil {
-		return alreadyExistsError{existing: existing, pathPattern: path.String(), method: method}
+	return nil
+}
+
+func (trie *routeTrie) getVerb(verb string) routeMethods {
+	methods := trie.verbs[verb]
+	if methods == nil {
+		if trie.verbs == nil {
+			trie.verbs = map[string]routeMethods{}
+		}
+		methods = routeMethods{}
+		trie.verbs[verb] = methods
 	}
-	return err
+	return methods
+}
+func (trie *routeTrie) getChild(segment string) *routeTrie {
+	child := trie.children[segment]
+	if child == nil {
+		if trie.children == nil {
+			trie.children = map[string]*routeTrie{}
+		}
+		child = &routeTrie{}
+		trie.children[segment] = child
+	}
+	return child
 }
 
 // insert inserts the given target into the trie using the given method and paths. The
@@ -81,49 +101,30 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 // path is pushed to the top of the stack. Invocations of this function always work on the
 // first element of the path at the top of the stack. The function is recursive: after an
 // element is processed, a sub-trie handles the next element.
-func (trie *routeTrie) insert(stack *routeStack, method string, target *routeTarget) (*routeTarget, error) {
-	for elem := stack.pop(); elem != nil; elem = stack.pop() {
-		switch {
-		case elem.segment != "":
-			child := trie.children[elem.segment]
-			if child == nil {
-				if trie.children == nil {
-					trie.children = map[string]*routeTrie{}
-				}
-				child = &routeTrie{}
-				trie.children[elem.segment] = child
-			}
-			trie = child
-
-		case elem.verb != "":
-			if !stack.empty() {
-				return nil, fmt.Errorf("invalid path: verb element must be last")
-			}
-			methods := trie.verbs[elem.verb]
-			if methods == nil {
-				if trie.verbs == nil {
-					trie.verbs = map[string]routeMethods{}
-				}
-				methods = routeMethods{}
-				trie.verbs[elem.verb] = methods
-			}
-			return methods.insert(method, target), nil
-
-		case len(elem.variable.varPath) > 0:
-			nextPath := elem.variable.segments
-			if len(nextPath) == 0 {
-				nextPath = routePath{{segment: "*"}}
-			}
-			stack.pushVariable(nextPath)
-
-		default:
-			return nil, fmt.Errorf("invalid path element contains no values")
+func (trie *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
+	cursor := trie
+	var methods routeMethods
+	for _, segment := range segments {
+		if segment.isVerb {
+			methods = cursor.getVerb(segment.val)
+			cursor = nil
+		} else {
+			child := cursor.getChild(segment.val)
+			methods = child.methods // may be nil.
+			cursor = child
 		}
 	}
-	if trie.methods == nil {
-		trie.methods = routeMethods{}
+	if existing := methods[method]; existing != nil {
+		return alreadyExistsError{
+			existing: existing, pathPattern: segments.String(), method: method,
+		}
 	}
-	return trie.methods.insert(method, target), nil
+	if methods == nil {
+		methods = make(routeMethods, 1)
+		cursor.methods = methods
+	}
+	methods[method] = target
+	return nil
 }
 
 // match finds a route for the given request. If a match is found, the associated target and a map
@@ -207,16 +208,11 @@ type routeTarget struct {
 	requestBodyPath []protoreflect.FieldDescriptor
 	//nolint:unused
 	responseBodyPath []protoreflect.FieldDescriptor
-	vars             []routeTargetVar
+	vars             pathVariables
 }
 
 type routeTargetVar struct {
-	varPath []protoreflect.FieldDescriptor
-	// start and end path components for this var. If end == -1, then this
-	// var is a trailing double wildcard, in which case start may be
-	// == len(path) which means that the variable's value is empty.
-	// The start value is inclusive; end is exclusive (just like the start
-	// and end expressions in a Go slice expression: str[start:end]).
+	varPath    []protoreflect.FieldDescriptor
 	start, end int
 }
 
@@ -225,8 +221,7 @@ type routeTargetVarMatch struct {
 	value   string
 }
 
-//nolint:unused
-func makeTarget(config *methodConfig, requestBody, responseBody string) (*routeTarget, error) {
+func makeTarget(config *methodConfig, requestBody, responseBody string, variables pathVariables) (*routeTarget, error) {
 	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
 		return nil, err
@@ -239,105 +234,8 @@ func makeTarget(config *methodConfig, requestBody, responseBody string) (*routeT
 		config:           config,
 		requestBodyPath:  requestBodyPath,
 		responseBodyPath: responseBodyPath,
+		vars:             variables,
 	}, nil
-}
-
-type routeStack []routePath
-
-func newStack(path routePath) *routeStack {
-	return &routeStack{path}
-}
-
-// pop returns the next element in the stack or nil if there are no elements.
-// The second value returned is all of the vars that are no longer active.
-//
-// The each entry in the stack is a path. So pop works top-to-bottom,
-// left-to-right, returning the first element for the top path in the
-// stack.
-func (s *routeStack) pop() *routePathElement {
-	if len(*s) == 0 {
-		return nil
-	}
-	topIndex := len(*s) - 1
-	top := &(*s)[topIndex]
-	for len(*top) == 0 {
-		*s = (*s)[:topIndex]
-		topIndex--
-		if topIndex < 0 {
-			// stack is empty
-			return nil
-		}
-		top = &(*s)[topIndex]
-	}
-	// Update top of stack to remove element
-	elem := &(*top)[0]
-	*top = (*top)[1:]
-	return elem
-}
-
-// pushVariable pushes the segments associated with a variable onto the stack.
-func (s *routeStack) pushVariable(path routePath) {
-	*s = append(*s, path)
-}
-
-func (s *routeStack) empty() bool {
-	for _, entry := range *s {
-		if len(entry) > 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// indexVars populates the given target with details about the vars in the given path.
-func indexVars(target *routeTarget, path routePath, offset int, varsSeen map[string]struct{}) (int, error) {
-	length := len(path)
-	if (length > 0 && path[length-1].segment == "**") ||
-		(length > 1 && path[length-1].verb != "" && path[length-2].segment == "**") {
-		length = -1
-	}
-	for i := range path {
-		element := &path[i]
-		varPath := element.variable.varPath
-		if varPath == "" {
-			continue // not a variable
-		}
-		if _, ok := varsSeen[varPath]; ok {
-			return 0, fmt.Errorf("path defines variable for field %q more than once", varPath)
-		}
-		varsSeen[varPath] = struct{}{}
-
-		msg := target.config.descriptor.Input()
-		fieldPath, err := resolvePathToDescriptors(msg, varPath)
-		if err != nil {
-			return 0, err
-		}
-		// TODO: disallow composite types: make sure last element in fieldPath is neither a message nor repeated
-		start := i + offset
-		varLen := 1
-		if len(element.variable.segments) > 0 {
-			varLen, err = indexVars(target, element.variable.segments, start, varsSeen)
-			if err != nil {
-				return 0, err
-			}
-		}
-		end := start + varLen
-		if varLen == -1 {
-			length = -1
-			end = -1
-		} else {
-			offset += varLen - 1
-			if length != -1 {
-				length += varLen - 1
-			}
-		}
-		target.vars = append(target.vars, routeTargetVar{
-			varPath: fieldPath,
-			start:   start,
-			end:     end,
-		})
-	}
-	return length, nil
 }
 
 func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch {

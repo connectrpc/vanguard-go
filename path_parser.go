@@ -6,112 +6,161 @@ package vanguard
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// parsePathTemplate parses the given path template into a routePath.
-//
-//nolint:unused
-func parsePathTemplate(path string) (routePath, error) {
-	// TODO
-	_ = path
-	return nil, errors.New("TODO")
+type pathSegment struct {
+	val    string // segment value.
+	isVerb bool   // may be a verb if it's the final segment.
 }
+type pathSegments []pathSegment
 
-// routePath represents a path template found in an HTTP annotation.
-type routePath []routePathElement
-
-func (p routePath) String() string {
+func (s pathSegments) String() string {
 	var sb strings.Builder
-	for _, element := range p {
-		element.toStringBuilder(&sb, true)
-	}
-	return sb.String()
-}
-
-func (p routePath) PatternString() string {
-	var sb strings.Builder
-	for _, element := range p {
-		element.toPatternStringBuilder(&sb)
-	}
-	return sb.String()
-}
-
-type routePathElement struct {
-	// Only one of the following will be set, depending on whether
-	// this path represents a normal segment, a variable definition,
-	// or a verb suffix.
-	segment  string
-	variable routePathVar
-	verb     string
-}
-
-func (e *routePathElement) toStringBuilder(sb *strings.Builder, leadingSlash bool) {
-	switch {
-	case e.segment != "":
-		if leadingSlash {
-			sb.WriteRune('/')
-		}
-		sb.WriteString(e.segment)
-	case e.verb != "":
-		sb.WriteRune(':')
-		sb.WriteString(e.verb)
-	case len(e.variable.varPath) > 0:
-		if leadingSlash {
-			sb.WriteRune('/')
-		}
-		e.variable.toStringBuilder(sb)
-	default:
-		sb.WriteString("<invalid element>")
-	}
-}
-
-// toPatternStringBuilder adds a pattern for this element to sb. This differs from
-// toStringBuilder as it only adds segment patterns and not variable declarations.
-// So a variable declaration like "{foo=bar/baz/**}" is represented in the pattern
-// as simply "bar/baz/**".
-func (e *routePathElement) toPatternStringBuilder(sb *strings.Builder) {
-	switch {
-	case e.segment != "":
-		sb.WriteRune('/')
-		sb.WriteString(e.segment)
-	case e.verb != "":
-		sb.WriteRune(':')
-		sb.WriteString(e.verb)
-	case len(e.variable.varPath) > 0:
-		if len(e.variable.segments) == 0 {
-			sb.WriteString("/*")
+	for _, seg := range s {
+		if seg.isVerb {
+			sb.WriteString(":")
 		} else {
-			for _, element := range e.variable.segments {
-				element.toPatternStringBuilder(sb)
-			}
+			sb.WriteString("/")
 		}
-	default:
-		sb.WriteString("<invalid element>")
+		sb.WriteString(seg.val)
 	}
-}
-
-type routePathVar struct {
-	varPath string
-	// When a variable definition does not indicate a path, it
-	// defaults to "*": []routePathElement{{segment:"*"}}
-	segments routePath
-}
-
-func (v *routePathVar) String() string {
-	var sb strings.Builder
-	v.toStringBuilder(&sb)
 	return sb.String()
 }
 
-func (v *routePathVar) toStringBuilder(sb *strings.Builder) {
-	sb.WriteRune('{')
-	sb.WriteString(v.varPath)
-	if len(v.segments) > 0 {
-		sb.WriteRune('=')
-		for i, element := range v.segments {
-			element.toStringBuilder(sb, i > 0)
+type pathVariable struct {
+	varPath    []protoreflect.FieldDescriptor
+	start, end int // start and end path segments, inclusive-exclusive, -1 for unbounded.
+}
+
+type pathVariables []pathVariable
+
+// parsePathTemplate parsers a methods template into path segments and variables.
+func parsePathTemplate(descriptor protoreflect.MethodDescriptor, template string) (
+	pathSegments, pathVariables, error,
+) {
+	toks, err := lex(template)
+	if err != nil {
+		return nil, nil, err
+	}
+	p := &parser{toks: toks, desc: descriptor, seenVars: make(map[string]bool)}
+	if err := p.consume(tokenSlash); err != nil {
+		return nil, nil, err // empty path is not allowed.
+	}
+	if err := p.parseSegments(); err != nil {
+		return nil, nil, err
+	}
+	return p.segments, p.variables, nil
+}
+
+// parser holds the state for the recursive descent path template parser.
+type parser struct {
+	desc           protoreflect.MethodDescriptor // input method descriptor.
+	toks           []token                       // token input for the parser.
+	pos            int                           // current position in the input.
+	seenVars       map[string]bool               // set of field paths.
+	seenDoubleStar bool                          // true if we've seen a double star wildcard.
+	segments       pathSegments                  // output segments.
+	variables      pathVariables                 // output variables.
+}
+
+func (p *parser) next() token {
+	if p.pos >= len(p.toks) {
+		return token{typ: tokenEOF}
+	}
+	t := p.toks[p.pos]
+	p.pos++
+	return t
+}
+func (p *parser) assert(typ tokenType) (token, error) {
+	t := p.next()
+	if t.typ != typ {
+		return token{}, p.errUnexpected()
+	}
+	return t, nil
+}
+func (p *parser) consume(typ tokenType) error {
+	_, err := p.assert(typ)
+	return err
+}
+func (p *parser) errUnexpected() error {
+	return fmt.Errorf("unexpected token %q", p.toks[p.pos-1])
+}
+
+func (p *parser) parseSegments() error {
+	for {
+		if err := p.parseSegment(); err != nil {
+			return err
+		}
+		tok := p.next()
+		switch tok.typ {
+		case tokenEOF:
+			return nil
+		case tokenSlash:
+			if p.seenDoubleStar {
+				return errors.New("double star wildcard must be the last segment")
+			}
+			continue
+		case tokenVerb:
+			tok, err := p.assert(tokenLiteral)
+			if err != nil {
+				return err
+			}
+			seg := pathSegment{val: tok.val, isVerb: true}
+			p.segments = append(p.segments, seg)
+			return p.consume(tokenEOF)
+		default:
+			return p.errUnexpected()
 		}
 	}
-	sb.WriteRune('}')
+}
+func (p *parser) parseSegment() error {
+	tok := p.next()
+	seg := pathSegment{val: tok.val}
+	switch tok.typ {
+	case tokenStarStar:
+		p.seenDoubleStar = true
+	case tokenStar, tokenLiteral:
+	case tokenVariableStart:
+		return p.parseVariable()
+	default:
+		return p.errUnexpected()
+	}
+	p.segments = append(p.segments, seg)
+	return nil
+}
+func (p *parser) parseVariable() error {
+	tok, err := p.assert(tokenFieldPath)
+	if err != nil {
+		return err
+	}
+	if p.seenVars[tok.val] {
+		return fmt.Errorf("duplicate variable %q", tok.val)
+	}
+	varPath, err := resolvePathToDescriptors(p.desc.Input(), tok.val)
+	if err != nil {
+		return err
+	}
+	variable := pathVariable{varPath: varPath, start: len(p.segments)}
+
+	switch tok = p.next(); tok.typ {
+	case tokenVariableEnd:
+		seg := pathSegment{val: "*"} // default capture.
+		p.segments = append(p.segments, seg)
+	case tokenEqual:
+		if err := p.parseSegments(); err != nil {
+			return err
+		}
+		if err := p.consume(tokenVariableEnd); err != nil {
+			return err
+		}
+	default:
+		return p.errUnexpected()
+	}
+	variable.end = len(p.segments)
+	p.variables = append(p.variables, variable)
+	return nil
 }

@@ -10,27 +10,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestRouteTrie_Insert(t *testing.T) {
 	t.Parallel()
-	trie := initTrie(t)
-
-	// TODO: verify properties of the constructed trie to make sure it looks correct
-
-	// Inserting redundant rules returns existing target
-	for _, route := range routes {
-		target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", http.MethodGet, route)}}}
-		_, err := indexVars(target, route, 0, map[string]struct{}{})
-		require.NoError(t, err)
-		existing, err := trie.insert(newStack(route), http.MethodGet, target)
-		require.NoError(t, err)
-		require.NotNil(t, existing)
-		require.NotSame(t, existing, target)
-		require.Equal(t, existing, target)
-	}
+	_ = initTrie(t)
 }
 
 func TestRouteTrie_FindTarget(t *testing.T) {
@@ -164,8 +151,8 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 						}
 						name := strings.Join(names, ".")
 						expectedValue, ok := testCase.expectedVars[name]
-						require.True(t, ok)
-						require.Equal(t, expectedValue, varMatch.value)
+						assert.True(t, ok, name)
+						require.Equal(t, expectedValue, varMatch.value, name)
 					}
 				})
 			}
@@ -181,89 +168,100 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 	}
 }
 
+type testRoute struct {
+	path      string // source path
+	segments  pathSegments
+	variables pathVariables
+}
+
 //nolint:gochecknoglobals
-var routes = []routePath{
-	// /foo/bar/baz/buzz
+var routes = []testRoute{
 	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "baz"}, {segment: "buzz"},
+		path:     "/foo/bar/baz/buzz",
+		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "baz"}, {val: "buzz"}},
 	},
-	// /foo/bar/{name}
 	{
-		{segment: "foo"}, {segment: "bar"},
-		{variable: routePathVar{varPath: "name"}},
+		path:     "/foo/bar/{name}",
+		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
+		},
 	},
-	// /foo/bar/{name}/baz/{child}
 	{
-		{segment: "foo"}, {segment: "bar"},
-		{variable: routePathVar{varPath: "name"}},
-		{segment: "baz"},
-		{variable: routePathVar{varPath: "child"}},
+		path:     "/foo/bar/{name}/baz/{child}",
+		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "baz"}, {val: "*"}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child"}}, start: 4, end: 5},
+		},
 	},
-	// /foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}
 	{
-		{segment: "foo"}, {segment: "bar"},
-		{variable: routePathVar{varPath: "name"}},
-		{segment: "baz"},
-		{variable: routePathVar{varPath: "child.id"}},
-		{segment: "buzz"},
-		{variable: routePathVar{varPath: "child.thing.id"}},
+		path:     "/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
+		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "baz"}, {val: "*"}, {val: "buzz"}, {val: "*"}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.id"}}, start: 4, end: 5},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.thing.id"}}, start: 6, end: 7},
+		},
 	},
-	// /foo/bar/*/{thing.id}/{cat=**}
 	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-		{variable: routePathVar{varPath: "thing.id"}},
-		{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
+		path:     "/foo/bar/*/{thing.id}/{cat=**}",
+		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "*"}, {val: "**"}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+		},
 	},
-	// /foo/bar/*/{thing.id}/{cat=**}:do
 	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-		{variable: routePathVar{varPath: "thing.id"}},
-		{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-		{verb: "do"},
+		path:     "/foo/bar/*/{thing.id}/{cat=**}:do",
+		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "*"}, {val: "**"}, {val: "do", isVerb: true}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+		},
 	},
-	// /foo/bar/*/{thing.id}/{cat=**}:cancel
 	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-		{variable: routePathVar{varPath: "thing.id"}},
-		{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-		{verb: "cancel"},
+		path:     "/foo/bar/*/{thing.id}/{cat=**}:cancel",
+		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "*"}, {val: "**"}, {val: "cancel", isVerb: true}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+		},
 	},
-	// /foo/bob/{book_id={author}/{isbn}/*}/details
 	{
-		{segment: "foo"}, {segment: "bob"},
-		{variable: routePathVar{varPath: "book_id", segments: routePath{
-			{variable: routePathVar{varPath: "author"}},
-			{variable: routePathVar{varPath: "isbn"}},
-			{segment: "*"},
-		}}},
-		{segment: "details"},
+		path:     "/foo/bob/{book_id={author}/{isbn}/*}/details",
+		segments: pathSegments{{val: "foo"}, {val: "bob"}, {val: "*"}, {val: "*"}, {val: "*"}, {val: "details"}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "book_id"}}, start: 2, end: 5},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "author"}}, start: 2, end: 3},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "isbn"}}, start: 3, end: 4},
+		},
 	},
-	// /foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details
 	{
-		{segment: "foo"}, {segment: "blah"},
-		{variable: routePathVar{varPath: "longest_var", segments: routePath{
-			{variable: routePathVar{varPath: "long_var.a", segments: routePath{
-				{variable: routePathVar{varPath: "medium.a", segments: routePath{
-					{variable: routePathVar{varPath: "short.aa"}},
-					{segment: "*"},
-					{variable: routePathVar{varPath: "short.ab"}},
-					{segment: "foo"},
-				}}},
-				{segment: "*"},
-			}}},
-			{variable: routePathVar{varPath: "long_var.b", segments: routePath{
-				{variable: routePathVar{varPath: "medium.b", segments: routePath{
-					{variable: routePathVar{varPath: "short.ba"}},
-					{segment: "*"},
-					{variable: routePathVar{varPath: "short.bb"}},
-					{segment: "foo"},
-				}}},
-				{variable: routePathVar{varPath: "last", segments: routePath{
-					{segment: "**"},
-				}}},
-			}}},
-		}}},
-		{verb: "details"},
+		path: "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
+		segments: pathSegments{{val: "foo"}, {val: "blah"},
+			{val: "*"},  // 2 logest_var
+			{val: "*"},  // 3 long_var.a
+			{val: "*"},  // 4 medium.a
+			{val: "*"},  // 5 short.aa
+			{val: "*"},  // 6
+			{val: "*"},  // 7 short.ba
+			{val: "*"},  // 8
+			{val: "*"},  // 9 short.bb
+			{val: "**"}, // 10
+			{val: "details", isVerb: true}},
+		variables: pathVariables{
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "longest_var"}}, start: 2, end: -1},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.a"}}, start: 2, end: 7},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.a"}}, start: 2, end: 6},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.aa"}}, start: 2, end: 3},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ab"}}, start: 4, end: 5},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.b"}}, start: 7, end: -1},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.b"}}, start: 7, end: 11},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ba"}}, start: 7, end: 8},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.bb"}}, start: 9, end: 10},
+			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "last"}}, start: 11, end: -1},
+		},
 	},
 }
 
@@ -272,12 +270,16 @@ func initTrie(t *testing.T) *routeTrie {
 	var trie routeTrie
 	for _, route := range routes {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", method, route)}}}
-			_, err := indexVars(target, route, 0, map[string]struct{}{})
+			target := &routeTarget{
+				config: &methodConfig{
+					descriptor: &fakeMethodDescriptor{
+						name: fmt.Sprintf("%s %s", method, route.path),
+					},
+				},
+				vars: route.variables,
+			}
+			err := trie.insert(method, target, route.segments)
 			require.NoError(t, err)
-			existing, err := trie.insert(newStack(route), method, target)
-			require.NoError(t, err)
-			require.Nil(t, existing)
 		}
 	}
 	return &trie

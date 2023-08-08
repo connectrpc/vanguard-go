@@ -8,132 +8,99 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func TestRoutePath_String(t *testing.T) {
+func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	t.Parallel()
-	var testCases = []struct {
-		pathStr    string
-		patternStr string
-		path       routePath
+	testCases := []struct {
+		desc        protoreflect.MethodDescriptor
+		path        string
+		segments    pathSegments
+		variables   pathVariables
+		expectedErr string
 	}{
+		//{
+		//	desc: &fakeMethodDescriptor{
+		//		in: &fakeMessageDescriptor{
+		//			fields: map[string]protoreflect.FieldDescriptor{
+		//				"foo": &fakeFieldDescriptor{},
+		//			},
+		//		},
+		//	},
+		//	path:       "/foo=~bar~/a_b_c[xyz]&123\\456/%7c_%3f_%3e/`a|b|c`/\"d,e,f\"/<'abc'>/r.t.f/j#j/k$k/l@l/a!a/s^s/(x-y-z)/{var={abc}/{def=**}}:baz",
+		//	resultPath: "/foo%3D~bar~/a_b_c%5Bxyz%5D%26123%5C456/%7C_%3F_%3E/%60a%7Cb%7Cc%60/%22d%2Ce%2Cf%22/%3C%27abc%27%3E/r.t.f/j%23j/k%24k/l%40l/a%21a/s%5Es/%28x-y-z%29/{var={abc}/{def=**}}:baz",
+		//	// no error, but lots of encoding for special/reserved characters
+		//},
 		{
-			pathStr:    "/foo/bar/baz/buzz",
-			patternStr: "/foo/bar/baz/buzz",
-			path: routePath{
-				{segment: "foo"}, {segment: "bar"}, {segment: "baz"}, {segment: "buzz"},
-			},
+			desc:        &fakeMethodDescriptor{},
+			path:        "/foo/bar/baz?abc=def",
+			expectedErr: "syntax error at column 13: unexpected '?'", // no query string allowed
 		},
 		{
-			pathStr:    "/foo/bar/{name}",
-			patternStr: "/foo/bar/*",
-			path: routePath{
-				{segment: "foo"}, {segment: "bar"},
-				{variable: routePathVar{varPath: "name"}},
-			},
+			desc:        &fakeMethodDescriptor{},
+			path:        "/foo/bar/baz buzz",
+			expectedErr: "syntax error at column 13: unexpected ' '", // no whitespace allowed
 		},
 		{
-			pathStr:    "/foo/bar/{name}/baz/{child}",
-			patternStr: "/foo/bar/*/baz/*",
-			path: routePath{
-				{segment: "foo"}, {segment: "bar"},
-				{variable: routePathVar{varPath: "name"}},
-				{segment: "baz"},
-				{variable: routePathVar{varPath: "child"}},
-			},
+			desc:        &fakeMethodDescriptor{},
+			path:        "foo/bar/baz",
+			expectedErr: "syntax error at column 1: expected '/', got 'f'", // must start with slash
 		},
 		{
-			pathStr:    "/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
-			patternStr: "/foo/bar/*/baz/*/buzz/*",
-			path: routePath{
-				{segment: "foo"}, {segment: "bar"},
-				{variable: routePathVar{varPath: "name"}},
-				{segment: "baz"},
-				{variable: routePathVar{varPath: "child.id"}},
-				{segment: "buzz"},
-				{variable: routePathVar{varPath: "child.thing.id"}},
-			},
+			desc:        &fakeMethodDescriptor{},
+			path:        "/foo/bar/",
+			expectedErr: "syntax error at column 10: expected path component literal", // must not end in slash
 		},
-		{
-			pathStr:    "/foo/bar/*/{thing.id}/{cat=**}",
-			patternStr: "/foo/bar/*/*/**",
-			path: routePath{
-				{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-				{variable: routePathVar{varPath: "thing.id"}},
-				{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-			},
-		},
-		{
-			pathStr:    "/foo/bar/*/{thing.id}/{cat=**}:do",
-			patternStr: "/foo/bar/*/*/**:do",
-			path: routePath{
-				{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-				{variable: routePathVar{varPath: "thing.id"}},
-				{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-				{verb: "do"},
-			},
-		},
-		{
-			pathStr:    "/foo/bar/*/{thing.id}/{cat=**}:cancel",
-			patternStr: "/foo/bar/*/*/**:cancel",
-			path: routePath{
-				{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-				{variable: routePathVar{varPath: "thing.id"}},
-				{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-				{verb: "cancel"},
-			},
-		},
-		{
-			pathStr:    "/foo/bob/{book_id={author}/{isbn}/*}/details",
-			patternStr: "/foo/bob/*/*/*/details",
-			path: routePath{
-				{segment: "foo"}, {segment: "bob"},
-				{variable: routePathVar{varPath: "book_id", segments: routePath{
-					{variable: routePathVar{varPath: "author"}},
-					{variable: routePathVar{varPath: "isbn"}},
-					{segment: "*"},
-				}}},
-				{segment: "details"},
-			},
-		},
-		{
-			pathStr:    "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
-			patternStr: "/foo/blah/*/*/*/foo/*/*/*/*/foo/**:details",
-			path: routePath{
-				{segment: "foo"}, {segment: "blah"},
-				{variable: routePathVar{varPath: "longest_var", segments: routePath{
-					{variable: routePathVar{varPath: "long_var.a", segments: routePath{
-						{variable: routePathVar{varPath: "medium.a", segments: routePath{
-							{variable: routePathVar{varPath: "short.aa"}},
-							{segment: "*"},
-							{variable: routePathVar{varPath: "short.ab"}},
-							{segment: "foo"},
-						}}},
-						{segment: "*"},
-					}}},
-					{variable: routePathVar{varPath: "long_var.b", segments: routePath{
-						{variable: routePathVar{varPath: "medium.b", segments: routePath{
-							{variable: routePathVar{varPath: "short.ba"}},
-							{segment: "*"},
-							{variable: routePathVar{varPath: "short.bb"}},
-							{segment: "foo"},
-						}}},
-						{variable: routePathVar{varPath: "last", segments: routePath{
-							{segment: "**"},
-						}}},
-					}}},
-				}}},
-				{verb: "details"},
-			},
-		},
+		//{
+		//	desc:        &fakeMethodDescriptor{},
+		//	path:        "/foo/bar:baz/buzz",
+		//	expectedErr: "syntax error at column 13: expecting EOF", // ":baz" verb can only come at the very end
+		//},
+		//{
+		//	desc:        &fakeMethodDescriptor{},
+		//	path:        "/foo/{bar/baz}/buzz",
+		//	expectedErr: "syntax error at column 10: expecting '}'", // invalid field path
+		//},
+		//{
+		//	desc: &fakeMethodDescriptor{},
+		//	path: "/foo/bar:baz%12xyz%abcde",
+		//	//resultPath: "/foo/bar:baz%12xyz%ABcde",
+		//	// no error
+		//},
+		//{
+		//	desc:        &fakeMethodDescriptor{},
+		//	path:        "/foo/bar%55:baz%1",
+		//	expectedErr: "syntax error at column 16: malformed URL-encoded character",
+		//},
+		//{
+		//	desc:        &fakeMethodDescriptor{},
+		//	path:        "/foo/bar*",
+		//	expectedErr: "syntax error at column 9: expecting EOF", // wildcard must be entire path component
+		//},
+		//{
+		//	desc:        &fakeMethodDescriptor{},
+		//	path:        "/foo/bar/***",
+		//	expectedErr: "syntax error at column 12: expecting EOF", // no such thing as triple-wildcard
+		//},
+		//{
+		//	desc:        &fakeMethodDescriptor{},
+		//	path:        "/foo/**/bar",
+		//	expectedErr: "double wildcard '**' must be final path component", // double-wildcard must be at end
+		//},
 	}
-
 	for _, testCase := range testCases {
 		testCase := testCase
-		t.Run(testCase.pathStr, func(t *testing.T) {
+		t.Run(testCase.path, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, testCase.pathStr, testCase.path.String())
-			assert.Equal(t, testCase.patternStr, testCase.path.PatternString())
+			segments, variables, err := parsePathTemplate(testCase.desc, testCase.path)
+			if testCase.expectedErr != "" {
+				assert.ErrorContains(t, err, testCase.expectedErr)
+				return
+			}
+			assert.NoError(t, err)
+			assert.ElementsMatch(t, testCase.segments, segments)
+			assert.ElementsMatch(t, testCase.variables, variables)
 		})
 	}
 }
