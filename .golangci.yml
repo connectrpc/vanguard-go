@@ -23,6 +23,7 @@ linters-settings:
       - i int
       - wg sync.WaitGroup
       - sb *strings.Builder
+      - sb strings.Builder
       - ok bool
 linters:
   enable-all: true

@@ -8,9 +8,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestRoutePath_String(t *testing.T) {
+func TestRoutePath_ParseRoundTripToString(t *testing.T) {
 	t.Parallel()
 	var testCases = []struct {
 		pathStr    string
@@ -132,8 +133,89 @@ func TestRoutePath_String(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.pathStr, func(t *testing.T) {
 			t.Parallel()
+			parsedPath, err := parsePathTemplate(testCase.pathStr)
+			require.NoError(t, err)
+			assert.Equal(t, testCase.path, parsedPath)
 			assert.Equal(t, testCase.pathStr, testCase.path.String())
 			assert.Equal(t, testCase.patternStr, testCase.path.PatternString())
+		})
+	}
+}
+
+func TestRoutePath_ParsePathTemplate(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		path        string
+		resultPath  string
+		expectedErr string
+	}{
+		{
+			path:       "/foo=~bar~/a_b_c[xyz]&123\\456/%7c_%3f_%3e/`a|b|c`/\"d,e,f\"/<'abc'>/r.t.f/j#j/k$k/l@l/a!a/s^s/(x-y-z)/{var={abc}/{def=**}}:baz",
+			resultPath: "/foo%3D~bar~/a_b_c%5Bxyz%5D%26123%5C456/%7C_%3F_%3E/%60a%7Cb%7Cc%60/%22d%2Ce%2Cf%22/%3C%27abc%27%3E/r.t.f/j%23j/k%24k/l%40l/a%21a/s%5Es/%28x-y-z%29/{var={abc}/{def=**}}:baz",
+			// no error, but lots of encoding for special/reserved characters
+		},
+		{
+			path:        "/foo/bar/baz?abc=def",
+			expectedErr: "syntax error at column 13: expecting EOF", // no query string allowed
+		},
+		{
+			path:        "/foo/bar/baz buzz",
+			expectedErr: "syntax error at column 13: expecting EOF", // no whitespace allowed
+		},
+		{
+			path:        "foo/bar/baz",
+			expectedErr: "syntax error at column 1: expecting '/'", // must start with slash
+		},
+		{
+			path:        "/foo/bar/",
+			expectedErr: "syntax error at column 10: expecting path component literal", // must not end in slash
+		},
+		{
+			path:        "/foo/bar:baz/buzz",
+			expectedErr: "syntax error at column 13: expecting EOF", // ":baz" verb can only come at the very end
+		},
+		{
+			path:        "/foo/{bar/baz}/buzz",
+			expectedErr: "syntax error at column 10: expecting '}'", // invalid field path
+		},
+		{
+			path:       "/foo/bar:baz%12xyz%abcde",
+			resultPath: "/foo/bar:baz%12xyz%ABcde",
+			// no error
+		},
+		{
+			path:        "/foo/bar%55:baz%1",
+			expectedErr: "syntax error at column 16: malformed URL-encoded character",
+		},
+		{
+			path:        "/foo/bar*",
+			expectedErr: "syntax error at column 9: expecting EOF", // wildcard must be entire path component
+		},
+		{
+			path:        "/foo/bar/***",
+			expectedErr: "syntax error at column 12: expecting EOF", // no such thing as triple-wildcard
+		},
+		{
+			path:        "/foo/**/bar",
+			expectedErr: "double wildcard '**' must be final path component", // double-wildcard must be at end
+		},
+	}
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.path, func(t *testing.T) {
+			t.Parallel()
+			parsed, err := parsePathTemplate(testCase.path)
+			if testCase.expectedErr != "" {
+				require.ErrorContains(t, err, testCase.expectedErr)
+				t.Log(err)
+			} else {
+				require.NoError(t, err)
+				expectString := testCase.resultPath
+				if expectString == "" {
+					expectString = testCase.path
+				}
+				require.Equal(t, expectString, parsed.String())
+			}
 		})
 	}
 }
