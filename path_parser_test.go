@@ -155,6 +155,11 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 			// no error, but lots of encoding for special/reserved characters
 		},
 		{
+			path:       "/%66%6f%6f/%30%39%41%5a%61%7a/%5f%2D%2e%7e%25",
+			resultPath: "/foo/09AZaz/_-.~%25",
+			// no error, but we normalize unnecessary percent-encoded characters
+		},
+		{
 			path:        "/foo/bar/baz?abc=def",
 			expectedErr: "syntax error at column 13: expecting EOF", // no query string allowed
 		},
@@ -181,7 +186,7 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		{
 			path:       "/foo/bar:baz%12xyz%abcde",
 			resultPath: "/foo/bar:baz%12xyz%ABcde",
-			// no error
+			// no error, but we capitalize URL-encoded chars
 		},
 		{
 			path:        "/foo/bar%55:baz%1",
@@ -198,6 +203,18 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		{
 			path:        "/foo/**/bar",
 			expectedErr: "double wildcard '**' must be final path component", // double-wildcard must be at end
+		},
+		{
+			path:        "/foo/bar/*:*",
+			expectedErr: "syntax error at column 12: expecting path component literal", // wildcard not allowed as verb
+		},
+		{
+			path:       "/foo%2fbar%2F*",
+			resultPath: "/foo/bar/*", // url-encoded slashes interpreted as normal slashes
+		},
+		{
+			path:        "/foo/bar/baz\003\002\177",
+			expectedErr: "syntax error at column 13: expecting EOF", // control chars not allowed
 		},
 	}
 	for _, testCase := range testCases {

@@ -128,6 +128,10 @@ func (l *lexer) next() (tokenType, string) {
 			l.pos = pos + runeSz
 			return tokenUnknown, string(decodedRune)
 		}
+		if str == "%2f" || str == "%2F" {
+			// treat encoded slashes same as other slashes
+			return tokenSlash, str
+		}
 		return tokenSpecialChar, str
 	case '/':
 		l.pos += runeSz
@@ -154,14 +158,18 @@ func (l *lexer) next() (tokenType, string) {
 		if decodedRune == '_' || (decodedRune >= 'a' && decodedRune <= 'z') || (decodedRune >= 'A' && decodedRune <= 'Z') {
 			return tokenIdent, l.scan(runeSz, isIdentifier)
 		}
-		return tokenNonIdent, l.scan(runeSz, isNonIdentifier)
+		if isNonIdentifier(decodedRune) {
+			return tokenNonIdent, l.scan(runeSz, isNonIdentifier)
+		}
+		l.pos += runeSz
+		return tokenUnknown, string(decodedRune)
 	}
 }
 
 func (l *lexer) scan(skip int, keep func(rune) bool) string {
 	for {
 		decodedRune, runeSz := utf8.DecodeRuneInString(l.input[l.pos+skip:])
-		if !keep(decodedRune) {
+		if (decodedRune == utf8.RuneError && runeSz == 0) || !keep(decodedRune) {
 			ret := l.input[l.pos : l.pos+skip]
 			l.pos += skip
 			return ret
@@ -183,7 +191,11 @@ func isIdentifier(r rune) bool {
 }
 
 func isNonIdentifier(r rune) bool {
-	return isDigit(r) || (!isIdentifier(r) && !strings.ContainsRune("/:{}.=*%? \n\r\t\f\v", r))
+	return isDigit(r) || (!isIdentifier(r) && !strings.ContainsRune("/:{}.=*%? \n\r\t\f\v", r) && !isControl(r))
+}
+
+func isControl(r rune) bool {
+	return r < 32 || r == 127
 }
 
 func isDigit(r rune) bool {
