@@ -19,16 +19,16 @@ type pathSegment struct {
 type pathSegments []pathSegment
 
 func (s pathSegments) String() string {
-	var sb strings.Builder
+	var out strings.Builder
 	for _, seg := range s {
 		if seg.isVerb {
-			sb.WriteString(":")
+			out.WriteString(":")
 		} else {
-			sb.WriteString("/")
+			out.WriteString("/")
 		}
-		sb.WriteString(seg.val)
+		out.WriteString(seg.val)
 	}
-	return sb.String()
+	return out.String()
 }
 
 type pathVariable struct {
@@ -39,6 +39,15 @@ type pathVariable struct {
 type pathVariables []pathVariable
 
 // parsePathTemplate parsers a methods template into path segments and variables.
+//
+// ## Path template syntax
+//
+//	Template = "/" Segments [ Verb ] ;
+//	Segments = Segment { "/" Segment } ;
+//	Segment  = "*" | "**" | LITERAL | Variable ;
+//	Variable = "{" FieldPath [ "=" Segments ] "}" ;
+//	FieldPath = IDENT { "." IDENT } ;
+//	Verb     = ":" LITERAL ;
 func parsePathTemplate(descriptor protoreflect.MethodDescriptor, template string) (
 	pathSegments, pathVariables, error,
 ) {
@@ -104,7 +113,7 @@ func (p *parser) parseSegments() error {
 			return nil
 		case tokenSlash:
 			if p.seenDoubleStar {
-				return errors.New("double star wildcard must be the last segment")
+				return errors.New("double wildcard '**' must be the final path segment")
 			}
 			continue
 		case tokenVerb:

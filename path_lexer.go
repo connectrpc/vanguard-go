@@ -11,15 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-// ### Path template syntax
-//
-//     Template = "/" Segments [ Verb ] ;
-//     Segments = Segment { "/" Segment } ;
-//     Segment  = "*" | "**" | LITERAL | Variable ;
-//     Variable = "{" FieldPath [ "=" Segments ] "}" ;
-//     FieldPath = IDENT { "." IDENT } ;
-//     Verb     = ":" LITERAL ;
-
 type tokenType uint8
 
 const (
@@ -169,11 +160,37 @@ func isFieldPath(r rune) bool {
 	return isIdent(r) || r == '.'
 }
 func isLiteral(r rune) bool {
-	return isIdent(r) || r == '.' || r == '%' // url encoded char.
+	if isFieldPath(r) {
+		return true
+	}
+	// Allow all characters that are allowed in a URL path segment.
+	// https://www.rfc-editor.org/rfc/rfc3986#section-3.3
+	switch r {
+	case '~', '!', '$', '&', '\'', '(', ')', '+', ',', ';', '=', '@':
+		return true
+	default:
+		return false
+	}
+}
+func isHex(r rune) bool {
+	return unicode.IsNumber(r) || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
 }
 
 func (l *lexer) lexLiteral() bool {
-	if i := l.acceptRun(isLiteral); i == 0 {
+	count := l.acceptRun(isLiteral)
+	// lex URL-encoded characters.
+	for l.next() == '%' {
+		for i := 0; i < 2; i++ {
+			if !isHex(l.next()) {
+				l.start = l.pos - i - 1 // rewind to the start of the % escape.
+				return l.emitError("malformed URL-encoded character")
+			}
+		}
+		count += 3
+		count += l.acceptRun(isLiteral)
+	}
+	l.backup()
+	if count == 0 {
 		return l.emitShort()
 	}
 	return l.emit(tokenLiteral)
@@ -258,6 +275,7 @@ func (l *lexer) lexTemplate() bool {
 	if r := l.next(); r != '/' {
 		return l.emitExpected('/')
 	}
+	fmt.Println("lexTemplate", string(l.current()), l.input)
 	l.emit(tokenSlash)
 	if !l.lexSegments() {
 		return false

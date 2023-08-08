@@ -63,7 +63,7 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if err != nil {
 		return err
 	}
-	target, err := makeTarget(config, rule.Body, rule.ResponseBody, variables)
+	target, err := makeTarget(config, template, rule.Body, rule.ResponseBody, variables)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,8 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 type routeMethods map[string]*routeTarget
 
 type routeTarget struct {
-	config *methodConfig
+	config   *methodConfig
+	template string
 	//nolint:unused
 	requestBodyPath []protoreflect.FieldDescriptor
 	//nolint:unused
@@ -203,7 +204,7 @@ type routeTargetVarMatch struct {
 }
 
 //nolint:unused
-func makeTarget(config *methodConfig, requestBody, responseBody string, variables pathVariables) (*routeTarget, error) {
+func makeTarget(config *methodConfig, template, requestBody, responseBody string, variables pathVariables) (*routeTarget, error) {
 	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
 		return nil, err
@@ -214,6 +215,7 @@ func makeTarget(config *methodConfig, requestBody, responseBody string, variable
 	}
 	return &routeTarget{
 		config:           config,
+		template:         template,
 		requestBodyPath:  requestBodyPath,
 		responseBodyPath: responseBodyPath,
 		vars:             variables,
