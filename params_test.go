@@ -261,7 +261,7 @@ func TestSetParameter(t *testing.T) {
 		fields:  "string_map",
 		value:   "hello",
 		want:    &testv1.ParameterValues{},
-		wantErr: "invalid_argument: invalid parameter \"string_map\" unsupported maps",
+		wantErr: "invalid_argument: invalid parameter \"string_map\" unsupported message type buf.vanguard.test.v1.ParameterValues.StringMapEntry",
 	}, {
 		fields:  "nested_map.double_value",
 		value:   "1.234",

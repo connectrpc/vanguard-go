@@ -152,9 +152,6 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 // unmarshalFieldWKT unmarshals well known JSON scalars to their message types.
 func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
 	msgDesc := field.Message()
-	if msgDesc.IsMapEntry() {
-		return protoreflect.Value{}, fmt.Errorf("unsupported maps")
-	}
 	name := string(msgDesc.FullName())
 	if strings.HasPrefix(name, "google.protobuf.") {
 		switch name[16:] {
