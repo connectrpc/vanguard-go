@@ -1,0 +1,14 @@
+version: v1
+managed:
+  enabled: true
+  go_package_prefix:
+    default: github.com/bufbuild/vanguard/internal/gen
+    except:
+      - buf.build/googleapis/googleapis
+plugins:
+  - name: go
+    out: internal/gen
+    opt: paths=source_relative
+  - name: connect-go
+    out: internal/gen
+    opt: paths=source_relative
