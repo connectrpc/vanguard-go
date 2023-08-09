@@ -18,10 +18,10 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// setParameter sets the value of a parameter on a message.
+// setParameter sets the value of a field on a message using the ident fields.
 // Leaf fields must be a primitive type, or a well-known JSON scalar type.
-// Repeated fields of a primitive type will be appended to.
-// Map fields are not supported.
+// Repeated fields of a primitive type are supported and will be appended to.
+// Map fields and other message types are not supported.
 //
 // See: https://github.com/googleapis/googleapis/blob/2c28ce13ade62398e152ff3eb840f4f934812597/google/api/http.proto#L117-L122
 func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescriptor, data []byte) error {
@@ -57,6 +57,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 		)
 	}
 
+	// Set the value on the leaf message.
 	switch {
 	case field.IsList():
 		l := leaf.Mutable(field).List()
@@ -161,20 +162,23 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 				fallthrough
 			case "BoolValue", "Int32Value", "Int64Value", "UInt32Value",
 				"UInt64Value", "FloatValue", "DoubleValue":
-
-				value := msg.NewField(field).Interface()
-				msg, _ := value.(protoreflect.Message)
-				x := msg.Interface()
-				if err := protojson.Unmarshal(data, x); err != nil {
-					return protoreflect.Value{}, err
-				}
-				return protoreflect.ValueOfMessage(msg), nil
+				return unmarshalFieldMessage(msg, field, data)
 			}
 		}
 		return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	default:
 		return protoreflect.Value{}, fmt.Errorf("unsupported type %s", field.Kind())
 	}
+}
+
+func unmarshalFieldMessage(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
+	value := msg.NewField(field).Interface()
+	msg, _ = value.(protoreflect.Message)
+	x := msg.Interface()
+	if err := protojson.Unmarshal(data, x); err != nil {
+		return protoreflect.Value{}, err
+	}
+	return protoreflect.ValueOfMessage(msg), nil
 }
 
 func quote(raw []byte) []byte {
