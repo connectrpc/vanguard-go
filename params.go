@@ -31,7 +31,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 		)
 	}
 
-	// Transverse the message to the last field.
+	// Traverse the message to the last field.
 	leaf := msg
 	field := fields[0]
 	for i := 0; i < len(fields)-1; i++ {
