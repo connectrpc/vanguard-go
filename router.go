@@ -202,8 +202,9 @@ func (m routeMethods) insert(method string, target *routeTarget) *routeTarget {
 }
 
 type routeTarget struct {
-	config *methodConfig
-	//nolint:unused
+	config          *methodConfig
+	path            []string
+	verb            string
 	requestBodyPath []protoreflect.FieldDescriptor
 	//nolint:unused
 	responseBodyPath []protoreflect.FieldDescriptor
