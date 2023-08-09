@@ -25,7 +25,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-func TestParseParams(t *testing.T) {
+func TestSetParameter(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {

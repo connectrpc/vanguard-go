@@ -32,11 +32,9 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	}
 
 	// Traverse the message to the last field.
-	leaf := msg
-	field := fields[0]
+	leaf, field := msg, fields[0]
 	for i := 0; i < len(fields)-1; i++ {
-		leaf = leaf.Mutable(field).Message()
-		field = fields[i+1]
+		leaf, field = leaf.Mutable(field).Message(), fields[i+1]
 	}
 
 	value, err := unmarshalFieldValue(leaf, field, data)
@@ -58,6 +56,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	}
 
 	// Set the value on the leaf message.
+	// Cannot be a map type, only lists, primitives or messages.
 	switch {
 	case field.IsList():
 		l := leaf.Mutable(field).List()
@@ -68,7 +67,6 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	return nil
 }
 
-//nolint:gocyclo
 func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
 	//nolint:exhaustive
 	switch kind := field.Kind(); kind {
@@ -145,40 +143,38 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 		}
 		return protoreflect.ValueOf(enumVal.Number()), nil
 	case protoreflect.MessageKind:
-		msgDesc := field.Message()
-		if msgDesc.IsMapEntry() {
-			return protoreflect.Value{}, fmt.Errorf("unsupported maps")
-		}
-		if msgDesc.IsPlaceholder() {
-			return protoreflect.Value{}, fmt.Errorf("unsupported placeholder message")
-		}
-
-		// Well known JSON scalars are decoded to message types.
-		name := string(msgDesc.FullName())
-		if strings.HasPrefix(name, "google.protobuf.") {
-			switch name[16:] {
-			case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask":
-				data = quote(data)
-				fallthrough
-			case "BoolValue", "Int32Value", "Int64Value", "UInt32Value",
-				"UInt64Value", "FloatValue", "DoubleValue":
-				return unmarshalFieldMessage(msg, field, data)
-			}
-		}
-		return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
+		return unmarshalFieldWKT(msg, field, data)
 	default:
 		return protoreflect.Value{}, fmt.Errorf("unsupported type %s", field.Kind())
 	}
 }
 
+// unmarshalFieldWKT unmarshals well known JSON scalars to their message types.
+func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
+	msgDesc := field.Message()
+	if msgDesc.IsMapEntry() {
+		return protoreflect.Value{}, fmt.Errorf("unsupported maps")
+	}
+	name := string(msgDesc.FullName())
+	if strings.HasPrefix(name, "google.protobuf.") {
+		switch name[16:] {
+		case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask":
+			data = quote(data)
+			fallthrough
+		case "BoolValue", "Int32Value", "Int64Value", "UInt32Value",
+			"UInt64Value", "FloatValue", "DoubleValue":
+			return unmarshalFieldMessage(msg, field, data)
+		}
+	}
+	return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
+}
+
 func unmarshalFieldMessage(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
-	value := msg.NewField(field).Interface()
-	msg, _ = value.(protoreflect.Message)
-	x := msg.Interface()
-	if err := protojson.Unmarshal(data, x); err != nil {
+	value := msg.NewField(field)
+	if err := protojson.Unmarshal(data, value.Message().Interface()); err != nil {
 		return protoreflect.Value{}, err
 	}
-	return protoreflect.ValueOfMessage(msg), nil
+	return value, nil
 }
 
 func quote(raw []byte) []byte {
