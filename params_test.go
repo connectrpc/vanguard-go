@@ -11,12 +11,14 @@ import (
 	"testing"
 	"time"
 
-	testv1 "github.com/bufbuild/vanguard/internal/gen/test/v1"
+	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -264,7 +266,18 @@ func TestParseParams(t *testing.T) {
 		fields:  "nested_map.double_value",
 		value:   "1.234",
 		want:    &testv1.ParameterValues{},
-		wantErr: "in field path \"nested_map.double_value\": field \"nested_map\" of type vanguard.test.v1.ParameterValues should not be a list or map",
+		wantErr: "in field path \"nested_map.double_value\": field \"nested_map\" of type buf.vanguard.test.v1.ParameterValues should not be a list or map",
+	}, {
+		fields: "timestamp",
+		value:  "2021-01-01T00:00:00Z",
+		want: func() proto.Message {
+			msg := dynamicpb.NewMessage((&testv1.ParameterValues{}).ProtoReflect().Descriptor())
+			field := msg.Descriptor().Fields().ByName("timestamp")
+			input := &timestamppb.Timestamp{Seconds: 1609459200}
+			value := protoreflect.ValueOfMessage(input.ProtoReflect())
+			msg.Set(field, value)
+			return msg
+		}(),
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase
@@ -272,14 +285,7 @@ func TestParseParams(t *testing.T) {
 			t.Parallel()
 
 			desc := testCase.want.ProtoReflect().Descriptor()
-			fds, err := resolvePathToDescriptors(desc, testCase.fields)
-			if err != nil {
-				assert.Equal(t, testCase.wantErr, err.Error())
-				return
-			}
-			require.NoError(t, err)
-
-			param, err := parseParam(fds, []byte(testCase.value))
+			fields, err := resolvePathToDescriptors(desc, testCase.fields)
 			if err != nil {
 				assert.Equal(t, testCase.wantErr, err.Error())
 				return
@@ -290,7 +296,13 @@ func TestParseParams(t *testing.T) {
 			if testCase.initial != nil {
 				proto.Merge(value.Interface(), testCase.initial)
 			}
-			param.set(value)
+
+			if err := setParameter(value, fields, []byte(testCase.value)); err != nil {
+				assert.Equal(t, testCase.wantErr, err.Error())
+				return
+			}
+			require.NoError(t, err)
+
 			got := value.Interface()
 			assert.Empty(t, cmp.Diff(testCase.want, got, protocmp.Transform()))
 		})

@@ -4,7 +4,7 @@
 
 syntax = "proto3";
 
-package vanguard.test.v1;
+package buf.vanguard.test.v1;
 
 import "google/api/annotations.proto";
 import "google/protobuf/duration.proto";
