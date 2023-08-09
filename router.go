@@ -126,10 +126,20 @@ func (trie *routeTrie) insert(stack *routeStack, method string, target *routeTar
 
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
-//
-//nolint:unused
-func (trie *routeTrie) match(req *http.Request) (*routeTarget, []routeTargetVarMatch) {
-	path := strings.Split(req.URL.Path, "/")
+func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
+	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == '/' || uriPath[len(uriPath)-1] == ':' {
+		// TODO: is this how grpc-gateway works? Is it lenient and forgives trailing slash
+		//       or absence of leading slash?
+		// if it doesn't start with "/" or if it ends with "/" it won't match
+		return nil, nil, nil
+	}
+	uriPath = uriPath[1:] // skip the leading slash
+
+	// TODO: we may want a custom Split so that we can pool the resulting slices
+	//       and reduce allocations here; in fact, we could even skip the Split
+	//       and just pass the uriPath string to findTarget, which must find
+	//       the next slash and split into car/cdr (no allocation required).
+	path := strings.Split(uriPath, "/")
 	var verb string
 	if len(path) > 0 {
 		lastElement := path[len(path)-1]
@@ -138,14 +148,23 @@ func (trie *routeTrie) match(req *http.Request) (*routeTarget, []routeTargetVarM
 			verb = lastElement[pos+1:]
 		}
 	}
-	target := trie.findTarget(path, verb, req.Method)
+	target, methods := trie.findTarget(path, verb, httpMethod)
 	if target == nil {
-		return nil, nil
+		return nil, nil, methods
 	}
-	return target, computeVarValues(path, target)
+	// TODO: instead of []routeTargetMatch, we may want a different data structure
+	//       that doesn't need to allocate slices but instead retrieves substrings
+	//       of uriPath on demand.
+	return target, computeVarValues(path, target), nil
 }
 
-func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarget {
+// findTarget finds the target for the given path components, verb, and method.
+// The method either returns a target OR the set of methods for the given path
+// and verb. If the target is non-nil, the request was matched. If the target
+// is nil but methods are non-nil, the path and verb matched a route, but not
+// the method. This can be used to send back a well-formed "Allow" response
+// header. If both are nil, the path and verb did not match.
+func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
 	if len(path) == 0 {
 		methods := trie.methods
 		if verb != "" {
@@ -153,30 +172,34 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 		}
 		target := methods[method]
 		if target != nil {
-			return target
+			return target, nil
 		}
 		// Could be a double-wildcard that matches zero path elements
 		childDblAst := trie.children["**"]
-		if childDblAst != nil {
-			return childDblAst.findTarget(nil, verb, method)
+		if childDblAst == nil {
+			return nil, methods
 		}
-		return nil
+		target, dblAstMethods := childDblAst.findTarget(nil, verb, method)
+		if target != nil || dblAstMethods != nil {
+			return target, dblAstMethods
+		}
+		return nil, methods
 	}
 
 	current := path[0]
 	path = path[1:]
 
 	if child := trie.children[current]; child != nil {
-		target := child.findTarget(path, verb, method)
-		if target != nil {
-			return target
+		target, methods := child.findTarget(path, verb, method)
+		if target != nil || methods != nil {
+			return target, methods
 		}
 	}
 
 	if childAst := trie.children["*"]; childAst != nil {
-		target := childAst.findTarget(path, verb, method)
-		if target != nil {
-			return target
+		target, methods := childAst.findTarget(path, verb, method)
+		if target != nil || methods != nil {
+			return target, methods
 		}
 	}
 
@@ -184,7 +207,7 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 	// So it consumes all remaining path elements.
 	childDblAst := trie.children["**"]
 	if childDblAst == nil {
-		return nil
+		return nil, nil
 	}
 	return childDblAst.findTarget(nil, verb, method)
 }
