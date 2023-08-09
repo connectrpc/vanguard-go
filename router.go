@@ -32,8 +32,6 @@ type routeTrie struct {
 // HTTP rule. Only the rule itself is added. If the rule indicates additional
 // bindings, they are ignored. To add routes for all bindings, callers must
 // invoke this method for each rule.
-//
-//nolint:unused
 func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) error {
 	var method, template string
 	switch pattern := rule.Pattern.(type) {
@@ -202,10 +200,8 @@ func (m routeMethods) insert(method string, target *routeTarget) *routeTarget {
 }
 
 type routeTarget struct {
-	config *methodConfig
-	//nolint:unused
-	requestBodyPath []protoreflect.FieldDescriptor
-	//nolint:unused
+	config           *methodConfig
+	requestBodyPath  []protoreflect.FieldDescriptor
 	responseBodyPath []protoreflect.FieldDescriptor
 	vars             []routeTargetVar
 }
@@ -225,7 +221,6 @@ type routeTargetVarMatch struct {
 	value   string
 }
 
-//nolint:unused
 func makeTarget(config *methodConfig, requestBody, responseBody string) (*routeTarget, error) {
 	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
@@ -413,13 +408,11 @@ func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor) string
 	return strings.Join(parts, ".")
 }
 
-//nolint:unused
 type alreadyExistsError struct {
 	existing            *routeTarget
 	pathPattern, method string
 }
 
-//nolint:unused
 func (a alreadyExistsError) Error() string {
 	return fmt.Sprintf("target for %s, method %s already exists: %s", a.pathPattern, a.method, a.existing.config.descriptor.FullName())
 }
