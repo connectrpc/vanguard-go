@@ -168,118 +168,34 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 	}
 }
 
-type testRoute struct {
-	path      string // source path
-	segments  pathSegments
-	variables []pathVariable
-}
-
 //nolint:gochecknoglobals
-var routes = []testRoute{
-	{
-		path:     "/foo/bar/baz/buzz",
-		segments: pathSegments{path: []string{"foo", "bar", "baz", "buzz"}},
-	},
-	{
-		path:     "/foo/bar/{name}",
-		segments: pathSegments{path: []string{"foo", "bar", "*"}},
-		variables: []pathVariable{
-			{fieldPath: "name", start: 2, end: 3},
-		},
-	},
-	{
-		path:     "/foo/bar/{name}/baz/{child}",
-		segments: pathSegments{path: []string{"foo", "bar", "*", "baz", "*"}},
-		variables: []pathVariable{
-			{fieldPath: "name", start: 2, end: 3},
-			{fieldPath: "child", start: 4, end: 5},
-		},
-	},
-	{
-		path:     "/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
-		segments: pathSegments{path: []string{"foo", "bar", "*", "baz", "*", "buzz", "*"}},
-		variables: []pathVariable{
-			{fieldPath: "name", start: 2, end: 3},
-			{fieldPath: "child.id", start: 4, end: 5},
-			{fieldPath: "child.thing.id", start: 6, end: 7},
-		},
-	},
-	{
-		path:     "/foo/bar/*/{thing.id}/{cat=**}",
-		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}},
-		variables: []pathVariable{
-			{fieldPath: "thing.id", start: 3, end: 4},
-			{fieldPath: "cat", start: 4, end: -1},
-		},
-	},
-	{
-		path:     "/foo/bar/*/{thing.id}/{cat=**}:do",
-		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}, verb: "do"},
-		variables: []pathVariable{
-			{fieldPath: "thing.id", start: 3, end: 4},
-			{fieldPath: "cat", start: 4, end: -1},
-		},
-	},
-	{
-		path:     "/foo/bar/*/{thing.id}/{cat=**}:cancel",
-		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}, verb: "cancel"},
-		variables: []pathVariable{
-			{fieldPath: "thing.id", start: 3, end: 4},
-			{fieldPath: "cat", start: 4, end: -1},
-		},
-	},
-	{
-		path:     "/foo/bob/{book_id={author}/{isbn}/*}/details",
-		segments: pathSegments{path: []string{"foo", "bob", "*", "*", "*", "details"}},
-		variables: []pathVariable{
-			{fieldPath: "book_id", start: 2, end: 5},
-			{fieldPath: "author", start: 2, end: 3},
-			{fieldPath: "isbn", start: 3, end: 4},
-		},
-	},
-	{
-		path: "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
-		segments: pathSegments{
-			path: []string{"foo", "blah",
-				"*",  // 2 logest_var
-				"*",  // 3 long_var.a
-				"*",  // 4 medium.a
-				"*",  // 5 short.aa
-				"*",  // 6
-				"*",  // 7 short.ba
-				"*",  // 8
-				"*",  // 9 short.bb
-				"**", // 10
-			},
-			verb: "details",
-		},
-		variables: []pathVariable{
-			{fieldPath: "longest_var", start: 2, end: -1},
-			{fieldPath: "long_var.a", start: 2, end: 7},
-			{fieldPath: "medium.a", start: 2, end: 6},
-			{fieldPath: "short.aa", start: 2, end: 3},
-			{fieldPath: "short.ab", start: 4, end: 5},
-			{fieldPath: "long_var.b", start: 7, end: -1},
-			{fieldPath: "medium.b", start: 7, end: 11},
-			{fieldPath: "short.ba", start: 7, end: 8},
-			{fieldPath: "short.bb", start: 9, end: 10},
-			{fieldPath: "last", start: 11, end: -1},
-		},
-	},
+var routes = []string{
+	"/foo/bar/baz/buzz",
+	"/foo/bar/{name}",
+	"/foo/bar/{name}/baz/{child}",
+	"/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
+	"/foo/bar/*/{thing.id}/{cat=**}",
+	"/foo/bar/*/{thing.id}/{cat=**}:do",
+	"/foo/bar/*/{thing.id}/{cat=**}:cancel",
+	"/foo/bob/{book_id={author}/{isbn}/*}/details",
+	"/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
 }
 
 func initTrie(t *testing.T) *routeTrie {
 	t.Helper()
 	var trie routeTrie
 	for _, route := range routes {
+		segments, variables, err := parsePathTemplate(route)
+		require.NoError(t, err)
+
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			target, err := makeTarget(&methodConfig{
 				descriptor: &fakeMethodDescriptor{
-					name: fmt.Sprintf("%s %s", method, route.path),
+					name: fmt.Sprintf("%s %s", method, route),
 				},
-			}, "*", "*", route.variables)
+			}, "*", "*", variables)
 			require.NoError(t, err)
-			err = trie.insert(method, target, route.segments)
+			err = trie.insert(method, target, segments)
 			require.NoError(t, err)
 		}
 	}

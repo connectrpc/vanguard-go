@@ -109,6 +109,89 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		wantVars: []pathVariable{
 			{fieldPath: "name", start: 1, end: 3},
 		},
+	}, {
+		tmpl:     "/foo/bar/baz/buzz",
+		wantPath: []string{"foo", "bar", "baz", "buzz"},
+	}, {
+		tmpl:     "/foo/bar/{name}",
+		wantPath: []string{"foo", "bar", "*"},
+		wantVars: []pathVariable{
+			{fieldPath: "name", start: 2, end: 3},
+		},
+	}, {
+		tmpl:     "/foo/bar/{name}/baz/{child}",
+		wantPath: []string{"foo", "bar", "*", "baz", "*"},
+		wantVars: []pathVariable{
+			{fieldPath: "name", start: 2, end: 3},
+			{fieldPath: "child", start: 4, end: 5},
+		},
+	}, {
+		tmpl:     "/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
+		wantPath: []string{"foo", "bar", "*", "baz", "*", "buzz", "*"},
+		wantVars: []pathVariable{
+			{fieldPath: "name", start: 2, end: 3},
+			{fieldPath: "child.id", start: 4, end: 5},
+			{fieldPath: "child.thing.id", start: 6, end: 7},
+		},
+	}, {
+		tmpl:     "/foo/bar/*/{thing.id}/{cat=**}",
+		wantPath: []string{"foo", "bar", "*", "*", "**"},
+		wantVars: []pathVariable{
+			{fieldPath: "thing.id", start: 3, end: 4},
+			{fieldPath: "cat", start: 4, end: -1},
+		},
+	}, {
+		tmpl:     "/foo/bar/*/{thing.id}/{cat=**}:do",
+		wantPath: []string{"foo", "bar", "*", "*", "**"},
+		wantVerb: "do",
+		wantVars: []pathVariable{
+			{fieldPath: "thing.id", start: 3, end: 4},
+			{fieldPath: "cat", start: 4, end: -1},
+		},
+	}, {
+		tmpl:     "/foo/bar/*/{thing.id}/{cat=**}:cancel",
+		wantPath: []string{"foo", "bar", "*", "*", "**"},
+		wantVerb: "cancel",
+		wantVars: []pathVariable{
+			{fieldPath: "thing.id", start: 3, end: 4},
+			{fieldPath: "cat", start: 4, end: -1},
+		},
+	}, {
+		tmpl:     "/foo/bob/{book_id={author}/{isbn}/*}/details",
+		wantPath: []string{"foo", "bob", "*", "*", "*", "details"},
+		wantVars: []pathVariable{
+			{fieldPath: "book_id", start: 2, end: 5},
+			{fieldPath: "author", start: 2, end: 3},
+			{fieldPath: "isbn", start: 3, end: 4},
+		},
+	}, {
+		tmpl: "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
+		wantPath: []string{
+			"foo", "blah",
+			"*",   // 2 logest_var, long_var.a, medium.a, short.aa
+			"*",   // 3
+			"*",   // 4 short.ab
+			"foo", // 5
+			"*",   // 6
+			"*",   // 7 long_var.b, medium.b, short.ba
+			"*",   // 8
+			"*",   // 9 short.bb
+			"foo", // 10
+			"**",  // 11 last
+		},
+		wantVerb: "details",
+		wantVars: []pathVariable{
+			{fieldPath: "longest_var", start: 2, end: -1},
+			{fieldPath: "long_var.a", start: 2, end: 7},
+			{fieldPath: "medium.a", start: 2, end: 6},
+			{fieldPath: "short.aa", start: 2, end: 3},
+			{fieldPath: "short.ab", start: 4, end: 5},
+			{fieldPath: "long_var.b", start: 7, end: -1},
+			{fieldPath: "medium.b", start: 7, end: 11},
+			{fieldPath: "short.ba", start: 7, end: 8},
+			{fieldPath: "short.bb", start: 9, end: 10},
+			{fieldPath: "last", start: 11, end: -1},
+		},
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase
