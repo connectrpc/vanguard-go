@@ -5,6 +5,7 @@
 package vanguard
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -209,4 +210,18 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 			assert.ElementsMatch(t, testCase.wantVars, variables, "variables mismatch")
 		})
 	}
+}
+
+func TestRoutePath_SafeLiterals(t *testing.T) {
+	t.Parallel()
+	literalvalues := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._%25~$&+=@"
+	for _, r := range literalvalues {
+		if !isLiteral(r) {
+			t.Errorf("isLiteral(%q) = false, want true", r)
+		}
+	}
+	unescaped, err := url.PathUnescape(literalvalues)
+	assert.NoError(t, err)
+	escaped := url.PathEscape(unescaped)
+	assert.Equal(t, literalvalues, escaped)
 }

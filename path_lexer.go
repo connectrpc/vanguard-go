@@ -80,15 +80,8 @@ func isFieldPath(char rune) bool {
 	return isIdent(char) || char == '.'
 }
 func isLiteral(char rune) bool {
-	if isFieldPath(char) {
-		return true
-	}
-	// Allow all characters that are allowed in a URL path segment, except for
-	// the reserved characters that have special meaning in a path segment.
-	// https://www.rfc-editor.org/rfc/rfc3986#section-3.3
-	switch char {
-	case '~', '!', '$', '&', '\'', '(', ')', '+', ',', ';', '=', '@', '%':
-		return true
-	}
-	return false
+	// Allow all characters that are allowed in a URL path segment.
+	// Follows [url.PathUnescape](https://golang.org/pkg/net/url/#PathUnescape).
+	// [https://cs.opensource.google/go/go/+/refs/tags/go1.21.0:src/net/url/url.go;l=138]
+	return isFieldPath(char) || char == '%' || char == '~' || char == '$' || char == '&' || char == '+' || char == '=' || char == '@'
 }
