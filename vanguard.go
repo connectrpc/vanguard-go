@@ -25,7 +25,8 @@ const (
 
 	CodecProto = "proto"
 	CodecJSON  = "json"
-	CodecText  = "text"
+	// TODO: Some grpc impls support "text" out of the box (but not JSON, ironically).
+	//       such as the JS impl. Should we also support it out of the box?
 )
 
 // Middleware is the signature for HTTP middleware, that can wrap/decorate an
@@ -223,7 +224,6 @@ func (c *Config) maybeInit() {
 		c.codecs = map[string]func(res TypeResolver) Codec{
 			CodecProto: DefaultProtoCodec,
 			CodecJSON:  DefaultJSONCodec,
-			CodecText:  DefaultTextCodec,
 		}
 		c.compressors = map[string]func() connect.Compressor{
 			CompressionGzip: DefaultGzipCompressor,

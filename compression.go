@@ -6,7 +6,7 @@ package vanguard
 
 import (
 	"compress/gzip"
-	
+
 	"connectrpc.com/connect"
 )
 

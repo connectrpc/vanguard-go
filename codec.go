@@ -6,7 +6,6 @@ package vanguard
 
 import (
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -30,19 +29,8 @@ func DefaultProtoCodec(res TypeResolver) Codec {
 // instances of google.protobuf.Any.
 func DefaultJSONCodec(res TypeResolver) Codec {
 	return &jsonCodec{
-		m: protojson.MarshalOptions{Resolver: res},
+		m: protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
 		u: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
-	}
-}
-
-// DefaultTextCodec is the default codec factory used for
-// the codec name "text". The given resolve is used to
-// unmarshal extensions and also to marshal and unmarshal
-// instances of google.protobuf.Any.
-func DefaultTextCodec(res TypeResolver) Codec {
-	return &textCodec{
-		m: prototext.MarshalOptions{Resolver: res},
-		u: prototext.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
 	}
 }
 
@@ -62,22 +50,9 @@ type jsonCodec struct {
 }
 
 func (p *jsonCodec) Marshal(msg proto.Message) ([]byte, error) {
-	return protojson.Marshal(msg)
+	return p.m.Marshal(msg)
 }
 
 func (p *jsonCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(bytes, msg)
-}
-
-type textCodec struct {
-	m prototext.MarshalOptions
-	u prototext.UnmarshalOptions
-}
-
-func (p *textCodec) Marshal(msg proto.Message) ([]byte, error) {
-	return prototext.Marshal(msg)
-}
-
-func (p *textCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return prototext.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(bytes, msg)
+	return p.u.Unmarshal(bytes, msg)
 }
