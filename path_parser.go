@@ -10,8 +10,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // pathSegments holds the path segments for a method.
@@ -43,11 +41,9 @@ func (s pathSegments) String() string {
 // The start and end fields are the start and end path segments, inclusive-exclusive.
 // If the end is -1, the variable is unbounded, representing a '**' wildcard capture.
 type pathVariable struct {
-	fields     []protoreflect.FieldDescriptor
-	start, end int // start and end path segments, inclusive-exclusive, -1 for unbounded.
+	fieldPath  string // field path for the variable.
+	start, end int    // start and end path segments, inclusive-exclusive, -1 for unbounded.
 }
-
-type pathVariables []pathVariable
 
 // parsePathTemplate parsers a methods template into path segments and variables.
 //
@@ -62,13 +58,10 @@ type pathVariables []pathVariable
 //	Verb     = ":" LITERAL ;
 //
 // [google/api/http.proto]: https://github.com/googleapis/googleapis/blob/ecb1cf0a0021267dd452289fc71c75674ae29fe3/google/api/http.proto#L227-L235
-func parsePathTemplate(descriptor protoreflect.MethodDescriptor, template string) (
-	pathSegments, pathVariables, error,
+func parsePathTemplate(template string) (
+	pathSegments, []pathVariable, error,
 ) {
-	parser := &parser{lex: lexer{
-		input: template,
-	}, desc: descriptor, seenVars: make(map[string]bool)}
-
+	parser := &parser{lex: lexer{input: template}}
 	if err := parser.parseTemplate(); err != nil {
 		return pathSegments{}, nil, err
 	}
@@ -77,12 +70,11 @@ func parsePathTemplate(descriptor protoreflect.MethodDescriptor, template string
 
 // parser holds the state for the recursive descent path template parser.
 type parser struct {
-	lex            lexer                         // lexer for the input.
-	desc           protoreflect.MethodDescriptor // input method descriptor.
-	seenVars       map[string]bool               // set of field paths.
-	seenDoubleStar bool                          // true if we've seen a double star wildcard.
-	segments       pathSegments                  // output segments.
-	variables      pathVariables                 // output variables.
+	lex            lexer           // lexer for the input.
+	seenVars       map[string]bool // set of field paths.
+	seenDoubleStar bool            // true if we've seen a double star wildcard.
+	segments       pathSegments    // output segments.
+	variables      []pathVariable  // output variables.
 }
 
 func (p *parser) currentChar() string {
@@ -150,14 +142,16 @@ func (p *parser) parseSegments() error {
 
 // parseLiteral unescapes a URL path segment.
 func (p *parser) parseLiteral() (string, error) {
-	if p.lex.acceptRun(isLiteral) == 0 {
+	literal := p.lex.captureRun(isLiteral)
+	if literal == "" {
+		p.lex.next()
 		return "", p.errUnexpected()
 	}
-	val, err := url.PathUnescape(p.lex.capture())
+	unescaped, err := url.PathUnescape(literal)
 	if err != nil {
 		return "", p.errSyntax(err.Error())
 	}
-	return val, nil
+	return unescaped, nil
 }
 func (p *parser) parseSegment() error {
 	var segment string
@@ -186,18 +180,20 @@ func (p *parser) parseSegment() error {
 	return nil
 }
 func (p *parser) parseVariable() error {
-	if p.lex.acceptRun(isFieldPath) == 0 {
+	fieldPath := p.lex.captureRun(isFieldPath)
+	if fieldPath == "" {
+		p.lex.next()
 		return p.errUnexpected()
 	}
-	fieldPath := p.lex.capture()
 	if p.seenVars[fieldPath] {
 		return fmt.Errorf("duplicate variable %q", fieldPath)
 	}
-	fields, err := resolvePathToDescriptors(p.desc.Input(), fieldPath)
-	if err != nil {
-		return err
+	if p.seenVars == nil {
+		p.seenVars = make(map[string]bool)
 	}
-	variable := pathVariable{fields: fields, start: len(p.segments.path)}
+	p.seenVars[fieldPath] = true
+
+	variable := pathVariable{fieldPath: fieldPath, start: len(p.segments.path)}
 
 	switch p.lex.next() {
 	case '}':

@@ -171,7 +171,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 type testRoute struct {
 	path      string // source path
 	segments  pathSegments
-	variables pathVariables
+	variables []pathVariable
 }
 
 //nolint:gochecknoglobals
@@ -183,58 +183,58 @@ var routes = []testRoute{
 	{
 		path:     "/foo/bar/{name}",
 		segments: pathSegments{path: []string{"foo", "bar", "*"}},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
+		variables: []pathVariable{
+			{fieldPath: "name", start: 2, end: 3},
 		},
 	},
 	{
 		path:     "/foo/bar/{name}/baz/{child}",
 		segments: pathSegments{path: []string{"foo", "bar", "*", "baz", "*"}},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child"}}, start: 4, end: 5},
+		variables: []pathVariable{
+			{fieldPath: "name", start: 2, end: 3},
+			{fieldPath: "child", start: 4, end: 5},
 		},
 	},
 	{
 		path:     "/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
 		segments: pathSegments{path: []string{"foo", "bar", "*", "baz", "*", "buzz", "*"}},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.id"}}, start: 4, end: 5},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.thing.id"}}, start: 6, end: 7},
+		variables: []pathVariable{
+			{fieldPath: "name", start: 2, end: 3},
+			{fieldPath: "child.id", start: 4, end: 5},
+			{fieldPath: "child.thing.id", start: 6, end: 7},
 		},
 	},
 	{
 		path:     "/foo/bar/*/{thing.id}/{cat=**}",
 		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+		variables: []pathVariable{
+			{fieldPath: "thing.id", start: 3, end: 4},
+			{fieldPath: "cat", start: 4, end: -1},
 		},
 	},
 	{
 		path:     "/foo/bar/*/{thing.id}/{cat=**}:do",
 		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}, verb: "do"},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+		variables: []pathVariable{
+			{fieldPath: "thing.id", start: 3, end: 4},
+			{fieldPath: "cat", start: 4, end: -1},
 		},
 	},
 	{
 		path:     "/foo/bar/*/{thing.id}/{cat=**}:cancel",
 		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}, verb: "cancel"},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+		variables: []pathVariable{
+			{fieldPath: "thing.id", start: 3, end: 4},
+			{fieldPath: "cat", start: 4, end: -1},
 		},
 	},
 	{
 		path:     "/foo/bob/{book_id={author}/{isbn}/*}/details",
 		segments: pathSegments{path: []string{"foo", "bob", "*", "*", "*", "details"}},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "book_id"}}, start: 2, end: 5},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "author"}}, start: 2, end: 3},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "isbn"}}, start: 3, end: 4},
+		variables: []pathVariable{
+			{fieldPath: "book_id", start: 2, end: 5},
+			{fieldPath: "author", start: 2, end: 3},
+			{fieldPath: "isbn", start: 3, end: 4},
 		},
 	},
 	{
@@ -253,17 +253,17 @@ var routes = []testRoute{
 			},
 			verb: "details",
 		},
-		variables: pathVariables{
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "longest_var"}}, start: 2, end: -1},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.a"}}, start: 2, end: 7},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.a"}}, start: 2, end: 6},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.aa"}}, start: 2, end: 3},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ab"}}, start: 4, end: 5},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.b"}}, start: 7, end: -1},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.b"}}, start: 7, end: 11},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ba"}}, start: 7, end: 8},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.bb"}}, start: 9, end: 10},
-			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "last"}}, start: 11, end: -1},
+		variables: []pathVariable{
+			{fieldPath: "longest_var", start: 2, end: -1},
+			{fieldPath: "long_var.a", start: 2, end: 7},
+			{fieldPath: "medium.a", start: 2, end: 6},
+			{fieldPath: "short.aa", start: 2, end: 3},
+			{fieldPath: "short.ab", start: 4, end: 5},
+			{fieldPath: "long_var.b", start: 7, end: -1},
+			{fieldPath: "medium.b", start: 7, end: 11},
+			{fieldPath: "short.ba", start: 7, end: 8},
+			{fieldPath: "short.bb", start: 9, end: 10},
+			{fieldPath: "last", start: 11, end: -1},
 		},
 	},
 }
@@ -273,15 +273,13 @@ func initTrie(t *testing.T) *routeTrie {
 	var trie routeTrie
 	for _, route := range routes {
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			target := &routeTarget{
-				config: &methodConfig{
-					descriptor: &fakeMethodDescriptor{
-						name: fmt.Sprintf("%s %s", method, route.path),
-					},
+			target, err := makeTarget(&methodConfig{
+				descriptor: &fakeMethodDescriptor{
+					name: fmt.Sprintf("%s %s", method, route.path),
 				},
-				vars: route.variables,
-			}
-			err := trie.insert(method, target, route.segments)
+			}, "*", "*", route.variables)
+			require.NoError(t, err)
+			err = trie.insert(method, target, route.segments)
 			require.NoError(t, err)
 		}
 	}

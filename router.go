@@ -59,7 +59,7 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 		return fmt.Errorf("invalid HTTP rule: path template is blank")
 	}
 
-	segments, variables, err := parsePathTemplate(config.descriptor, template)
+	segments, variables, err := parsePathTemplate(template)
 	if err != nil {
 		return err
 	}
@@ -192,7 +192,13 @@ type routeTarget struct {
 	requestBodyPath []protoreflect.FieldDescriptor
 	//nolint:unused
 	responseBodyPath []protoreflect.FieldDescriptor
-	vars             pathVariables
+	vars             []routeTargetVar
+}
+
+type routeTargetVar struct {
+	pathVariable
+
+	fields []protoreflect.FieldDescriptor
 }
 
 type routeTargetVarMatch struct {
@@ -201,7 +207,7 @@ type routeTargetVarMatch struct {
 }
 
 //nolint:unused
-func makeTarget(config *methodConfig, requestBody, responseBody string, variables pathVariables) (*routeTarget, error) {
+func makeTarget(config *methodConfig, requestBody, responseBody string, variables []pathVariable) (*routeTarget, error) {
 	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
 		return nil, err
@@ -210,11 +216,22 @@ func makeTarget(config *methodConfig, requestBody, responseBody string, variable
 	if err != nil {
 		return nil, err
 	}
+	routeTargetVars := make([]routeTargetVar, len(variables))
+	for i, variable := range variables {
+		fields, err := resolvePathToDescriptors(config.descriptor.Input(), variable.fieldPath)
+		if err != nil {
+			return nil, err
+		}
+		routeTargetVars[i] = routeTargetVar{
+			pathVariable: variable,
+			fields:       fields,
+		}
+	}
 	return &routeTarget{
 		config:           config,
 		requestBodyPath:  requestBodyPath,
 		responseBodyPath: responseBodyPath,
-		vars:             variables,
+		vars:             routeTargetVars,
 	}, nil
 }
 
@@ -224,6 +241,7 @@ func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch 
 	}
 	vars := make([]routeTargetVarMatch, len(target.vars))
 	for i, varDef := range target.vars {
+
 		vars[i].fields = varDef.fields
 		var pathElements []string
 		if varDef.end == -1 {

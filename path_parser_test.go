@@ -9,149 +9,88 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	t.Parallel()
+
 	testCases := []struct {
-		desc        protoreflect.MethodDescriptor
-		path        string
-		segments    pathSegments
-		variables   pathVariables
+		tmpl        string
+		wantPath    []string
+		wantVerb    string
+		wantVars    []pathVariable
 		expectedErr string
-	}{
-		{
-			desc: &fakeMethodDescriptor{
-				in: &fakeMessageDescriptor{
-					fields: &fakeFieldDescriptors{
-						fields: map[protoreflect.Name]protoreflect.FieldDescriptor{
-							"var": &fakeFieldDescriptor{
-								name: "var",
-							},
-							"abc": &fakeFieldDescriptor{
-								name: "abc",
-							},
-							"def": &fakeFieldDescriptor{
-								name: "def",
-							},
-						},
-					},
-				},
-			},
-			// no error, but lots of encoding for special/reserved characters
-			path: "/my%2Fcool+blog&about%2Cstuff%5Bwat%5D/{var={abc}/{def=**}}:baz",
-			segments: pathSegments{
-				path: []string{"my/cool+blog&about,stuff[wat]", "*", "**"},
-				verb: "baz",
-			},
-			variables: pathVariables{
-				{fields: []protoreflect.FieldDescriptor{
-					&fakeFieldDescriptor{name: "var"},
-				}, start: 1, end: -1},
-				{fields: []protoreflect.FieldDescriptor{
-					&fakeFieldDescriptor{name: "abc"},
-				}, start: 1, end: 2},
-				{fields: []protoreflect.FieldDescriptor{
-					&fakeFieldDescriptor{name: "def"},
-				}, start: 2, end: -1},
-			},
+	}{{
+		// no error, but lots of encoding for special/reserved characters
+		tmpl:     "/my%2Fcool+blog&about%2Cstuff%5Bwat%5D/{var={abc}/{def=**}}:baz",
+		wantPath: []string{"my/cool+blog&about,stuff[wat]", "*", "**"},
+		wantVerb: "baz",
+		wantVars: []pathVariable{
+			{fieldPath: "var", start: 1, end: -1},
+			{fieldPath: "abc", start: 1, end: 2},
+			{fieldPath: "def", start: 2, end: -1},
 		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/bar/baz?abc=def",
-			expectedErr: "syntax error at column 13: unexpected '?'", // no query string allowed
+	}, {
+		tmpl:        "/foo/bar/baz?abc=def",
+		expectedErr: "syntax error at column 13: unexpected '?'", // no query string allowed
+	}, {
+		tmpl:        "/foo/bar/baz buzz",
+		expectedErr: "syntax error at column 13: unexpected ' '", // no whitespace allowed
+	}, {
+		tmpl:        "foo/bar/baz",
+		expectedErr: "syntax error at column 1: expected '/', got 'f'", // must start with slash
+	}, {
+		tmpl:        "/foo/bar/",
+		expectedErr: "syntax error at column 9: expected path value", // must not end in slash
+	}, {
+		tmpl:        "/foo/bar:baz/buzz",
+		expectedErr: "syntax error at column 13: unexpected '/'", // ":baz" verb can only come at the very end
+	}, {
+		tmpl:        "/foo/{bar/baz}/buzz",
+		expectedErr: "syntax error at column 10: expected '}', got '/'", // invalid field path
+	}, {
+		tmpl:     "/foo/bar:baz%12xyz%abcde",
+		wantPath: []string{"foo", "bar"},
+		wantVerb: "baz\x12xyz\xabcde",
+	}, {
+		tmpl:     "/{hello}/world",
+		wantPath: []string{"*", "world"},
+		wantVars: []pathVariable{
+			{fieldPath: "hello", start: 0, end: 1},
 		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/bar/baz buzz",
-			expectedErr: "syntax error at column 13: unexpected ' '", // no whitespace allowed
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "foo/bar/baz",
-			expectedErr: "syntax error at column 1: expected '/', got 'f'", // must start with slash
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/bar/",
-			expectedErr: "syntax error at column 9: expected path value", // must not end in slash
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/bar:baz/buzz",
-			expectedErr: "syntax error at column 13: unexpected '/'", // ":baz" verb can only come at the very end
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/{bar/baz}/buzz",
-			expectedErr: "syntax error at column 10: expected '}', got '/'", // invalid field path
-		},
-		{
-			desc: &fakeMethodDescriptor{},
-			path: "/foo/bar:baz%12xyz%abcde",
-			segments: pathSegments{
-				path: []string{"foo", "bar"},
-				verb: "baz\x12xyz\xabcde",
-			},
-		},
-		{
-			desc: &fakeMethodDescriptor{
-				in: &fakeMessageDescriptor{
-					fields: &fakeFieldDescriptors{
-						fields: map[protoreflect.Name]protoreflect.FieldDescriptor{
-							"hello": &fakeFieldDescriptor{
-								name: "hello",
-							},
-						},
-					},
-				},
-			},
-			path: "/{hello}/world",
-			segments: pathSegments{
-				path: []string{"*", "world"},
-			},
-			variables: pathVariables{
-				{fields: []protoreflect.FieldDescriptor{
-					&fakeFieldDescriptor{name: "hello"},
-				}, start: 0, end: 1},
-			},
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/bar%55:baz%1",
-			expectedErr: "syntax error at column 17: invalid URL escape \"%1\"",
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/bar*",
-			expectedErr: "syntax error at column 9: unexpected '*'", // wildcard must be entire path component
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/bar/***",
-			expectedErr: "syntax error at column 12: unexpected '*'", // no such thing as triple-wildcard
-		},
-		{
-			desc:        &fakeMethodDescriptor{},
-			path:        "/foo/**/bar",
-			expectedErr: "double wildcard '**' must be the final path segment", // double-wildcard must be at end
-		},
-	}
+	}, {
+		tmpl:        "/foo/bar%55:baz%1",
+		expectedErr: "syntax error at column 17: invalid URL escape \"%1\"",
+	}, {
+		tmpl:        "/foo/bar*",
+		expectedErr: "syntax error at column 9: unexpected '*'", // wildcard must be entire path component
+	}, {
+		tmpl:        "/foo/bar/***",
+		expectedErr: "syntax error at column 12: unexpected '*'", // no such thing as triple-wildcard
+	}, {
+		tmpl:        "/foo/**/bar",
+		expectedErr: "double wildcard '**' must be the final path segment", // double-wildcard must be at end
+	}, {
+		tmpl:        "/{a}/{a}", // TODO: allow this?
+		expectedErr: "duplicate variable \"a\"",
+	}, {
+		tmpl:     "/f/bar",
+		wantPath: []string{"f", "bar"},
+	}}
 	for _, testCase := range testCases {
 		testCase := testCase
-		t.Run(testCase.path, func(t *testing.T) {
+		t.Run(testCase.tmpl, func(t *testing.T) {
 			t.Parallel()
-			segments, variables, err := parsePathTemplate(testCase.desc, testCase.path)
+			segments, variables, err := parsePathTemplate(testCase.tmpl)
 			if testCase.expectedErr != "" {
 				assert.ErrorContains(t, err, testCase.expectedErr)
 				return
 			}
 			t.Log(segments)
 			require.NoError(t, err)
-			assert.ElementsMatch(t, testCase.segments.path, segments.path, "path mismatch")
-			assert.Equal(t, testCase.segments.verb, segments.verb, "verb mismatch")
-			assert.ElementsMatch(t, testCase.variables, variables, "variables mismatch")
+			assert.ElementsMatch(t, testCase.wantPath, segments.path, "path mismatch")
+			assert.Equal(t, testCase.wantVerb, segments.verb, "verb mismatch")
+			assert.ElementsMatch(t, testCase.wantVars, variables, "variables mismatch")
 		})
 	}
 }

@@ -50,13 +50,12 @@ func (l *lexer) backup() {
 	l.pos -= l.width
 	l.width = 0
 }
-func (l *lexer) acceptRun(isValid func(r rune) bool) int {
-	count := 0
+func (l *lexer) captureRun(isValid func(r rune) bool) string {
 	for isValid(l.next()) {
-		count++
+		// consume
 	}
 	l.backup()
-	return count
+	return l.capture()
 }
 func (l *lexer) consume(expected rune) bool {
 	if l.next() == expected {
