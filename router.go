@@ -187,10 +187,8 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 type routeMethods map[string]*routeTarget
 
 type routeTarget struct {
-	config *methodConfig
-	//nolint:unused
-	requestBodyPath []protoreflect.FieldDescriptor
-	//nolint:unused
+	config           *methodConfig
+	requestBodyPath  []protoreflect.FieldDescriptor
 	responseBodyPath []protoreflect.FieldDescriptor
 	vars             []routeTargetVar
 }
@@ -206,7 +204,6 @@ type routeTargetVarMatch struct {
 	value  string
 }
 
-//nolint:unused
 func makeTarget(config *methodConfig, requestBody, responseBody string, variables []pathVariable) (*routeTarget, error) {
 	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
@@ -241,7 +238,6 @@ func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch 
 	}
 	vars := make([]routeTargetVarMatch, len(target.vars))
 	for i, varDef := range target.vars {
-
 		vars[i].fields = varDef.fields
 		var pathElements []string
 		if varDef.end == -1 {
@@ -309,7 +305,6 @@ func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor) string
 	return strings.Join(parts, ".")
 }
 
-//nolint:unused
 type alreadyExistsError struct {
 	existing            *routeTarget
 	pathPattern, method string

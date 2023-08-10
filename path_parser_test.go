@@ -76,6 +76,39 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	}, {
 		tmpl:     "/f/bar",
 		wantPath: []string{"f", "bar"},
+	}, {
+		tmpl:     "/v1/{name=shelves/*/books/*}",
+		wantPath: []string{"v1", "shelves", "*", "books", "*"},
+		wantVars: []pathVariable{
+			{fieldPath: "name", start: 1, end: 5},
+		},
+	}, {
+		tmpl:     "/v1/{parent=shelves/*}/books",
+		wantPath: []string{"v1", "shelves", "*", "books"},
+		wantVars: []pathVariable{
+			{fieldPath: "parent", start: 1, end: 3},
+		},
+	}, {
+		tmpl:     "/v1/{book.name=shelves/*/books/*}",
+		wantPath: []string{"v1", "shelves", "*", "books", "*"},
+		wantVars: []pathVariable{
+			{fieldPath: "book.name", start: 1, end: 5},
+		},
+	}, {
+		tmpl:     "/v1:watch",
+		wantPath: []string{"v1"},
+		wantVerb: "watch",
+	}, {
+		tmpl:     "/v3/events:clear",
+		wantPath: []string{"v3", "events"},
+		wantVerb: "clear",
+	}, {
+		tmpl:     "/v3/{name=events/*}:cancel",
+		wantPath: []string{"v3", "events", "*"},
+		wantVerb: "cancel",
+		wantVars: []pathVariable{
+			{fieldPath: "name", start: 1, end: 3},
+		},
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase

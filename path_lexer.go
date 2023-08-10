@@ -52,7 +52,7 @@ func (l *lexer) backup() {
 }
 func (l *lexer) captureRun(isValid func(r rune) bool) string {
 	for isValid(l.next()) {
-		// consume
+		continue
 	}
 	l.backup()
 	return l.capture()
