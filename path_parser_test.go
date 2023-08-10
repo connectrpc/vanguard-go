@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -20,36 +21,42 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		variables   pathVariables
 		expectedErr string
 	}{
-		// {
-		// 	desc: &fakeMethodDescriptor{
-		// 		in: &fakeMessageDescriptor{
-		// 			fields: &fakeFieldDescriptors{
-		// 				fields: map[protoreflect.Name]protoreflect.FieldDescriptor{
-		// 					"var": &fakeFieldDescriptor{
-		// 						name: "var",
-		// 					},
-		// 					"abc": &fakeFieldDescriptor{
-		// 						name: "abc",
-		// 					},
-		// 					"def": &fakeFieldDescriptor{
-		// 						name: "def",
-		// 					},
-		// 				},
-		// 			},
-		// 		},
-		// 	},
-		// 	path: "/foo=~bar~/a_b_c[xyz]&123\\456/%7c_%3f_%3e/`a|b|c`/\"d,e,f\"/<'abc'>/r.t.f/j#j/k$k/l@l/a!a/s^s/(x-y-z)/{var={abc}/{def=**}}:baz",
-		// 	//resultPath: "/foo%3D~bar~/a_b_c%5Bxyz%5D%26123%5C456/%7C_%3F_%3E/%60a%7Cb%7Cc%60/%22d%2Ce%2Cf%22/%3C%27abc%27%3E/r.t.f/j%23j/k%24k/l%40l/a%21a/s%5Es/%28x-y-z%29/{var={abc}/{def=**}}:baz",
-		// 	segments: pathSegments{},
-		// 	variables: pathVariables{
-		// 		{varPath: []protoreflect.FieldDescriptor{
-		// 			&fakeFieldDescriptor{
-		// 				name: "hello",
-		// 			},
-		// 		}, start: 0, end: 1},
-		// 	},
-		// 	// no error, but lots of encoding for special/reserved characters
-		// },
+		{
+			desc: &fakeMethodDescriptor{
+				in: &fakeMessageDescriptor{
+					fields: &fakeFieldDescriptors{
+						fields: map[protoreflect.Name]protoreflect.FieldDescriptor{
+							"var": &fakeFieldDescriptor{
+								name: "var",
+							},
+							"abc": &fakeFieldDescriptor{
+								name: "abc",
+							},
+							"def": &fakeFieldDescriptor{
+								name: "def",
+							},
+						},
+					},
+				},
+			},
+			// no error, but lots of encoding for special/reserved characters
+			path: "/my%2Fcool+blog&about%2Cstuff%5Bwat%5D/{var={abc}/{def=**}}:baz",
+			segments: pathSegments{
+				path: []string{"my/cool+blog&about,stuff[wat]", "*", "**"},
+				verb: "baz",
+			},
+			variables: pathVariables{
+				{fields: []protoreflect.FieldDescriptor{
+					&fakeFieldDescriptor{name: "var"},
+				}, start: 1, end: -1},
+				{fields: []protoreflect.FieldDescriptor{
+					&fakeFieldDescriptor{name: "abc"},
+				}, start: 1, end: 2},
+				{fields: []protoreflect.FieldDescriptor{
+					&fakeFieldDescriptor{name: "def"},
+				}, start: 2, end: -1},
+			},
+		},
 		{
 			desc:        &fakeMethodDescriptor{},
 			path:        "/foo/bar/baz?abc=def",
@@ -68,12 +75,12 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		{
 			desc:        &fakeMethodDescriptor{},
 			path:        "/foo/bar/",
-			expectedErr: "syntax error at column 10: expected path value", // must not end in slash
+			expectedErr: "syntax error at column 9: expected path value", // must not end in slash
 		},
 		{
 			desc:        &fakeMethodDescriptor{},
 			path:        "/foo/bar:baz/buzz",
-			expectedErr: "syntax error at column 13: expected EOF", // ":baz" verb can only come at the very end
+			expectedErr: "syntax error at column 13: unexpected '/'", // ":baz" verb can only come at the very end
 		},
 		{
 			desc:        &fakeMethodDescriptor{},
@@ -84,12 +91,9 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 			desc: &fakeMethodDescriptor{},
 			path: "/foo/bar:baz%12xyz%abcde",
 			segments: pathSegments{
-				{val: "foo"},
-				{val: "bar"},
-				{val: "baz%12xyz%abcde", isVerb: true},
+				path: []string{"foo", "bar"},
+				verb: "baz\x12xyz\xabcde",
 			},
-			//resultPath: "/foo/bar:baz%12xyz%ABcde",
-			// no error
 		},
 		{
 			desc: &fakeMethodDescriptor{
@@ -105,21 +109,18 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 			},
 			path: "/{hello}/world",
 			segments: pathSegments{
-				{val: "*"},
-				{val: "world"},
+				path: []string{"*", "world"},
 			},
 			variables: pathVariables{
-				{varPath: []protoreflect.FieldDescriptor{
-					&fakeFieldDescriptor{
-						name: "hello",
-					},
+				{fields: []protoreflect.FieldDescriptor{
+					&fakeFieldDescriptor{name: "hello"},
 				}, start: 0, end: 1},
 			},
 		},
 		{
 			desc:        &fakeMethodDescriptor{},
 			path:        "/foo/bar%55:baz%1",
-			expectedErr: "syntax error at column 16: malformed URL-encoded character",
+			expectedErr: "syntax error at column 17: invalid URL escape \"%1\"",
 		},
 		{
 			desc:        &fakeMethodDescriptor{},
@@ -146,9 +147,11 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 				assert.ErrorContains(t, err, testCase.expectedErr)
 				return
 			}
-			assert.NoError(t, err)
-			assert.ElementsMatch(t, testCase.segments, segments)
-			assert.ElementsMatch(t, testCase.variables, variables)
+			t.Log(segments)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, testCase.segments.path, segments.path, "path mismatch")
+			assert.Equal(t, testCase.segments.verb, segments.verb, "verb mismatch")
+			assert.ElementsMatch(t, testCase.variables, variables, "variables mismatch")
 		})
 	}
 }

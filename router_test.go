@@ -145,8 +145,8 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 					vars := computeVarValues(testCase.path, target)
 					require.Equal(t, len(testCase.expectedVars), len(vars))
 					for _, varMatch := range vars {
-						names := make([]string, len(varMatch.varPath))
-						for i, fld := range varMatch.varPath {
+						names := make([]string, len(varMatch.fields))
+						for i, fld := range varMatch.fields {
 							names[i] = string(fld.Name())
 						}
 						name := strings.Join(names, ".")
@@ -178,89 +178,92 @@ type testRoute struct {
 var routes = []testRoute{
 	{
 		path:     "/foo/bar/baz/buzz",
-		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "baz"}, {val: "buzz"}},
+		segments: pathSegments{path: []string{"foo", "bar", "baz", "buzz"}},
 	},
 	{
 		path:     "/foo/bar/{name}",
-		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}},
+		segments: pathSegments{path: []string{"foo", "bar", "*"}},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
 		},
 	},
 	{
 		path:     "/foo/bar/{name}/baz/{child}",
-		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "baz"}, {val: "*"}},
+		segments: pathSegments{path: []string{"foo", "bar", "*", "baz", "*"}},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child"}}, start: 4, end: 5},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child"}}, start: 4, end: 5},
 		},
 	},
 	{
 		path:     "/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
-		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "baz"}, {val: "*"}, {val: "buzz"}, {val: "*"}},
+		segments: pathSegments{path: []string{"foo", "bar", "*", "baz", "*", "buzz", "*"}},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.id"}}, start: 4, end: 5},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.thing.id"}}, start: 6, end: 7},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "name"}}, start: 2, end: 3},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.id"}}, start: 4, end: 5},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "child.thing.id"}}, start: 6, end: 7},
 		},
 	},
 	{
 		path:     "/foo/bar/*/{thing.id}/{cat=**}",
-		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "*"}, {val: "**"}},
+		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
 		},
 	},
 	{
 		path:     "/foo/bar/*/{thing.id}/{cat=**}:do",
-		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "*"}, {val: "**"}, {val: "do", isVerb: true}},
+		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}, verb: "do"},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
 		},
 	},
 	{
 		path:     "/foo/bar/*/{thing.id}/{cat=**}:cancel",
-		segments: pathSegments{{val: "foo"}, {val: "bar"}, {val: "*"}, {val: "*"}, {val: "**"}, {val: "cancel", isVerb: true}},
+		segments: pathSegments{path: []string{"foo", "bar", "*", "*", "**"}, verb: "cancel"},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "thing.id"}}, start: 3, end: 4},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "cat"}}, start: 4, end: -1},
 		},
 	},
 	{
 		path:     "/foo/bob/{book_id={author}/{isbn}/*}/details",
-		segments: pathSegments{{val: "foo"}, {val: "bob"}, {val: "*"}, {val: "*"}, {val: "*"}, {val: "details"}},
+		segments: pathSegments{path: []string{"foo", "bob", "*", "*", "*", "details"}},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "book_id"}}, start: 2, end: 5},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "author"}}, start: 2, end: 3},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "isbn"}}, start: 3, end: 4},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "book_id"}}, start: 2, end: 5},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "author"}}, start: 2, end: 3},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "isbn"}}, start: 3, end: 4},
 		},
 	},
 	{
 		path: "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
-		segments: pathSegments{{val: "foo"}, {val: "blah"},
-			{val: "*"},  // 2 logest_var
-			{val: "*"},  // 3 long_var.a
-			{val: "*"},  // 4 medium.a
-			{val: "*"},  // 5 short.aa
-			{val: "*"},  // 6
-			{val: "*"},  // 7 short.ba
-			{val: "*"},  // 8
-			{val: "*"},  // 9 short.bb
-			{val: "**"}, // 10
-			{val: "details", isVerb: true}},
+		segments: pathSegments{
+			path: []string{"foo", "blah",
+				"*",  // 2 logest_var
+				"*",  // 3 long_var.a
+				"*",  // 4 medium.a
+				"*",  // 5 short.aa
+				"*",  // 6
+				"*",  // 7 short.ba
+				"*",  // 8
+				"*",  // 9 short.bb
+				"**", // 10
+			},
+			verb: "details",
+		},
 		variables: pathVariables{
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "longest_var"}}, start: 2, end: -1},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.a"}}, start: 2, end: 7},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.a"}}, start: 2, end: 6},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.aa"}}, start: 2, end: 3},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ab"}}, start: 4, end: 5},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.b"}}, start: 7, end: -1},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.b"}}, start: 7, end: 11},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ba"}}, start: 7, end: 8},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.bb"}}, start: 9, end: 10},
-			{varPath: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "last"}}, start: 11, end: -1},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "longest_var"}}, start: 2, end: -1},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.a"}}, start: 2, end: 7},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.a"}}, start: 2, end: 6},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.aa"}}, start: 2, end: 3},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ab"}}, start: 4, end: 5},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "long_var.b"}}, start: 7, end: -1},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "medium.b"}}, start: 7, end: 11},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.ba"}}, start: 7, end: 8},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "short.bb"}}, start: 9, end: 10},
+			{fields: []protoreflect.FieldDescriptor{&fakeFieldDescriptor{name: "last"}}, start: 11, end: -1},
 		},
 	},
 }

@@ -63,56 +63,54 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if err != nil {
 		return err
 	}
-	target, err := makeTarget(config, template, rule.Body, rule.ResponseBody, variables)
+	target, err := makeTarget(config, rule.Body, rule.ResponseBody, variables)
 	if err != nil {
 		return err
 	}
 	return trie.insert(method, target, segments)
 }
 
-func (trie *routeTrie) getVerb(verb string) routeMethods {
-	methods := trie.verbs[verb]
-	if methods == nil {
-		if trie.verbs == nil {
-			trie.verbs = map[string]routeMethods{}
-		}
-		methods = routeMethods{}
-		trie.verbs[verb] = methods
-	}
-	return methods
-}
-func (trie *routeTrie) getChild(segment string) *routeTrie {
+func (trie *routeTrie) insertChild(segment string) *routeTrie {
 	child := trie.children[segment]
 	if child == nil {
 		if trie.children == nil {
-			trie.children = map[string]*routeTrie{}
+			trie.children = make(map[string]*routeTrie, 1)
 		}
 		child = &routeTrie{}
 		trie.children[segment] = child
 	}
 	return child
 }
+func (trie *routeTrie) insertVerb(verb string) routeMethods {
+	methods := trie.verbs[verb]
+	if methods == nil {
+		if trie.verbs == nil {
+			trie.verbs = make(map[string]routeMethods, 1)
+		}
+		methods = make(routeMethods, 1)
+		trie.verbs[verb] = methods
+	}
+	return methods
+}
 
 // insert the target into the trie using the given method and segment path.
 // The path is followed until the final segment is reached.
 func (trie *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
-	cursor := trie
-	var methods routeMethods
-	for _, segment := range segments {
-		if segment.isVerb {
-			methods = cursor.getVerb(segment.val)
-			cursor = nil
-		} else {
-			child := cursor.getChild(segment.val)
-			methods = child.methods // may be nil.
-			cursor = child
-		}
+	cursor, methods := trie, trie.methods
+	for _, segment := range segments.path {
+		cursor = cursor.insertChild(segment)
+		methods = cursor.methods // may be nil.
+	}
+	if segments.verb != "" {
+		methods = cursor.insertVerb(segments.verb) // cannot be nil.
+		cursor = nil
 	}
 	if existing := methods[method]; existing != nil {
 		return alreadyExistsError{
 			existing: existing, pathPattern: segments.String(), method: method,
 		}
 	}
+	// Lazily allocate the method map for a trie node.
 	if methods == nil {
 		methods = make(routeMethods, 1)
 		cursor.methods = methods
@@ -189,8 +187,7 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 type routeMethods map[string]*routeTarget
 
 type routeTarget struct {
-	config   *methodConfig
-	template string
+	config *methodConfig
 	//nolint:unused
 	requestBodyPath []protoreflect.FieldDescriptor
 	//nolint:unused
@@ -199,12 +196,12 @@ type routeTarget struct {
 }
 
 type routeTargetVarMatch struct {
-	varPath []protoreflect.FieldDescriptor
-	value   string
+	fields []protoreflect.FieldDescriptor
+	value  string
 }
 
 //nolint:unused
-func makeTarget(config *methodConfig, template, requestBody, responseBody string, variables pathVariables) (*routeTarget, error) {
+func makeTarget(config *methodConfig, requestBody, responseBody string, variables pathVariables) (*routeTarget, error) {
 	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
 		return nil, err
@@ -215,7 +212,6 @@ func makeTarget(config *methodConfig, template, requestBody, responseBody string
 	}
 	return &routeTarget{
 		config:           config,
-		template:         template,
 		requestBodyPath:  requestBodyPath,
 		responseBodyPath: responseBodyPath,
 		vars:             variables,
@@ -228,7 +224,7 @@ func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch 
 	}
 	vars := make([]routeTargetVarMatch, len(target.vars))
 	for i, varDef := range target.vars {
-		vars[i].varPath = varDef.varPath
+		vars[i].fields = varDef.fields
 		var pathElements []string
 		if varDef.end == -1 {
 			if varDef.start < len(path) {
