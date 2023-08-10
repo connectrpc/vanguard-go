@@ -52,17 +52,62 @@ type TypeResolver interface {
 // is not safe to mutate the Config once Middleware is being used by server
 // handlers.
 type Config struct {
+	// The protocols that are supported by the wrapped handler, by default.
+	// This can be overridden on a per-service level via options when calling
+	// AddService or AddServiceByName.
+	//
+	// If left empty, the default is to assume the handler can handle all
+	// three of ProtocolConnect, ProtocolGRPC, and ProtocolGRPCWeb.
+	//
+	// If the wrapped handler is a Connect handler, it can handle all three.
+	// If the wrapped handler is a gRPC handler, it can only handle ProtocolGRPC.
+	// If the wrapped handler is a reverse proxy, this should be configured based
+	// on what protocols the destination server(s) support.
+	Protocols []Protocol
+	// The codec names that are supported by the wrapped handler, by default.
+	// This can be overridden on a per-service level via options when calling
+	// AddService or AddServiceByName.
+	//
+	// If this includes any non-default codec names, you must also call AddCodec
+	// to register the codec implementation.
+	//
+	// If left empty, the default is to support both CodecProto and CodecJSON. Both
+	// Connect and gRPC handlers can support custom codecs. Without customization,
+	// Connect handlers support both CodecProto and CodecJSON while gRPC handlers
+	// support only CodecProto.
+	//
+	// If the wrapped handler is a reverse proxy, this should be configured based
+	// on what codecs (aka "sub-formats") that the destination server(s) support.
+	Codecs []string
+	// The names of compression algorithms that are supported by the wrapped handler,
+	// by default. This can be overridden on a per-service level via options when
+	// calling AddService or AddServiceByName.
+	//
+	// If this includes any non-default compression names, you must also call
+	// AddCompression to register the implementation.
+	//
+	// If left nil, the default is to support CompressionGzip. Both Connect and
+	// gRPC handlers can support custom compression algorithms. Without customization,
+	// both support CompressionGzip.
+	//
+	// If the wrapped handler is a reverse proxy, this should be configured based
+	// on what codecs (aka "sub-formats") that the destination server(s) support.
+	//
+	// If set to an explicit empty but *non-nil* slice, the wrapped handler will
+	// only see uncompressed payloads. If any requests arrive that use a known
+	// compression algorithm, the data will be decompressed.
+	Compressors []string
 	// TypeResolver is the default TypeResolver. If no TypeResolver is specified
 	// when a service is registered, this one is used. If nil, the default resolver
 	// will be [protoregistry.GlobalTypes].
 	TypeResolver TypeResolver
 
-	init          sync.Once
-	codecs        map[string]func(TypeResolver) Codec
-	compressors   map[string]func() connect.Compressor
-	decompressors map[string]func() connect.Decompressor
-	methods       map[protoreflect.FullName]*methodConfig
-	restRoutes    routeTrie
+	init              sync.Once
+	codecImpls        map[string]func(TypeResolver) Codec
+	compressorImpls   map[string]func() connect.Compressor
+	decompressorImpls map[string]func() connect.Decompressor
+	methods           map[protoreflect.FullName]*methodConfig
+	restRoutes        routeTrie
 }
 
 // AsMiddleware returns HTTP middleware that applies the given configuration
@@ -109,34 +154,27 @@ func (c *Config) AddService(serviceDesc protoreflect.ServiceDescriptor, opts ...
 	for _, opt := range opts {
 		opt.apply(&svcOpts)
 	}
-	if len(svcOpts.protocols) == 0 {
-		svcOpts.protocols = map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}}
-	} else {
-		for protocol := range svcOpts.protocols {
-			if protocol <= ProtocolUnknown || protocol > protocolMax {
-				return fmt.Errorf("protocol %d is not a valid value", protocol)
-			}
+
+	svcOpts.protocols = computeSet(svcOpts.protocols, c.Protocols, defaultProtocols, false)
+	for protocol := range svcOpts.protocols {
+		if protocol <= ProtocolUnknown || protocol > protocolMax {
+			return fmt.Errorf("protocol %d is not a valid value", protocol)
 		}
 	}
-	if len(svcOpts.codecNames) == 0 {
-		svcOpts.codecNames = map[string]struct{}{CodecProto: {}}
-	} else {
-		for codecName := range svcOpts.codecNames {
-			if _, ok := c.codecs[codecName]; !ok {
-				return fmt.Errorf("codec %q is not known; use config.AddCodec to add known codecs first", codecName)
-			}
+	svcOpts.codecNames = computeSet(svcOpts.codecNames, c.Codecs, defaultCodecs, false)
+	for codecName := range svcOpts.codecNames {
+		if _, known := c.codecImpls[codecName]; !known {
+			return fmt.Errorf("codec %d is not known; use config.AddCodec to add known codecs first", codecName)
 		}
 	}
-	// empty but non-nil means do NOT use compression, so only set default if nil
-	if svcOpts.compressorNames == nil {
-		svcOpts.compressorNames = map[string]struct{}{CompressionGzip: {}}
-	} else {
-		for compressorName := range svcOpts.compressorNames {
-			if _, ok := c.compressors[compressorName]; !ok {
-				return fmt.Errorf("compression algorithm %q is not known; use config.AddCompression to add known algorithms first", compressorName)
-			}
+	// empty is allowed here: non-nil but empty means do not send compressed data to handler
+	svcOpts.codecNames = computeSet(svcOpts.compressorNames, c.Compressors, defaultCompressors, true)
+	for compressorName := range svcOpts.compressorNames {
+		if _, known := c.compressorImpls[compressorName]; !known {
+			return fmt.Errorf("compression algorithm %d is not known; use config.AddCompression to add known algorithms first", compressorName)
 		}
 	}
+
 	if svcOpts.resolver == nil {
 		svcOpts.resolver = c.TypeResolver
 		if svcOpts.resolver == nil {
@@ -166,7 +204,7 @@ func (c *Config) AddService(serviceDesc protoreflect.ServiceDescriptor, opts ...
 // different configuration.
 func (c *Config) AddCodec(name string, newCodec func(TypeResolver) Codec) {
 	c.maybeInit()
-	c.codecs[name] = newCodec
+	c.codecImpls[name] = newCodec
 }
 
 // AddCompression adds the given compression algorithm implementation.
@@ -181,8 +219,8 @@ func (c *Config) AddCodec(name string, newCodec func(TypeResolver) Codec) {
 // or settings.
 func (c *Config) AddCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) {
 	c.maybeInit()
-	c.compressors[name] = newCompressor
-	c.decompressors[name] = newDecompressor
+	c.compressorImpls[name] = newCompressor
+	c.decompressorImpls[name] = newDecompressor
 }
 
 func (c *Config) addMethod(methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
@@ -221,14 +259,14 @@ func (c *Config) addMethod(methodDesc protoreflect.MethodDescriptor, opts servic
 func (c *Config) maybeInit() {
 	c.init.Do(func() {
 		// initialize default codecs and compressors
-		c.codecs = map[string]func(res TypeResolver) Codec{
+		c.codecImpls = map[string]func(res TypeResolver) Codec{
 			CodecProto: DefaultProtoCodec,
 			CodecJSON:  DefaultJSONCodec,
 		}
-		c.compressors = map[string]func() connect.Compressor{
+		c.compressorImpls = map[string]func() connect.Compressor{
 			CompressionGzip: DefaultGzipCompressor,
 		}
-		c.decompressors = map[string]func() connect.Decompressor{
+		c.decompressorImpls = map[string]func() connect.Decompressor{
 			CompressionGzip: DefaultGzipDecompressor,
 		}
 		c.methods = map[protoreflect.FullName]*methodConfig{}
@@ -326,6 +364,32 @@ func WithTypeResolver(resolver TypeResolver) ServiceOption {
 	})
 }
 
+// computeSet returns a resolved set of values of type T, preferring the given values if
+// valid, then the given defaults if valid, and finally the given backupDefaults.
+//
+// An empty or nil set is invalid (so empty or nil values means fallback to defaults;
+// similarly, an empty or nil defaults means fallback to backupDefaults), unless
+// allowEmpty is true, in which case an empty set is okay but nil is invalid.
+func computeSet[T comparable](values map[T]struct{}, defaults []T, backupDefaults map[T]struct{}, allowEmpty bool) map[T]struct{} {
+	if len(values) > 0 {
+		// non-empty is always okay
+		return values
+	}
+	if allowEmpty && values != nil {
+		// empty but nil is okay
+		return values
+	}
+	if (allowEmpty && defaults == nil) || (!allowEmpty && len(defaults) == 0) {
+		// defaults is not valid either
+		return backupDefaults
+	}
+	result := make(map[T]struct{}, len(defaults))
+	for _, t := range defaults {
+		result[t] = struct{}{}
+	}
+	return result
+}
+
 // Protocol represents an on-the-wire protocol for RPCs.
 type Protocol int
 
@@ -361,6 +425,17 @@ const (
 
 	// protocolMax is the maximum valid value for a Protocol.
 	protocolMax = ProtocolREST
+)
+
+//nolint:gochecknoglobals
+var (
+	defaultProtocols = map[Protocol]struct{}{
+		ProtocolConnect: {},
+		ProtocolGRPC:    {},
+		ProtocolGRPCWeb: {},
+	}
+	defaultCodecs      = map[string]struct{}{CodecProto: {}, CodecJSON: {}}
+	defaultCompressors = map[string]struct{}{CompressionGzip: {}}
 )
 
 type serviceOptionFunc func(*serviceOptions)
