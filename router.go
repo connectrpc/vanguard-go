@@ -296,6 +296,20 @@ func resolvePathToDescriptors(msg protoreflect.MessageDescriptor, path string) (
 	return result, nil
 }
 
+// resolveFieldDescriptorsToPath translates the given path of FieldDescriptors into a string
+// of the form "ident.ident.ident".
+func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	parts := make([]string, len(fields))
+	for i, field := range fields {
+		parts[i] = string(field.Name())
+	}
+	return strings.Join(parts, ".")
+}
+
+//nolint:unused
 type alreadyExistsError struct {
 	existing            *routeTarget
 	pathPattern, method string

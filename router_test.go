@@ -342,6 +342,7 @@ func (f *fakeFieldDescriptors) ByName(name protoreflect.Name) protoreflect.Field
 type fakeFieldDescriptor struct {
 	name protoreflect.Name
 	msg  protoreflect.MessageDescriptor
+	kind protoreflect.Kind
 	protoreflect.FieldDescriptor
 }
 
@@ -354,6 +355,9 @@ func (f *fakeFieldDescriptor) Cardinality() protoreflect.Cardinality {
 }
 
 func (f *fakeFieldDescriptor) Kind() protoreflect.Kind {
+	if f.kind > 0 {
+		return f.kind
+	}
 	if f.msg != nil {
 		return protoreflect.MessageKind
 	}
