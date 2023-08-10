@@ -164,14 +164,14 @@ func (c *Config) AddService(serviceDesc protoreflect.ServiceDescriptor, opts ...
 	svcOpts.codecNames = computeSet(svcOpts.codecNames, c.Codecs, defaultCodecs, false)
 	for codecName := range svcOpts.codecNames {
 		if _, known := c.codecImpls[codecName]; !known {
-			return fmt.Errorf("codec %d is not known; use config.AddCodec to add known codecs first", codecName)
+			return fmt.Errorf("codec %s is not known; use config.AddCodec to add known codecs first", codecName)
 		}
 	}
 	// empty is allowed here: non-nil but empty means do not send compressed data to handler
 	svcOpts.codecNames = computeSet(svcOpts.compressorNames, c.Compressors, defaultCompressors, true)
 	for compressorName := range svcOpts.compressorNames {
 		if _, known := c.compressorImpls[compressorName]; !known {
-			return fmt.Errorf("compression algorithm %d is not known; use config.AddCompression to add known algorithms first", compressorName)
+			return fmt.Errorf("compression algorithm %s is not known; use config.AddCompression to add known algorithms first", compressorName)
 		}
 	}
 
