@@ -206,7 +206,10 @@ type clientBodyPreparer interface {
 	// Produces the request body for the given message. The data
 	// should be appended to the given slice (which will be empty
 	// but have capacity to accept data) to reduce allocations.
-	prepareMarshalledResponse(op *operation, base []byte, src proto.Message) ([]byte, error)
+	// The given headers may be updated, like if a message has
+	// content that must go into headers (such as recording a
+	// custom content-type for uses of google.api.HttpBody).
+	prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error)
 }
 
 // serverBodyPreparer is an optional interface implemented by
@@ -219,7 +222,7 @@ type serverBodyPreparer interface {
 	// body; and we have a response body and must extract from that
 	// a message.
 	requestNeedsPrep(*operation) bool
-	prepareMarshalledRequest(op *operation, base []byte, src proto.Message) ([]byte, error)
+	prepareMarshalledRequest(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error)
 	responseNeedsPrep(*operation) bool
 	prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error
 }

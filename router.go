@@ -174,7 +174,12 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 		if target != nil {
 			return target, nil
 		}
-		// Could be a double-wildcard that matches zero path elements
+		// See if a wildcard method was used
+		target = methods["*"]
+		if target != nil {
+			return target, nil
+		}
+		// Not this trie node. Could be a child with a double-wildcard that matches zero path elements.
 		childDblAst := trie.children["**"]
 		if childDblAst == nil {
 			return nil, methods

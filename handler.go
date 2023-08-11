@@ -27,7 +27,7 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	clientProtoHandler := classifyRequest(request)
+	clientProtoHandler, originalContentType := classifyRequest(request)
 	if clientProtoHandler == nil {
 		http.Error(writer, "could not classify protocol", http.StatusUnsupportedMediaType)
 		return
@@ -43,6 +43,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op := operation{
 		writer:        writer,
 		request:       request,
+		contentType:   originalContentType,
 		reqMeta:       reqMeta,
 		cancel:        cancel,
 		bufferPool:    h.bufferPool,
@@ -113,7 +114,12 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	if op.server.protocol.protocol() == ProtocolREST {
-		// REST always uses JSON
+		// REST always uses JSON.
+		// TODO: allow non-JSON encodings with REST? Would require registering content-types with codecs.
+		//
+		// NB: This is fine to set even if a custom content-type is used via
+		//     the use of google.api.HttpBody. The actual content-type and body
+		//     data will be written via serverBodyPreparer implementation.
 		op.server.codec = h.mux.codecImpls[CodecJSON](methodConf.resolver)
 	} else if _, supportsCodec := methodConf.codecNames[reqMeta.codec]; supportsCodec {
 		op.server.codec = op.client.codec
@@ -203,7 +209,7 @@ type protocolDetails[H any] struct {
 	encodingDetails
 }
 
-func classifyRequest(req *http.Request) (h clientProtocolHandler) {
+func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType string) {
 	contentTypes := req.Header["Content-Type"]
 
 	if len(contentTypes) == 0 {
@@ -213,37 +219,37 @@ func classifyRequest(req *http.Request) (h clientProtocolHandler) {
 		connectVersion := req.Header["Connect-Protocol-Version"]
 		if len(connectVersion) == 1 && connectVersion[0] == "1" {
 			if req.Method == http.MethodGet {
-				return connectUnaryGetClientProtocol{}
+				return connectUnaryGetClientProtocol{}, ""
 			}
-			return nil
+			return nil, ""
 		}
-		return restClientProtocol{}
+		return restClientProtocol{}, ""
 	}
 
 	if len(contentTypes) > 1 {
-		return nil // Ick. Don't allow this.
+		return nil, "" // Ick. Don't allow this.
 	}
+	contentType = contentTypes[0]
 	switch {
-	case strings.HasPrefix(contentTypes[0], "application/connect+"):
-		return connectStreamClientProtocol{}
-	case contentTypes[0] == "application/grpc" || strings.HasPrefix(contentTypes[0], "application/grpc+"):
-		return grpcClientProtocol{}
-	case contentTypes[0] == "application/grpc-web" || strings.HasPrefix(contentTypes[0], "application/grpc-web+"):
-		return grpcWebClientProtocol{}
-	case strings.HasPrefix(contentTypes[0], "application/"):
+	case strings.HasPrefix(contentType, "application/connect+"):
+		return connectStreamClientProtocol{}, contentType
+	case contentType == "application/grpc" || strings.HasPrefix(contentType, "application/grpc+"):
+		return grpcClientProtocol{}, contentType
+	case contentType == "application/grpc-web" || strings.HasPrefix(contentType, "application/grpc-web+"):
+		return grpcWebClientProtocol{}, contentType
+	case strings.HasPrefix(contentType, "application/"):
 		connectVersion := req.Header["Connect-Protocol-Version"]
 		if len(connectVersion) == 1 && connectVersion[0] == "1" {
 			if req.Method == http.MethodGet {
-				return connectUnaryGetClientProtocol{}
+				return connectUnaryGetClientProtocol{}, contentType
 			}
-			return connectUnaryPostClientProtocol{}
+			return connectUnaryPostClientProtocol{}, contentType
 		}
-		if contentTypes[0] == "application/json" || contentTypes[0] == "application/json; charset=utf-8" {
-			return restClientProtocol{}
-		}
-		return nil
+		// REST usually uses application/json, but use of google.api.HttpBody means it could
+		// also use *any* content-type.
+		fallthrough
 	default:
-		return nil
+		return restClientProtocol{}, contentType
 	}
 }
 
@@ -273,6 +279,7 @@ type httpError struct {
 type operation struct {
 	writer        http.ResponseWriter
 	request       *http.Request
+	contentType   string // original content-type in incoming request headers
 	reqMeta       requestMeta
 	cancel        context.CancelFunc
 	bufferPool    *bufferPool
