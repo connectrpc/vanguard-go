@@ -32,8 +32,6 @@ type routeTrie struct {
 // HTTP rule. Only the rule itself is added. If the rule indicates additional
 // bindings, they are ignored. To add routes for all bindings, callers must
 // invoke this method for each rule.
-//
-//nolint:unused
 func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) error {
 	var method, template string
 	switch pattern := rule.Pattern.(type) {
