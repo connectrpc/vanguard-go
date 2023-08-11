@@ -41,7 +41,7 @@ func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(header http
 	panic("implement me")
 }
 
-func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header) {
+func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -77,7 +77,7 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(header htt
 	panic("implement me")
 }
 
-func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header) {
+func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -99,7 +99,7 @@ func (c connectUnaryServerProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header) {
+func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -137,7 +137,7 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(header http.H
 	panic("implement me")
 }
 
-func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header) {
+func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -157,7 +157,7 @@ func (c connectStreamServerProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header) {
+func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }

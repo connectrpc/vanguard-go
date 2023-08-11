@@ -7,6 +7,7 @@ package vanguard
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -102,10 +103,16 @@ type Mux struct {
 // This should only be called after the configuration is finalized.
 func (m *Mux) AsHandler() http.Handler {
 	m.maybeInit()
+	canDecompress := make([]string, 0, len(m.compressionPools))
+	for compression := range m.compressionPools {
+		canDecompress = append(canDecompress, compression)
+	}
+	sort.Strings(canDecompress)
 	return &handler{
-		mux:        m,
-		bufferPool: newBufferPool(),
-		codecs:     newCodecMap(m.methods, m.codecImpls),
+		mux:           m,
+		bufferPool:    newBufferPool(),
+		codecs:        newCodecMap(m.methods, m.codecImpls),
+		canDecompress: canDecompress,
 	}
 }
 

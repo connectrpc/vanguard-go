@@ -20,9 +20,10 @@ import (
 )
 
 type handler struct {
-	mux        *Mux
-	bufferPool *bufferPool
-	codecs     map[codecKey]Codec
+	mux           *Mux
+	bufferPool    *bufferPool
+	codecs        map[codecKey]Codec
+	canDecompress []string
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -40,11 +41,12 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	defer cancel()
 	request = request.WithContext(ctx)
 	op := operation{
-		writer:     writer,
-		request:    request,
-		reqMeta:    reqMeta,
-		cancel:     cancel,
-		bufferPool: h.bufferPool,
+		writer:        writer,
+		request:       request,
+		reqMeta:       reqMeta,
+		cancel:        cancel,
+		bufferPool:    h.bufferPool,
+		canDecompress: h.canDecompress,
 	}
 	op.client.protocol = clientProtoHandler
 
@@ -52,8 +54,9 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		var ok bool
 		op.client.reqCompression, ok = h.mux.compressionPools[reqMeta.compression]
 		if !ok {
-			http.Error(writer, fmt.Sprintf("%q compression not supported", reqMeta.compression), http.StatusUnsupportedMediaType)
-			return
+			// This might be okay, like if the transformation doesn't require decoding.
+			op.client.reqCompression = nil
+			op.cannotDecompressRequest = true
 		}
 	}
 	newCodec := h.mux.codecImpls[reqMeta.codec]
@@ -118,7 +121,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		op.server.codec = h.mux.codecImpls[CodecProto](methodConf.resolver)
 	}
 
-	if reqMeta.compression != "" {
+	if reqMeta.compression != "" && !op.cannotDecompressRequest {
 		if _, supportsCompression := methodConf.compressorNames[reqMeta.compression]; supportsCompression {
 			op.server.reqCompression = op.client.reqCompression
 		} // else: no compression
@@ -126,7 +129,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	if op.client.protocol.protocol() == op.server.protocol.protocol() &&
 		op.client.codec.Name() == op.server.codec.Name() &&
-		op.client.reqCompression.Name() == op.server.reqCompression.Name() {
+		(op.cannotDecompressRequest || op.client.reqCompression.Name() == op.server.reqCompression.Name()) {
 		// No transformation needed.
 		methodConf.handler.ServeHTTP(writer, request)
 		return
@@ -202,8 +205,23 @@ type protocolDetails[H any] struct {
 
 func classifyRequest(req *http.Request) (h clientProtocolHandler) {
 	contentTypes := req.Header["Content-Type"]
-	if len(contentTypes) != 1 {
-		return nil
+
+	if len(contentTypes) == 0 {
+		// Empty bodies should still have content types. So this should only
+		// happen for requests with NO body at all. That's only allowed for
+		// REST calls and Connect GET calls.
+		connectVersion := req.Header["Connect-Protocol-Version"]
+		if len(connectVersion) == 1 && connectVersion[0] == "1" {
+			if req.Method == http.MethodGet {
+				return connectUnaryGetClientProtocol{}
+			}
+			return nil
+		}
+		return restClientProtocol{}
+	}
+
+	if len(contentTypes) > 1 {
+		return nil // Ick. Don't allow this.
 	}
 	switch {
 	case strings.HasPrefix(contentTypes[0], "application/connect+"):
@@ -253,31 +271,36 @@ type httpError struct {
 }
 
 type operation struct {
-	writer     http.ResponseWriter
-	request    *http.Request
-	reqMeta    requestMeta
-	cancel     context.CancelFunc
-	bufferPool *bufferPool
-	delegate   http.Handler
-	resolver   TypeResolver
+	writer        http.ResponseWriter
+	request       *http.Request
+	reqMeta       requestMeta
+	cancel        context.CancelFunc
+	bufferPool    *bufferPool
+	delegate      http.Handler
+	resolver      TypeResolver
+	canDecompress []string
 
 	method     protoreflect.MethodDescriptor
 	methodPath string
 	streamType connect.StreamType
 
-	client protocolDetails[clientProtocolHandler]
-	server protocolDetails[serverProtocolHandler]
+	client                   protocolDetails[clientProtocolHandler]
+	server                   protocolDetails[serverProtocolHandler]
+	cannotDecompressRequest  bool
+	cannotDecompressResponse bool
 
 	// only used when clientProtocolDetails.protocol == ProtocolREST
 	restTarget *routeTarget
 	restVars   []routeTargetVarMatch
 
-	clientEnveloper    envelopedProtocolHandler
-	clientPreparer     clientBodyPreparer
-	clientReqNeedsPrep bool
-	serverEnveloper    envelopedProtocolHandler
-	serverPreparer     serverBodyPreparer
-	serverReqNeedsPrep bool
+	clientEnveloper     envelopedProtocolHandler
+	clientPreparer      clientBodyPreparer
+	clientReqNeedsPrep  bool
+	clientRespNeedsPrep bool
+	serverEnveloper     envelopedProtocolHandler
+	serverPreparer      serverBodyPreparer
+	serverReqNeedsPrep  bool
+	serverRespNeedsPrep bool
 }
 
 func (op *operation) handle() {
@@ -285,11 +308,13 @@ func (op *operation) handle() {
 	op.clientPreparer, _ = op.client.protocol.(clientBodyPreparer)
 	if op.clientPreparer != nil {
 		op.clientReqNeedsPrep = op.clientPreparer.requestNeedsPrep(op)
+		op.clientRespNeedsPrep = op.clientPreparer.responseNeedsPrep(op)
 	}
 	op.serverEnveloper, _ = op.server.protocol.(envelopedProtocolHandler)
 	op.serverPreparer, _ = op.server.protocol.(serverBodyPreparer)
 	if op.serverPreparer != nil {
 		op.serverReqNeedsPrep = op.serverPreparer.requestNeedsPrep(op)
+		op.serverRespNeedsPrep = op.serverPreparer.responseNeedsPrep(op)
 	}
 
 	serverRequestBuilder, _ := op.server.protocol.(requestLineBuilder)
@@ -298,16 +323,26 @@ func (op *operation) handle() {
 		requireMessageForRequestLine = serverRequestBuilder.requiresMessageToProvideRequestLine(op)
 	}
 
-	sameRequestCompression := op.client.reqCompression.Name() == op.server.reqCompression.Name()
-	// even if body encoding is technically the same, we can't treat them as the same
+	sameRequestCompression := op.cannotDecompressRequest || (op.client.reqCompression.Name() == op.server.reqCompression.Name())
+	sameCodec := op.client.codec.Name() == op.server.codec.Name()
+	// even if body encoding uses same content type, we can't treat them as the same
 	// (which means re-using encoded data) if either side needs to prep the data first
-	sameRequestCodec := !op.clientReqNeedsPrep && !op.serverReqNeedsPrep && op.client.codec.Name() == op.server.codec.Name()
+	sameRequestCodec := sameCodec && !op.clientReqNeedsPrep && !op.serverReqNeedsPrep
+	sameResponseCodec := sameCodec && !op.clientRespNeedsPrep && !op.serverRespNeedsPrep
+	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine
+	mustDecodeResponse := !sameResponseCodec
 
+	if mustDecodeRequest && op.cannotDecompressRequest {
+		// TODO: should result in 415 Unsupported Media Type
+		// TODO: should send back accept-encoding (or relevant protocol header)
+		op.handleError(errors.New("unable to decode"))
+		return
+	}
 	reqMsg := message{
 		saveCompressed: sameRequestCodec && sameRequestCompression,
 		saveData:       sameRequestCodec && !sameRequestCompression,
 	}
-	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine
+
 	if mustDecodeRequest {
 		// Need the message type to decode
 		messageType, err := op.resolver.FindMessageByName(op.method.Input().FullName())
@@ -342,7 +377,11 @@ func (op *operation) handle() {
 		op.request.Method = http.MethodPost
 	}
 	op.request.URL.ForceQuery = false
-	op.server.protocol.addProtocolRequestHeaders(op.reqMeta, op.writer.Header())
+	allowedResponseCompression := op.reqMeta.acceptCompression
+	if mustDecodeResponse {
+		allowedResponseCompression = op.canDecompress
+	}
+	op.server.protocol.addProtocolRequestHeaders(op.reqMeta, op.writer.Header(), allowedResponseCompression)
 
 	// Now we can define the transformed request body.
 	if skipBody {
@@ -382,6 +421,7 @@ func (op *operation) readAndDecodeRequestMessage(msg *message) error {
 		return err
 	}
 	decompressor := op.client.reqCompression.getDecompressor()
+
 	if err := decompress(decompressor, op.bufferPool, msg); err != nil {
 		return err
 	}
@@ -575,6 +615,7 @@ func decompress(decompressor connect.Decompressor, pool *bufferPool, msg *messag
 		if !msg.saveCompressed {
 			msg.compressed = nil
 		}
+		return nil
 	}
 	var src io.Reader
 	if msg.saveCompressed {
@@ -610,6 +651,7 @@ func compress(compressor connect.Compressor, pool *bufferPool, msg *message) err
 		if !msg.saveData {
 			msg.data = nil
 		}
+		return nil
 	}
 	msg.compressed = pool.Get()
 	compressor.Reset(msg.compressed)

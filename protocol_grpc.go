@@ -31,7 +31,7 @@ func (g grpcClientProtocol) extractProtocolRequestHeaders(header http.Header) (r
 	panic("implement me")
 }
 
-func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header) {
+func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -51,7 +51,7 @@ func (g grpcServerProtocol) protocol() Protocol {
 	return ProtocolGRPC
 }
 
-func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header) {
+func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -89,7 +89,7 @@ func (g grpcWebClientProtocol) extractProtocolRequestHeaders(header http.Header)
 	panic("implement me")
 }
 
-func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header) {
+func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -109,7 +109,7 @@ func (g grpcWebServerProtocol) protocol() Protocol {
 	return ProtocolGRPCWeb
 }
 
-func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header) {
+func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }

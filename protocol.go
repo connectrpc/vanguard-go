@@ -105,7 +105,7 @@ type clientProtocolHandler interface {
 	allowsGetRequests() bool
 
 	extractProtocolRequestHeaders(http.Header) (requestMeta, error)
-	addProtocolResponseHeaders(responseMeta, http.Header)
+	addProtocolResponseHeaders(meta responseMeta, target http.Header, allowedCompression []string)
 	encodeEnd(responseEnd, io.Writer) (http.Header, error)
 
 	String() string
@@ -117,7 +117,7 @@ type clientProtocolHandler interface {
 type serverProtocolHandler interface {
 	protocol() Protocol
 
-	addProtocolRequestHeaders(requestMeta, http.Header)
+	addProtocolRequestHeaders(meta requestMeta, target http.Header, allowedCompression []string)
 	// returns the response metadata from the headers; if the second
 	// arg is non-nil, the caller should supply the body to it along
 	// with the responseMeta.end to finish processing the end of the
