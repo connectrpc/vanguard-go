@@ -211,7 +211,8 @@ func isNullValue(field protoreflect.FieldDescriptor) bool {
 	return ed != nil && ed.FullName() == "google.protobuf.NullValue"
 }
 
-// getListParameter gets the index value of a field on a message using the ident fields.
+// getParameter gets the value of a field on a message using the ident fields.
+// Optionally, an index can be provided to get the value of a repeated field.
 func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescriptor, index int) (string, error) {
 	if len(fields) == 0 {
 		return "", connect.NewError(connect.CodeInternal,
