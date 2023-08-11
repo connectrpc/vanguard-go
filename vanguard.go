@@ -29,32 +29,19 @@ const (
 	//       such as the JS impl. Should we also support it out of the box?
 )
 
-// Middleware is the signature for HTTP middleware, that can wrap/decorate an
-// existing HTTP handler.
-type Middleware func(http.Handler) http.Handler
-
-// TypeResolver can resolve message and extension types and is used to instantiate
-// messages as needed for the middleware to serialize/de-serialize request and
-// response payloads.
+// Mux is a registry of RPC handlers that can handle transforming requests
+// between RPC protocols (such as Connect and gRPC) or even between REST
+// and RPC (using annotations on the service that define its mapping to
+// REST).
 //
-// Implementations of this interface should be comparable, so they can be used as
-// map keys. Typical implementations are pointers to structs, which are suitable.
-type TypeResolver interface {
-	protoregistry.MessageTypeResolver
-	protoregistry.ExtensionTypeResolver
-}
-
-// Config controls the behavior of HTTP middleware.
-//
-// Config is not thread-safe so should only mutated (via Add* methods) by one
-// thread during initialization. The middleware returned from the Middleware
+// All services should be registered (via Register* methods) from a single
+// thread during initialization. The handler returned from the AsHandler
 // method is only thread-safe among concurrently executing HTTP requests. It
-// is not safe to mutate the Config once Middleware is being used by server
-// handlers.
-type Config struct {
+// is not safe to mutate the Mux once its handler is being used by a server.
+type Mux struct {
 	// The protocols that are supported by the wrapped handler, by default.
 	// This can be overridden on a per-service level via options when calling
-	// AddService or AddServiceByName.
+	// RegisterService or RegisterServiceByName.
 	//
 	// If left empty, the default is to assume the handler can handle all
 	// three of ProtocolConnect, ProtocolGRPC, and ProtocolGRPCWeb.
@@ -66,7 +53,7 @@ type Config struct {
 	Protocols []Protocol
 	// The codec names that are supported by the wrapped handler, by default.
 	// This can be overridden on a per-service level via options when calling
-	// AddService or AddServiceByName.
+	// RegisterService or RegisterServiceByName.
 	//
 	// If this includes any non-default codec names, you must also call AddCodec
 	// to register the codec implementation.
@@ -81,7 +68,7 @@ type Config struct {
 	Codecs []string
 	// The names of compression algorithms that are supported by the wrapped handler,
 	// by default. This can be overridden on a per-service level via options when
-	// calling AddService or AddServiceByName.
+	// calling RegisterService or RegisterServiceByName.
 	//
 	// If this includes any non-default compression names, you must also call
 	// AddCompression to register the implementation.
@@ -110,25 +97,26 @@ type Config struct {
 	restRoutes        routeTrie
 }
 
-// AsMiddleware returns HTTP middleware that applies the given configuration
+// AsHandler returns HTTP middleware that applies the given configuration
 // to handlers.
 //
 // This should only be called after the configuration is finalized.
-func (c *Config) AsMiddleware() (Middleware, error) {
-	c.maybeInit()
-	return c.apply, nil
+func (m *Mux) AsHandler() http.Handler {
+	m.maybeInit()
+	// TODO: implement me!
+	return nil
 }
 
-// AddServiceByName registers the schema for the given service with the config.
-// This queries the named service's schema from [protoregistry.GlobalFiles].
+// RegisterServiceByName registers the given handler for the named service.
+// This queries the given service's schema from [protoregistry.GlobalFiles].
 //
-// If no other options are provided, it is assumed the downstream handler supports
+// If no other options are provided, it is assumed the given handler supports
 // all three RPC protocols (Connect, gRPC-Web, gRPC), gzip compression, and proto
 // encoding.
 //
 // Any methods that have `google.api.http` annotations will allow incoming
 // requests to use REST+JSON conventions as specified by the annotations.
-func (c *Config) AddServiceByName(serviceName protoreflect.FullName, opts ...ServiceOption) error {
+func (m *Mux) RegisterServiceByName(handler http.Handler, serviceName protoreflect.FullName, opts ...ServiceOption) error {
 	desc, err := protoregistry.GlobalFiles.FindDescriptorByName(serviceName)
 	if err != nil {
 		return err
@@ -137,46 +125,46 @@ func (c *Config) AddServiceByName(serviceName protoreflect.FullName, opts ...Ser
 	if !ok {
 		return fmt.Errorf("descriptor %s is a %T; not a service", serviceName, desc)
 	}
-	return c.AddService(serviceDesc, opts...)
+	return m.RegisterService(handler, serviceDesc, opts...)
 }
 
-// AddService registers the given service schema with the config.
+// RegisterService registers the given handler for the service schema.
 //
-// If no other options are provided, it is assumed the downstream handler supports
+// If no other options are provided, it is assumed the given handler supports
 // all three RPC protocols (Connect, gRPC-Web, gRPC), gzip compression, and proto
 // encoding.
 //
 // Any methods that have `google.api.http` annotations will allow incoming
 // requests to use REST+JSON conventions as specified by the annotations.
-func (c *Config) AddService(serviceDesc protoreflect.ServiceDescriptor, opts ...ServiceOption) error {
-	c.maybeInit()
+func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.ServiceDescriptor, opts ...ServiceOption) error {
+	m.maybeInit()
 	var svcOpts serviceOptions
 	for _, opt := range opts {
 		opt.apply(&svcOpts)
 	}
 
-	svcOpts.protocols = computeSet(svcOpts.protocols, c.Protocols, defaultProtocols, false)
+	svcOpts.protocols = computeSet(svcOpts.protocols, m.Protocols, defaultProtocols, false)
 	for protocol := range svcOpts.protocols {
 		if protocol <= ProtocolUnknown || protocol > protocolMax {
 			return fmt.Errorf("protocol %d is not a valid value", protocol)
 		}
 	}
-	svcOpts.codecNames = computeSet(svcOpts.codecNames, c.Codecs, defaultCodecs, false)
+	svcOpts.codecNames = computeSet(svcOpts.codecNames, m.Codecs, defaultCodecs, false)
 	for codecName := range svcOpts.codecNames {
-		if _, known := c.codecImpls[codecName]; !known {
+		if _, known := m.codecImpls[codecName]; !known {
 			return fmt.Errorf("codec %s is not known; use config.AddCodec to add known codecs first", codecName)
 		}
 	}
 	// empty is allowed here: non-nil but empty means do not send compressed data to handler
-	svcOpts.codecNames = computeSet(svcOpts.compressorNames, c.Compressors, defaultCompressors, true)
+	svcOpts.codecNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
 	for compressorName := range svcOpts.compressorNames {
-		if _, known := c.compressorImpls[compressorName]; !known {
+		if _, known := m.compressorImpls[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use config.AddCompression to add known algorithms first", compressorName)
 		}
 	}
 
 	if svcOpts.resolver == nil {
-		svcOpts.resolver = c.TypeResolver
+		svcOpts.resolver = m.TypeResolver
 		if svcOpts.resolver == nil {
 			svcOpts.resolver = protoregistry.GlobalTypes
 		}
@@ -185,7 +173,7 @@ func (c *Config) AddService(serviceDesc protoreflect.ServiceDescriptor, opts ...
 	methods := serviceDesc.Methods()
 	for i, length := 0, methods.Len(); i < length; i++ {
 		methodDesc := methods.Get(i)
-		if err := c.addMethod(methodDesc, svcOpts); err != nil {
+		if err := m.registerMethod(handler, methodDesc, svcOpts); err != nil {
 			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
 		}
 	}
@@ -194,7 +182,7 @@ func (c *Config) AddService(serviceDesc protoreflect.ServiceDescriptor, opts ...
 
 // AddCodec adds the given codec implementation.
 //
-// By default, the middleware already understands "proto", "json", and "text" codecs. The
+// By default, the mux already understands "proto", "json", and "text" codecs. The
 // "json" and "text" codecs use default behavior (per MarshalOptions and UnmarshalOptions
 // types in protojson and prototext packages) except that unmarshalling will ignore
 // unrecognized fields.
@@ -202,29 +190,28 @@ func (c *Config) AddService(serviceDesc protoreflect.ServiceDescriptor, opts ...
 // If this is called with an already-known name, the given codec factory replaces the
 // already configured one. This can be used to override the default three codecs with
 // different configuration.
-func (c *Config) AddCodec(name string, newCodec func(TypeResolver) Codec) {
-	c.maybeInit()
-	c.codecImpls[name] = newCodec
+func (m *Mux) AddCodec(name string, newCodec func(TypeResolver) Codec) {
+	m.maybeInit()
+	m.codecImpls[name] = newCodec
 }
 
 // AddCompression adds the given compression algorithm implementation.
 //
-// By default, the middleware already understands "gzip" compression. For
-// compression, this uses the default compression levels (which is closer
-// to the "max speed" level than the "max compression" level).
+// By default, the mux already understands "gzip" compression and uses the default
+// compression level.
 //
 // If this is called with an already-known name, the given implementation
 // replaces any previously configured one. This can be used to override
 // the default "gzip" compression algorithm with a different implementation
-// or settings.
-func (c *Config) AddCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) {
-	c.maybeInit()
-	c.compressorImpls[name] = newCompressor
-	c.decompressorImpls[name] = newDecompressor
+// or compression level.
+func (m *Mux) AddCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) {
+	m.maybeInit()
+	m.compressorImpls[name] = newCompressor
+	m.decompressorImpls[name] = newDecompressor
 }
 
-func (c *Config) addMethod(methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
-	if _, ok := c.methods[methodDesc.FullName()]; ok {
+func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
+	if _, ok := m.methods[methodDesc.FullName()]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodOpts, ok := methodDesc.Options().(*descriptorpb.MethodOptions)
@@ -233,22 +220,23 @@ func (c *Config) addMethod(methodDesc protoreflect.MethodDescriptor, opts servic
 	}
 	methodConf := &methodConfig{
 		descriptor:      methodDesc,
+		handler:         handler,
 		resolver:        opts.resolver,
 		protocols:       opts.protocols,
 		codecNames:      opts.codecNames,
 		compressorNames: opts.compressorNames,
 	}
-	c.methods[methodDesc.FullName()] = methodConf
+	m.methods[methodDesc.FullName()] = methodConf
 	if proto.HasExtension(methodOpts, annotations.E_Http) {
 		httpRule, ok := proto.GetExtension(methodOpts, annotations.E_Http).(*annotations.HttpRule)
 		if !ok {
 			return fmt.Errorf("method %s has unexpected type for google.api.http annotation: %T", methodDesc.FullName(), proto.GetExtension(methodOpts, annotations.E_Http))
 		}
-		if err := c.restRoutes.addRoute(methodConf, httpRule); err != nil {
+		if err := m.restRoutes.addRoute(methodConf, httpRule); err != nil {
 			return fmt.Errorf("failed to add REST route for method %s: %w", methodDesc.FullName(), err)
 		}
 		for i, rule := range httpRule.AdditionalBindings {
-			if err := c.restRoutes.addRoute(methodConf, rule); err != nil {
+			if err := m.restRoutes.addRoute(methodConf, rule); err != nil {
 				return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodDesc.FullName(), err)
 			}
 		}
@@ -256,30 +244,25 @@ func (c *Config) addMethod(methodDesc protoreflect.MethodDescriptor, opts servic
 	return nil
 }
 
-func (c *Config) maybeInit() {
-	c.init.Do(func() {
+func (m *Mux) maybeInit() {
+	m.init.Do(func() {
 		// initialize default codecs and compressors
-		c.codecImpls = map[string]func(res TypeResolver) Codec{
+		m.codecImpls = map[string]func(res TypeResolver) Codec{
 			CodecProto: DefaultProtoCodec,
 			CodecJSON:  DefaultJSONCodec,
 		}
-		c.compressorImpls = map[string]func() connect.Compressor{
+		m.compressorImpls = map[string]func() connect.Compressor{
 			CompressionGzip: DefaultGzipCompressor,
 		}
-		c.decompressorImpls = map[string]func() connect.Decompressor{
+		m.decompressorImpls = map[string]func() connect.Decompressor{
 			CompressionGzip: DefaultGzipDecompressor,
 		}
-		c.methods = map[protoreflect.FullName]*methodConfig{}
+		m.methods = map[protoreflect.FullName]*methodConfig{}
 	})
 }
 
-func (c *Config) apply(handler http.Handler) http.Handler {
-	// TODO
-	return handler
-}
-
 // ServiceOption is an option for configuring how the middleware will handle
-// requests to a particular RPC service. See Config.AddService.
+// requests to a particular RPC service. See Config.RegisterService.
 type ServiceOption interface {
 	apply(*serviceOptions)
 }
@@ -364,30 +347,15 @@ func WithTypeResolver(resolver TypeResolver) ServiceOption {
 	})
 }
 
-// computeSet returns a resolved set of values of type T, preferring the given values if
-// valid, then the given defaults if valid, and finally the given backupDefaults.
+// TypeResolver can resolve message and extension types and is used to instantiate
+// messages as needed for the middleware to serialize/de-serialize request and
+// response payloads.
 //
-// An empty or nil set is invalid (so empty or nil values means fallback to defaults;
-// similarly, an empty or nil defaults means fallback to backupDefaults), unless
-// allowEmpty is true, in which case an empty set is okay but nil is invalid.
-func computeSet[T comparable](values map[T]struct{}, defaults []T, backupDefaults map[T]struct{}, allowEmpty bool) map[T]struct{} {
-	if len(values) > 0 {
-		// non-empty is always okay
-		return values
-	}
-	if allowEmpty && values != nil {
-		// empty but nil is okay
-		return values
-	}
-	if (allowEmpty && defaults == nil) || (!allowEmpty && len(defaults) == 0) {
-		// defaults is not valid either
-		return backupDefaults
-	}
-	result := make(map[T]struct{}, len(defaults))
-	for _, t := range defaults {
-		result[t] = struct{}{}
-	}
-	return result
+// Implementations of this interface should be comparable, so they can be used as
+// map keys. Typical implementations are pointers to structs, which are suitable.
+type TypeResolver interface {
+	protoregistry.MessageTypeResolver
+	protoregistry.ExtensionTypeResolver
 }
 
 // Protocol represents an on-the-wire protocol for RPCs.
@@ -452,7 +420,34 @@ type serviceOptions struct {
 
 type methodConfig struct {
 	descriptor                  protoreflect.MethodDescriptor
+	handler                     http.Handler
 	resolver                    TypeResolver
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
+}
+
+// computeSet returns a resolved set of values of type T, preferring the given values if
+// valid, then the given defaults if valid, and finally the given backupDefaults.
+//
+// An empty or nil set is invalid (so empty or nil values means fallback to defaults;
+// similarly, an empty or nil defaults means fallback to backupDefaults), unless
+// allowEmpty is true, in which case an empty set is okay but nil is invalid.
+func computeSet[T comparable](values map[T]struct{}, defaults []T, backupDefaults map[T]struct{}, allowEmpty bool) map[T]struct{} {
+	if len(values) > 0 {
+		// non-empty is always okay
+		return values
+	}
+	if allowEmpty && values != nil {
+		// empty but nil is okay
+		return values
+	}
+	if (allowEmpty && defaults == nil) || (!allowEmpty && len(defaults) == 0) {
+		// defaults is not valid either
+		return backupDefaults
+	}
+	result := make(map[T]struct{}, len(defaults))
+	for _, t := range defaults {
+		result[t] = struct{}{}
+	}
+	return result
 }
