@@ -104,31 +104,46 @@ type clientProtocolHandler interface {
 	acceptsStreamType(connect.StreamType) bool
 	allowsGetRequests() bool
 
+	// Extracts relevant request metadata from the given headers to
+	// determine the codec (aka sub-format), compression (aka encoding),
+	// timeout, etc. The relevant headers are interpreted into the
+	// returned requestMeta and also *removed* from the given headers.
 	extractProtocolRequestHeaders(http.Header) (requestMeta, error)
+	// Encodes the given responseMeta as headers into the given target
+	// headers. If provided, allowedCompression should be used instead
+	// of meta.allowedCompression when adding "accept-encoding" headers.
 	addProtocolResponseHeaders(meta responseMeta, target http.Header, allowedCompression []string)
+	// Encodes the given final disposition of the RPC to the given
+	// writer. It can also return any trailers to add to the response.
+	// Some protocols may ignore the writer, some will return no
+	// trailers.
 	encodeEnd(responseEnd, io.Writer) (http.Header, error)
 
+	// String returns a human-readable name/description of protocol.
 	String() string
 }
 
-// backendProtocolHandler handles the protocol used by the server.
+// serverProtocolHandler handles the protocol used by the server.
 // This allows the middleware to send a valid request to the server
 // and understand the responses it sends.
 type serverProtocolHandler interface {
 	protocol() Protocol
 
+	// Encodes the given requestMeta has headers into the given target
+	// headers. If provided, allowedCompression should be used instead
+	// of meta.allowedCompression when adding "accept-encoding" headers.
 	addProtocolRequestHeaders(meta requestMeta, target http.Header, allowedCompression []string)
-	// returns the response metadata from the headers; if the second
+	// Returns the response metadata from the headers; if the second
 	// arg is non-nil, the caller should supply the body to it along
 	// with the responseMeta.end to finish processing the end of the
 	// response.
 	extractProtocolResponseHeaders(int, http.Header) (responseMeta, func(io.Reader, *responseEnd), error)
-
 	// Called at end of RPC if responseEnd has not been returned by
 	// extractProtocolResponseHeaders or from an enveloped message
 	// in the response body whose trailer bit is set.
 	extractEndFromTrailers(*operation, http.Header) (responseEnd, error)
 
+	// String returns a human-readable name/description of protocol.
 	String() string
 }
 
@@ -136,9 +151,13 @@ type serverProtocolHandler interface {
 // by clientProtocolHandler and serverProtocolHandler instances
 // whose protocol uses an envelope around messages.
 type envelopedProtocolHandler interface {
-	readEnvelope([5]byte) (envelope, error)
-	writeEnvelope(envelope) [5]byte
+	decodeEnvelope([5]byte) (envelope, error)
+	encodeEnvelope(envelope) [5]byte
 
+	// If a stream includes an envelope with the trailer bit
+	// set, this is called to parse the message contents. The
+	// given reader will be decompressed (even if the envelope
+	// had its compressed bit set).
 	decodeEndFromMessage(*operation, io.Reader) (responseEnd, error)
 }
 
@@ -147,8 +166,18 @@ type envelopedProtocolHandler interface {
 // needs to be computed in a custom manner. By default (for
 // protocols that do not implement this), the request line is
 // "POST /<service>/<method>".
+//
+// This is necessary for REST and Connect GET requests, which
+// can encode parts of the request data into the URI path
+// or query string parameters.
 type requestLineBuilder interface {
+	// Returns true if the request message must be known in order
+	// to compute the request line.
 	requiresMessageToProvideRequestLine(*operation) bool
+	// Computes the components of the request line and also
+	// indicates if the request will include a body or not. The
+	// body can be omitted for requests where *all* request
+	// information is supplied in the request line.
 	requestLine(op *operation, req proto.Message) (urlPath, queryParams, method string, includeBody bool, err error)
 }
 
@@ -157,10 +186,27 @@ type requestLineBuilder interface {
 // need to be assembled from sources other than just decoding
 // the request or response body.
 type clientBodyPreparer interface {
+	// Returns true if the request message needs to be prepared.
+	// If it can simply be read and decoded from the request body
+	// then it does not need to be prepared. But if the message
+	// data must be merged with parts of the request path or
+	// query param (etc), it must return true.
 	requestNeedsPrep(*operation) bool
-	prepareRequest(*operation, []byte) (proto.Message, error)
+	// Combines the given request body data with other info to
+	// produce a request message. The given bytes represent the
+	// uncompressed request body. The given message should be
+	// populated if/when the method returns nil.
+	prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error
+	// Returns true if the response message needs to be prepared.
+	// If it can simply be encoded into the response body then it
+	// does not need to be prepared. But if the message data must
+	// be wrapped or some parts discarded, the method must return
+	// true.
 	responseNeedsPrep(*operation) bool
-	prepareResponse(*operation, proto.Message) ([]byte, error)
+	// Produces the request body for the given message. The data
+	// should be appended to the given slice (which will be empty
+	// but have capacity to accept data) to reduce allocations.
+	prepareMarshalledResponse(op *operation, base []byte, src proto.Message) ([]byte, error)
 }
 
 // serverBodyPreparer is an optional interface implemented by
@@ -168,23 +214,26 @@ type clientBodyPreparer interface {
 // need to be assembled from sources other than just decoding
 // the request or response body.
 type serverBodyPreparer interface {
-	// requestNeedsPrep returns true if the actual HTTP request body is not the request message.
-	// So if the request must be composed using the request body and/or other sources, this
-	// returns true.
+	// These methods are reversed from clientBodyPreparer: for the
+	// server side, we have a request message and must produce a
+	// body; and we have a response body and must extract from that
+	// a message.
 	requestNeedsPrep(*operation) bool
-	// prepareRequest receives the request body as well as the current decoders so it can
-	// process it and assemble a request message.
-	prepareRequest(*operation, proto.Message) ([]byte, error)
+	prepareMarshalledRequest(op *operation, base []byte, src proto.Message) ([]byte, error)
 	responseNeedsPrep(*operation) bool
-	prepareResponse(*operation, []byte) (proto.Message, error)
+	prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error
 }
 
+// envelope is an exploded representation of the 5-byte preamble that appears
+// on the wire for enveloped protocols. This form is protocol-agnostic.
 type envelope struct {
 	trailer    bool
 	compressed bool
 	length     uint32
 }
 
+// requestMeta represents the metadata found in request headers that are
+// protocol-specific.
 type requestMeta struct {
 	timeout           time.Duration
 	codec             string
@@ -192,6 +241,8 @@ type requestMeta struct {
 	acceptCompression []string
 }
 
+// responseMeta represents the metadata found in response headers that are
+// protocol-specific.
 type responseMeta struct {
 	end               *responseEnd
 	codec             string
@@ -199,8 +250,16 @@ type responseMeta struct {
 	acceptCompression []string
 }
 
+// responseEnd is a protocol-agnostic representation of the disposition
+// of an RPC.
 type responseEnd struct {
-	httpCode int
 	err      *connect.Error
 	trailers http.Header
+
+	// httpCode is only populated when the responseEnd source contained
+	// such a code. This happens when the responseEnd comes from the
+	// response headers, which include the status line. It can also
+	// occur for REST streaming responses, where the final message may
+	// include both gRPC and HTTP codes.
+	httpCode int
 }
