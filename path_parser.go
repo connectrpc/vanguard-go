@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // pathSegments holds the path segments for a method.
@@ -61,49 +62,48 @@ type pathVariable struct {
 func parsePathTemplate(template string) (
 	pathSegments, []pathVariable, error,
 ) {
-	parser := &parser{lex: lexer{input: template}}
+	parser := &pathParser{scan: pathScanner{input: template}}
 	if err := parser.parseTemplate(); err != nil {
 		return pathSegments{}, nil, err
 	}
 	return parser.segments, parser.variables, nil
 }
 
-// parser holds the state for the recursive descent path template parser.
-type parser struct {
-	lex            lexer           // lexer for the input.
+// pathParser holds the state for the recursive descent path template parser.
+type pathParser struct {
+	scan           pathScanner     // scanner for the input.
 	seenVars       map[string]bool // set of field paths.
 	seenDoubleStar bool            // true if we've seen a double star wildcard.
 	segments       pathSegments    // output segments.
 	variables      []pathVariable  // output variables.
 }
 
-func (p *parser) currentChar() string {
-	str := "EOF"
-	if char := p.lex.current(); char != eof {
-		str = strconv.QuoteRune(char)
+func (p *pathParser) currentChar() string {
+	if char := p.scan.current(); char != eof {
+		return strconv.QuoteRune(char)
 	}
-	return str
+	return "EOF"
 }
-func (p *parser) errSyntax(msg string) error {
-	return fmt.Errorf("syntax error at column %v: %s", p.lex.pos, msg)
+func (p *pathParser) errSyntax(msg string) error {
+	return fmt.Errorf("syntax error at column %v: %s", p.scan.pos, msg)
 }
-func (p *parser) errUnexpected() error {
+func (p *pathParser) errUnexpected() error {
 	return p.errSyntax(fmt.Sprintf("unexpected %s", p.currentChar()))
 }
-func (p *parser) errExpected(expected rune) error {
+func (p *pathParser) errExpected(expected rune) error {
 	return p.errSyntax(fmt.Sprintf("expected %q, got %s", expected, p.currentChar()))
 }
 
-func (p *parser) parseTemplate() error {
-	if !p.lex.consume('/') {
+func (p *pathParser) parseTemplate() error {
+	if !p.scan.consume('/') {
 		return p.errExpected('/') // empty path is not allowed.
 	}
 	if err := p.parseSegments(); err != nil {
 		return err
 	}
-	switch p.lex.next() {
+	switch p.scan.next() {
 	case ':':
-		p.lex.discard()
+		p.scan.discard()
 		return p.parseVerb()
 	case eof:
 		return nil
@@ -112,28 +112,28 @@ func (p *parser) parseTemplate() error {
 	}
 }
 
-func (p *parser) parseVerb() error {
+func (p *pathParser) parseVerb() error {
 	literal, err := p.parseLiteral()
 	if err != nil {
 		return err
 	}
 	p.segments.verb = literal
-	if !p.lex.consume(eof) {
+	if !p.scan.consume(eof) {
 		return p.errUnexpected()
 	}
 	return nil
 }
 
-func (p *parser) parseSegments() error {
+func (p *pathParser) parseSegments() error {
 	for {
 		if err := p.parseSegment(); err != nil {
 			return err
 		}
-		if p.lex.next() != '/' {
-			p.lex.backup()
+		if p.scan.next() != '/' {
+			p.scan.backup()
 			return nil
 		}
-		p.lex.discard()
+		p.scan.discard()
 		if p.seenDoubleStar {
 			return errors.New("double wildcard '**' must be the final path segment")
 		}
@@ -141,10 +141,10 @@ func (p *parser) parseSegments() error {
 }
 
 // parseLiteral unescapes a URL path segment.
-func (p *parser) parseLiteral() (string, error) {
-	literal := p.lex.captureRun(isLiteral)
+func (p *pathParser) parseLiteral() (string, error) {
+	literal := p.scan.captureRun(isLiteral)
 	if literal == "" {
-		p.lex.next()
+		p.scan.next()
 		return "", p.errUnexpected()
 	}
 	unescaped, err := url.PathUnescape(literal)
@@ -153,21 +153,21 @@ func (p *parser) parseLiteral() (string, error) {
 	}
 	return unescaped, nil
 }
-func (p *parser) parseSegment() error {
+func (p *pathParser) parseSegment() error {
 	var segment string
-	switch p.lex.next() {
+	switch p.scan.next() {
 	case '*':
-		if p.lex.next() == '*' {
+		if p.scan.next() == '*' {
 			p.seenDoubleStar = true
 		} else {
-			p.lex.backup()
+			p.scan.backup()
 		}
-		segment = p.lex.capture()
+		segment = p.scan.capture()
 	case '{':
-		p.lex.discard()
+		p.scan.discard()
 		return p.parseVariable()
 	default:
-		if !isLiteral(p.lex.current()) {
+		if !isLiteral(p.scan.current()) {
 			return p.errSyntax("expected path value")
 		}
 		literal, err := p.parseLiteral()
@@ -179,11 +179,25 @@ func (p *parser) parseSegment() error {
 	p.segments.path = append(p.segments.path, segment)
 	return nil
 }
-func (p *parser) parseVariable() error {
-	fieldPath := p.lex.captureRun(isFieldPath)
-	if fieldPath == "" {
-		p.lex.next()
-		return p.errUnexpected()
+
+func (p *pathParser) parseFieldPath() (string, error) {
+	for {
+		if !unicode.IsLetter(p.scan.next()) {
+			return "", p.errUnexpected()
+		}
+		for isIdent(p.scan.next()) {
+			continue
+		}
+		if p.scan.current() != '.' {
+			p.scan.backup()
+			return p.scan.capture(), nil
+		}
+	}
+}
+func (p *pathParser) parseVariable() error {
+	fieldPath, err := p.parseFieldPath()
+	if err != nil {
+		return err
 	}
 	if p.seenVars[fieldPath] {
 		return fmt.Errorf("duplicate variable %q", fieldPath)
@@ -195,16 +209,16 @@ func (p *parser) parseVariable() error {
 
 	variable := pathVariable{fieldPath: fieldPath, start: len(p.segments.path)}
 
-	switch p.lex.next() {
+	switch p.scan.next() {
 	case '}':
-		p.lex.discard()
+		p.scan.discard()
 		p.segments.path = append(p.segments.path, "*") // default capture.
 	case '=':
-		p.lex.discard()
+		p.scan.discard()
 		if err := p.parseSegments(); err != nil {
 			return err
 		}
-		if !p.lex.consume('}') {
+		if !p.scan.consume('}') {
 			return p.errExpected('}')
 		}
 	default:

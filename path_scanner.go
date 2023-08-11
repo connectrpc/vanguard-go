@@ -9,8 +9,8 @@ import (
 	"unicode/utf8"
 )
 
-// lexer holds the state of the scanner.
-type lexer struct {
+// pathScanner holds the state of the scanner.
+type pathScanner struct {
 	input string // the string being scanned.
 	start int    // start position of this token.
 	pos   int    // current position in the input.
@@ -19,57 +19,49 @@ type lexer struct {
 
 const eof = -1
 
-func (l *lexer) next() rune {
+func (s *pathScanner) next() rune {
 	var char rune
-	if l.pos >= len(l.input) {
-		l.width = 0
+	if s.pos >= len(s.input) {
+		s.width = 0
 		return eof
 	}
-	if c := l.input[l.pos]; c < utf8.RuneSelf {
-		l.width = 1
-		char = rune(c)
-	} else {
-		char, l.width = utf8.DecodeRuneInString(l.input[l.pos:])
-	}
-	l.pos += l.width
+	char, s.width = utf8.DecodeRuneInString(s.input[s.pos:])
+	s.pos += s.width
 	return char
 }
-func (l *lexer) current() rune {
+func (s *pathScanner) current() rune {
 	var char rune
-	switch {
-	case l.width == 0:
-		return 0
-	case l.pos > l.width:
-		char, _ = utf8.DecodeRuneInString(l.input[l.pos-l.width:])
-	default:
-		char, _ = utf8.DecodeRuneInString(l.input)
+	if s.width > 0 {
+		char, _ = utf8.DecodeRuneInString(s.input[s.pos-s.width:])
+	} else if s.pos > len(s.input) {
+		char = eof
 	}
 	return char
 }
-func (l *lexer) backup() {
-	l.pos -= l.width
-	l.width = 0
+func (s *pathScanner) backup() {
+	s.pos -= s.width
+	s.width = 0
 }
-func (l *lexer) captureRun(isValid func(r rune) bool) string {
-	for isValid(l.next()) {
+func (s *pathScanner) captureRun(isValid func(r rune) bool) string {
+	for isValid(s.next()) {
 		continue
 	}
-	l.backup()
-	return l.capture()
+	s.backup()
+	return s.capture()
 }
-func (l *lexer) consume(expected rune) bool {
-	if l.next() == expected {
-		l.discard()
+func (s *pathScanner) consume(expected rune) bool {
+	if s.next() == expected {
+		s.discard()
 		return true
 	}
 	return false
 }
-func (l *lexer) discard() {
-	l.start = l.pos
+func (s *pathScanner) discard() {
+	s.start = s.pos
 }
-func (l *lexer) capture() string {
-	value := l.input[l.start:l.pos]
-	l.discard()
+func (s *pathScanner) capture() string {
+	value := s.input[s.start:s.pos]
+	s.discard()
 	return value
 }
 

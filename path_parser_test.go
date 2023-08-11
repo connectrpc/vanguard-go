@@ -32,6 +32,18 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 			{fieldPath: "def", start: 2, end: -1},
 		},
 	}, {
+		tmpl:        "/{1}",
+		expectedErr: "syntax error at column 3: unexpected '1'",
+	}, {
+		tmpl:        "/{field.1}",
+		expectedErr: "syntax error at column 9: unexpected '1'",
+	}, {
+		tmpl:        "/{_}",
+		expectedErr: "syntax error at column 3: unexpected '_'",
+	}, {
+		tmpl:        "/{-}",
+		expectedErr: "syntax error at column 3: unexpected '-'",
+	}, {
 		tmpl:        "/foo/bar/baz?abc=def",
 		expectedErr: "syntax error at column 13: unexpected '?'", // no query string allowed
 	}, {
