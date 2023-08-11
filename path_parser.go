@@ -10,8 +10,6 @@ import (
 )
 
 // parsePathTemplate parses the given path template into a routePath.
-//
-//nolint:unused
 func parsePathTemplate(path string) (routePath, error) {
 	// TODO
 	_ = path

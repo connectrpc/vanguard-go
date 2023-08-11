@@ -45,6 +45,7 @@ linters:
     - maligned          # readability trumps efficient struct packing
     - nlreturn          # generous whitespace violates house style
     - nosnakecase       # deprecated in https://github.com/golangci/golangci-lint/pull/3065
+    - nonamedreturns    # named returns are fine; it's bare returns that are bad
     - scopelint         # deprecated by author
     - structcheck       # abandoned
     - testpackage       # internal tests are fine
