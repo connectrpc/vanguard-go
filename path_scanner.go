@@ -5,7 +5,6 @@
 package vanguard
 
 import (
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -65,8 +64,14 @@ func (s *pathScanner) capture() string {
 	return value
 }
 
+func isIdentStart(char rune) bool {
+	return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char == '_'
+}
+func isDigit(char rune) bool {
+	return char >= '0' && char <= '9'
+}
 func isIdent(char rune) bool {
-	return unicode.IsLetter(char) || unicode.IsNumber(char) || char == '_' || char == '-'
+	return isIdentStart(char) || isDigit(char)
 }
 func isFieldPath(char rune) bool {
 	return isIdent(char) || char == '.'
@@ -75,5 +80,5 @@ func isLiteral(char rune) bool {
 	// Allow all characters that are allowed in a URL path segment.
 	// Follows [url.PathUnescape](https://golang.org/pkg/net/url/#PathUnescape).
 	// [https://cs.opensource.google/go/go/+/refs/tags/go1.21.0:src/net/url/url.go;l=138]
-	return isFieldPath(char) || char == '%' || char == '~' || char == '$' || char == '&' || char == '+' || char == '=' || char == '@'
+	return isFieldPath(char) || char == '%' || char == '~' || char == '-' || char == '$' || char == '&' || char == '+' || char == '=' || char == '@'
 }

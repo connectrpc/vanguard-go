@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 // pathSegments holds the path segments for a method.
@@ -182,8 +181,8 @@ func (p *pathParser) parseSegment() error {
 
 func (p *pathParser) parseFieldPath() (string, error) {
 	for {
-		if !unicode.IsLetter(p.scan.next()) {
-			return "", p.errUnexpected()
+		if !isIdentStart(p.scan.next()) {
+			return "", p.errSyntax("expected identifier")
 		}
 		for isIdent(p.scan.next()) {
 			continue

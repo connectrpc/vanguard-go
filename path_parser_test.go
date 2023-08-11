@@ -33,16 +33,22 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		},
 	}, {
 		tmpl:        "/{1}",
-		expectedErr: "syntax error at column 3: unexpected '1'",
+		expectedErr: "syntax error at column 3: expected identifier",
 	}, {
 		tmpl:        "/{field.1}",
-		expectedErr: "syntax error at column 9: unexpected '1'",
+		expectedErr: "syntax error at column 9: expected identifier",
 	}, {
-		tmpl:        "/{_}",
-		expectedErr: "syntax error at column 3: unexpected '_'",
+		tmpl:     "/{_}",
+		wantPath: []string{"*"},
+		wantVars: []pathVariable{
+			{fieldPath: "_", start: 0, end: 1},
+		},
 	}, {
 		tmpl:        "/{-}",
-		expectedErr: "syntax error at column 3: unexpected '-'",
+		expectedErr: "syntax error at column 3: expected identifier",
+	}, {
+		tmpl:        "/{field-}",
+		expectedErr: "syntax error at column 8: expected '}', got '-'",
 	}, {
 		tmpl:        "/foo/bar/baz?abc=def",
 		expectedErr: "syntax error at column 13: unexpected '?'", // no query string allowed
