@@ -125,6 +125,18 @@ func TestHTTPRule_EncodeMessage(t *testing.T) {
 		wantQuery: url.Values{
 			"double_list": []string{"2", "3"},
 		},
+	}, {
+		// Map fields are not supported in path templates.
+		input: &testv1.ParameterValues{
+			StringMap: map[string]string{
+				"key1": "value1",
+				"key2": "value2",
+			},
+		},
+		tmpl:      "/v2/mapfields",
+		path:      []string{"v2", "mapfields"},
+		wantPath:  "/v2/mapfields",
+		wantQuery: url.Values{},
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase

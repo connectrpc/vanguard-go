@@ -13,6 +13,7 @@ import (
 )
 
 // encodeMessageAsHTTPRule encodes the given message as a HTTP rule.
+// The path, query, and body are returned.
 //
 //nolint:nonamedreturns
 func encodeMessageAsHTTPRule(
@@ -24,6 +25,10 @@ func encodeMessageAsHTTPRule(
 	segments := make([]string, len(target.path))
 	copy(segments, target.path)
 
+	// Count the number of times each field path is used.
+	// Singular fields can be referenced multiple times.
+	// Repeated fields can be referenced multiple times up to the number of elements.
+	// Map fields are not supported.
 	fieldPathCounts := make(map[string]int)
 
 	// Find variable and set the path segments.
@@ -82,8 +87,9 @@ func encodeMessageAsHTTPRule(
 		pathURL.WriteByte(':')
 		pathURL.WriteString(url.PathEscape(target.verb))
 	}
-
 	path = pathURL.String()
+
+	// Traverse the request body, if any.
 	if target.requestBodyPath != nil {
 		body = input
 	}
@@ -93,6 +99,8 @@ func encodeMessageAsHTTPRule(
 
 	// Exclude the request body path from the query.
 	fieldPathCounts[resolveFieldDescriptorsToPath(target.requestBodyPath)]++
+
+	// Build the query using the remaining fields.
 	query = url.Values{}
 
 	fields := make([]protoreflect.FieldDescriptor, 0, 3)
@@ -102,11 +110,12 @@ func encodeMessageAsHTTPRule(
 		fields = append(fields, field)
 		defer func() { fields = fields[:len(fields)-1] }() // pop
 		fieldPath := resolveFieldDescriptorsToPath(fields)
-
 		fieldIndex := fieldPathCounts[fieldPath]
-		isParameter := isParameterType(field)
-		if !isParameter {
-			if field.Kind() == protoreflect.MessageKind && fieldIndex == 0 {
+
+		if !isParameterType(field) {
+			if field.Kind() == protoreflect.MessageKind &&
+				!field.IsMap() && // ignore map fields
+				fieldIndex == 0 {
 				value.Message().Range(fieldRanger)
 			}
 			return true
@@ -114,8 +123,8 @@ func encodeMessageAsHTTPRule(
 
 		if field.IsList() {
 			listValue := value.List()
-			for i := fieldIndex; i < listValue.Len(); i++ {
-				value := listValue.Get(i)
+			for fieldIndex < listValue.Len() {
+				value := listValue.Get(fieldIndex)
 				encoded, err := marshalFieldValue(field, value)
 				if err != nil {
 					fieldError = err
