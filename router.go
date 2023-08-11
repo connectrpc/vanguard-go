@@ -166,29 +166,7 @@ func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeT
 // header. If both are nil, the path and verb did not match.
 func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
 	if len(path) == 0 {
-		methods := trie.methods
-		if verb != "" {
-			methods = trie.verbs[verb]
-		}
-		target := methods[method]
-		if target != nil {
-			return target, nil
-		}
-		// See if a wildcard method was used
-		target = methods["*"]
-		if target != nil {
-			return target, nil
-		}
-		// Not this trie node. Could be a child with a double-wildcard that matches zero path elements.
-		childDblAst := trie.children["**"]
-		if childDblAst == nil {
-			return nil, methods
-		}
-		target, dblAstMethods := childDblAst.findTarget(nil, verb, method)
-		if target != nil || dblAstMethods != nil {
-			return target, dblAstMethods
-		}
-		return nil, methods
+		return trie.getTarget(verb, method)
 	}
 
 	current := path[0]
@@ -215,6 +193,35 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 		return nil, nil
 	}
 	return childDblAst.findTarget(nil, verb, method)
+}
+
+// getTarget gets the target for the given verb and method from the
+// node trie. It is like findTarget, except that it does not use a
+// path to first descend into a sub-trie.
+func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) {
+	methods := trie.methods
+	if verb != "" {
+		methods = trie.verbs[verb]
+	}
+	target := methods[method]
+	if target != nil {
+		return target, nil
+	}
+	// See if a wildcard method was used
+	target = methods["*"]
+	if target != nil {
+		return target, nil
+	}
+	// Not this trie node. Could be a child with a double-wildcard that matches zero path elements.
+	childDblAst := trie.children["**"]
+	if childDblAst == nil {
+		return nil, methods
+	}
+	target, dblAstMethods := childDblAst.findTarget(nil, verb, method)
+	if target != nil || dblAstMethods != nil {
+		return target, dblAstMethods
+	}
+	return nil, methods
 }
 
 type routeMethods map[string]*routeTarget

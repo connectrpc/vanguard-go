@@ -276,6 +276,8 @@ type httpError struct {
 	headers func(header http.Header)
 }
 
+// operation represents a single HTTP operation, which maps to an incoming HTTP request.
+// It tracks properties needed to implement protocol transformation.
 type operation struct {
 	writer        http.ResponseWriter
 	request       *http.Request
@@ -300,6 +302,7 @@ type operation struct {
 	restTarget *routeTarget
 	restVars   []routeTargetVarMatch
 
+	// these fields memoize the results of type assertions and some method calls
 	clientEnveloper     envelopedProtocolHandler
 	clientPreparer      clientBodyPreparer
 	clientReqNeedsPrep  bool
@@ -469,6 +472,8 @@ func (op *operation) drainBody(body io.ReadCloser) {
 	}
 }
 
+// envelopingReader will translate between envelope styles as data is read.
+// It does not do any decompressing or deserializing of data.
 type envelopingReader struct {
 	op *operation
 }
@@ -483,6 +488,10 @@ func (er envelopingReader) Close() error {
 	panic("implement me")
 }
 
+// transformingReader transforms the data from the original request
+// into a new protocol form as the data is read. It must decompress
+// and deserialize each message and then re-serialize (and optionally
+// recompress) each message.
 type transformingReader struct {
 	op  *operation
 	msg *message
@@ -498,10 +507,18 @@ func (tr *transformingReader) Close() error {
 	panic("implement me")
 }
 
+// responseWriter wraps the original writer and performs the protocol
+// transformation. When headers and data are written to this writer,
+// they may be modified before being written to the underlying writer,
+// which accomplishes the protocol change.
+//
+// When the headers are written, the actual transformation that is
+// needed is determined and a writer decorator created.
 type responseWriter struct {
 	op   *operation
 	code int
-	w    io.Writer
+	// wraps op.writer; initialized after headers are written
+	w io.Writer
 }
 
 func (rw *responseWriter) Header() http.Header {
@@ -526,6 +543,8 @@ func (rw *responseWriter) Flush() {
 	// transforming the response body.
 }
 
+// envelopingWriter will translate between envelope styles as data is
+// written. It does not do any decompressing or deserializing of data.
 type envelopingWriter struct {
 	op *operation
 }
@@ -535,6 +554,10 @@ func (ew envelopingWriter) Write(i []byte) (int, error) {
 	panic("implement me")
 }
 
+// transformingWriter transforms the data from the original response
+// into a new protocol form as the data is written. It must decompress
+// and deserialize each message and then re-serialize (and optionally
+// recompress) each message.
 type transformingWriter struct {
 	op  *operation
 	msg *message
@@ -545,6 +568,14 @@ func (tw *transformingWriter) Write(i []byte) (int, error) {
 	panic("implement me")
 }
 
+// pipeWriter transforms the data from the original response into a new
+// protocol form as the data is written. Its main difference from
+// transformingWriter is that it must use an io.Pipe and a goroutine
+// in order to consume the response stream and identify message
+// boundaries. This is needed to handle non-enveloped server streams
+// (i.e. REST protocol), where the response is a concatenation of
+// the JSON values for each message. (Only needed for REST server
+// streams.)
 type pipeWriter struct {
 	op          *operation
 	pipe        *io.PipeWriter
@@ -562,14 +593,24 @@ type pipeTransformer struct {
 	msg  *message
 }
 
+// message represents a single message in an RPC stream. It can be re-used in a stream,
+// so we only allocate one and then re-use it for subsequent messages (if stream has
+// more than one).
 type message struct {
+	// the message type for this stream
 	msgPrototype proto.Message
-	// compressed is the compressed bytes; data is the serialized but uncompressed bytes
-	compressed, data *bytes.Buffer
-	// msg is the plain message
-	msg proto.Message
 	// flags indicating if compressed and data should be preserved after use
 	saveCompressed, saveData bool
+
+	// compressed is the compressed bytes; may be nil if the contents have
+	// already been decompressed into the data field.
+	compressed *bytes.Buffer
+	// data is the serialized but uncompressed bytes; may be nil if the
+	// contents have not yet been decompressed or have been de-serialized
+	// into the msg field.
+	data *bytes.Buffer
+	// msg is the plain message; nil if the message has not yet been decoded.
+	msg proto.Message
 }
 
 // release releases all buffers associated with message to the given pool.
