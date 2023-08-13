@@ -24,7 +24,7 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	}{{
 		// no error, but lots of encoding for special/reserved characters
 		tmpl:     "/my%2Fcool+blog&about%2Cstuff%5Bwat%5D/{var={abc}/{def=**}}:baz",
-		wantPath: []string{"my/cool+blog&about,stuff[wat]", "*", "**"},
+		wantPath: []string{"my%2Fcool+blog&about%2Cstuff%5Bwat%5D", "*", "**"},
 		wantVerb: "baz",
 		wantVars: []pathVariable{
 			{fieldPath: "var", start: 1, end: -1},
@@ -70,7 +70,7 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	}, {
 		tmpl:     "/foo/bar:baz%12xyz%abcde",
 		wantPath: []string{"foo", "bar"},
-		wantVerb: "baz\x12xyz\xabcde",
+		wantVerb: "baz%12xyz%ABcde",
 	}, {
 		tmpl:     "/{hello}/world",
 		wantPath: []string{"*", "world"},
@@ -210,6 +210,13 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 			{fieldPath: "short.ba", start: 7, end: 8},
 			{fieldPath: "short.bb", start: 9, end: 10},
 			{fieldPath: "last", start: 11, end: -1},
+		},
+	}, {
+		tmpl:     "/foo%2Fbar/%2A/%2A%2a/{starstar=%2A%2a/**}:%2c",
+		wantPath: []string{"foo%2Fbar", "%2A", "%2A%2A", "%2A%2A", "**"},
+		wantVerb: "%2C",
+		wantVars: []pathVariable{
+			{fieldPath: "starstar", start: 3, end: -1},
 		},
 	}}
 	for _, testCase := range testCases {

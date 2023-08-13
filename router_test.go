@@ -168,6 +168,30 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 	}
 }
 
+func BenchmarkTrieMatch(b *testing.B) {
+	trie := initTrie(b)
+	path := strings.Join([]string{
+		"foo", "blah", "A", "B", "C", "foo", "D", "E", "F", "G", "foo",
+		"H", "I", "J", "K", "L", "M",
+	}, "/") + ":details"
+
+	var (
+		method *routeTarget
+		vars   []routeTargetVarMatch
+	)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		method, vars = trie.match(path, http.MethodPost)
+		if method == nil {
+			b.Fatal("method not found")
+		}
+	}
+	b.StopTimer()
+	assert.NotNil(b, method)
+	assert.Len(b, vars, 10)
+}
+
 //nolint:gochecknoglobals
 var routes = []string{
 	"/foo/bar/baz/buzz",
@@ -179,14 +203,15 @@ var routes = []string{
 	"/foo/bar/*/{thing.id}/{cat=**}:cancel",
 	"/foo/bob/{book_id={author}/{isbn}/*}/details",
 	"/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
+	"/foo%2Fbar/%2A/%2A%2a/{starstar=%2A%2a/**}:%2c",
 }
 
-func initTrie(t *testing.T) *routeTrie {
-	t.Helper()
+func initTrie(tb testing.TB) *routeTrie {
+	tb.Helper()
 	var trie routeTrie
 	for _, route := range routes {
 		segments, variables, err := parsePathTemplate(route)
-		require.NoError(t, err)
+		require.NoError(tb, err)
 
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
 			target, err := makeTarget(&methodConfig{
@@ -194,9 +219,9 @@ func initTrie(t *testing.T) *routeTrie {
 					name: fmt.Sprintf("%s %s", method, route),
 				},
 			}, "*", "*", variables)
-			require.NoError(t, err)
+			require.NoError(tb, err)
 			err = trie.insert(method, target, segments)
-			require.NoError(t, err)
+			require.NoError(tb, err)
 		}
 	}
 	return &trie

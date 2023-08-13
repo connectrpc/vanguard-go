@@ -139,7 +139,7 @@ func (p *pathParser) parseSegments() error {
 	}
 }
 
-// parseLiteral unescapes a URL path segment.
+// parseLiteral parses a URL path segment in URL path escaped form.
 func (p *pathParser) parseLiteral() (string, error) {
 	literal := p.scan.captureRun(isLiteral)
 	if literal == "" {
@@ -150,8 +150,9 @@ func (p *pathParser) parseLiteral() (string, error) {
 	if err != nil {
 		return "", p.errSyntax(err.Error())
 	}
-	return unescaped, nil
+	return url.PathEscape(unescaped), nil
 }
+
 func (p *pathParser) parseSegment() error {
 	var segment string
 	switch p.scan.next() {
@@ -193,6 +194,7 @@ func (p *pathParser) parseFieldPath() (string, error) {
 		}
 	}
 }
+
 func (p *pathParser) parseVariable() error {
 	fieldPath, err := p.parseFieldPath()
 	if err != nil {
