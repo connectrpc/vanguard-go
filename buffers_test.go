@@ -6,6 +6,7 @@ package vanguard
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -67,7 +68,9 @@ func TestMarshal(t *testing.T) {
 	msg := &testv1.ParameterValues{StringValue: "hello world"}
 
 	assert.NoError(t, marshal(buf, msg, codec))
-	assert.Equal(t, `{"stringValue":"hello world"}`, buf.String())
+	dst := &bytes.Buffer{}
+	assert.NoError(t, json.Compact(dst, buf.Bytes()))
+	assert.Equal(t, `{"stringValue":"hello world"}`, dst.String())
 
 	out := &testv1.ParameterValues{}
 	assert.NoError(t, unmarshal(buf, out, codec))
