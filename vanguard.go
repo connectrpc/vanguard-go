@@ -89,7 +89,9 @@ type Mux struct {
 	// will be [protoregistry.GlobalTypes].
 	TypeResolver TypeResolver
 
-	init              sync.Once
+	init sync.Once
+	//nolint:unused
+	buffers           bufferPool
 	codecImpls        map[string]func(TypeResolver) Codec
 	compressorImpls   map[string]func() connect.Compressor
 	decompressorImpls map[string]func() connect.Decompressor
