@@ -10,27 +10,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestRouteTrie_Insert(t *testing.T) {
 	t.Parallel()
-	trie := initTrie(t)
-
-	// TODO: verify properties of the constructed trie to make sure it looks correct
-
-	// Inserting redundant rules returns existing target
-	for _, route := range routes {
-		target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", http.MethodGet, route)}}}
-		_, err := indexVars(target, route, 0, map[string]struct{}{})
-		require.NoError(t, err)
-		existing, err := trie.insert(newStack(route), http.MethodGet, target)
-		require.NoError(t, err)
-		require.NotNil(t, existing)
-		require.NotSame(t, existing, target)
-		require.Equal(t, existing, target)
-	}
+	_ = initTrie(t)
 }
 
 func TestRouteTrie_FindTarget(t *testing.T) {
@@ -158,14 +145,14 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 					vars := computeVarValues(testCase.path, target)
 					require.Equal(t, len(testCase.expectedVars), len(vars))
 					for _, varMatch := range vars {
-						names := make([]string, len(varMatch.varPath))
-						for i, fld := range varMatch.varPath {
+						names := make([]string, len(varMatch.fields))
+						for i, fld := range varMatch.fields {
 							names[i] = string(fld.Name())
 						}
 						name := strings.Join(names, ".")
 						expectedValue, ok := testCase.expectedVars[name]
-						require.True(t, ok)
-						require.Equal(t, expectedValue, varMatch.value)
+						assert.True(t, ok, name)
+						require.Equal(t, expectedValue, varMatch.value, name)
 					}
 				})
 			}
@@ -182,102 +169,34 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 }
 
 //nolint:gochecknoglobals
-var routes = []routePath{
-	// /foo/bar/baz/buzz
-	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "baz"}, {segment: "buzz"},
-	},
-	// /foo/bar/{name}
-	{
-		{segment: "foo"}, {segment: "bar"},
-		{variable: routePathVar{varPath: "name"}},
-	},
-	// /foo/bar/{name}/baz/{child}
-	{
-		{segment: "foo"}, {segment: "bar"},
-		{variable: routePathVar{varPath: "name"}},
-		{segment: "baz"},
-		{variable: routePathVar{varPath: "child"}},
-	},
-	// /foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}
-	{
-		{segment: "foo"}, {segment: "bar"},
-		{variable: routePathVar{varPath: "name"}},
-		{segment: "baz"},
-		{variable: routePathVar{varPath: "child.id"}},
-		{segment: "buzz"},
-		{variable: routePathVar{varPath: "child.thing.id"}},
-	},
-	// /foo/bar/*/{thing.id}/{cat=**}
-	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-		{variable: routePathVar{varPath: "thing.id"}},
-		{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-	},
-	// /foo/bar/*/{thing.id}/{cat=**}:do
-	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-		{variable: routePathVar{varPath: "thing.id"}},
-		{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-		{verb: "do"},
-	},
-	// /foo/bar/*/{thing.id}/{cat=**}:cancel
-	{
-		{segment: "foo"}, {segment: "bar"}, {segment: "*"},
-		{variable: routePathVar{varPath: "thing.id"}},
-		{variable: routePathVar{varPath: "cat", segments: routePath{{segment: "**"}}}},
-		{verb: "cancel"},
-	},
-	// /foo/bob/{book_id={author}/{isbn}/*}/details
-	{
-		{segment: "foo"}, {segment: "bob"},
-		{variable: routePathVar{varPath: "book_id", segments: routePath{
-			{variable: routePathVar{varPath: "author"}},
-			{variable: routePathVar{varPath: "isbn"}},
-			{segment: "*"},
-		}}},
-		{segment: "details"},
-	},
-	// /foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details
-	{
-		{segment: "foo"}, {segment: "blah"},
-		{variable: routePathVar{varPath: "longest_var", segments: routePath{
-			{variable: routePathVar{varPath: "long_var.a", segments: routePath{
-				{variable: routePathVar{varPath: "medium.a", segments: routePath{
-					{variable: routePathVar{varPath: "short.aa"}},
-					{segment: "*"},
-					{variable: routePathVar{varPath: "short.ab"}},
-					{segment: "foo"},
-				}}},
-				{segment: "*"},
-			}}},
-			{variable: routePathVar{varPath: "long_var.b", segments: routePath{
-				{variable: routePathVar{varPath: "medium.b", segments: routePath{
-					{variable: routePathVar{varPath: "short.ba"}},
-					{segment: "*"},
-					{variable: routePathVar{varPath: "short.bb"}},
-					{segment: "foo"},
-				}}},
-				{variable: routePathVar{varPath: "last", segments: routePath{
-					{segment: "**"},
-				}}},
-			}}},
-		}}},
-		{verb: "details"},
-	},
+var routes = []string{
+	"/foo/bar/baz/buzz",
+	"/foo/bar/{name}",
+	"/foo/bar/{name}/baz/{child}",
+	"/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
+	"/foo/bar/*/{thing.id}/{cat=**}",
+	"/foo/bar/*/{thing.id}/{cat=**}:do",
+	"/foo/bar/*/{thing.id}/{cat=**}:cancel",
+	"/foo/bob/{book_id={author}/{isbn}/*}/details",
+	"/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
 }
 
 func initTrie(t *testing.T) *routeTrie {
 	t.Helper()
 	var trie routeTrie
 	for _, route := range routes {
+		segments, variables, err := parsePathTemplate(route)
+		require.NoError(t, err)
+
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			target := &routeTarget{config: &methodConfig{descriptor: &fakeMethodDescriptor{name: fmt.Sprintf("%s %s", method, route)}}}
-			_, err := indexVars(target, route, 0, map[string]struct{}{})
+			target, err := makeTarget(&methodConfig{
+				descriptor: &fakeMethodDescriptor{
+					name: fmt.Sprintf("%s %s", method, route),
+				},
+			}, "*", "*", variables)
 			require.NoError(t, err)
-			existing, err := trie.insert(newStack(route), method, target)
+			err = trie.insert(method, target, segments)
 			require.NoError(t, err)
-			require.Nil(t, existing)
 		}
 	}
 	return &trie
