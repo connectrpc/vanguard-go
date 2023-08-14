@@ -12,6 +12,7 @@ import (
 // Codec is a message encoding format. It handles unmarshalling
 // messages from bytes and back.
 type Codec interface {
+	Name() string
 	MarshalAppend(b []byte, msg proto.Message) ([]byte, error)
 	Unmarshal(bytes []byte, msg proto.Message) error
 }
@@ -36,6 +37,10 @@ func DefaultJSONCodec(res TypeResolver) Codec {
 
 type protoCodec proto.UnmarshalOptions
 
+func (p *protoCodec) Name() string {
+	return CodecProto
+}
+
 func (p *protoCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(b, msg)
 }
@@ -47,6 +52,10 @@ func (p *protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 type jsonCodec struct {
 	m protojson.MarshalOptions
 	u protojson.UnmarshalOptions
+}
+
+func (p *jsonCodec) Name() string {
+	return CodecJSON
 }
 
 func (p *jsonCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {

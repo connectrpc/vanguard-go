@@ -119,10 +119,22 @@ func (trie *routeTrie) insert(method string, target *routeTarget, segments pathS
 
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
-//
-//nolint:unused
-func (trie *routeTrie) match(req *http.Request) (*routeTarget, []routeTargetVarMatch) {
-	path := strings.Split(req.URL.Path, "/")
+func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
+	// TODO: Not checking if path ends with "/" means we accept missing final segment
+	//       for both * and **. Is that right? Makes sense for **, but maybe not for *.
+	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == ':' {
+		// TODO: is this how grpc-gateway works? Is it lenient and forgives trailing slash
+		//       or absence of leading slash?
+		// if it doesn't start with "/" or if it ends with "/" it won't match
+		return nil, nil, nil
+	}
+	uriPath = uriPath[1:] // skip the leading slash
+
+	// TODO: we may want a custom Split so that we can pool the resulting slices
+	//       and reduce allocations here; in fact, we could even skip the Split
+	//       and just pass the uriPath string to findTarget, which must find
+	//       the next slash and split into car/cdr (no allocation required).
+	path := strings.Split(uriPath, "/")
 	var verb string
 	if len(path) > 0 {
 		lastElement := path[len(path)-1]
@@ -131,45 +143,41 @@ func (trie *routeTrie) match(req *http.Request) (*routeTarget, []routeTargetVarM
 			verb = lastElement[pos+1:]
 		}
 	}
-	target := trie.findTarget(path, verb, req.Method)
+	target, methods := trie.findTarget(path, verb, httpMethod)
 	if target == nil {
-		return nil, nil
+		return nil, nil, methods
 	}
-	return target, computeVarValues(path, target)
+	// TODO: instead of []routeTargetMatch, we may want a different data structure
+	//       that doesn't need to allocate slices but instead retrieves substrings
+	//       of uriPath on demand.
+	return target, computeVarValues(path, target), nil
 }
 
-func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarget {
+// findTarget finds the target for the given path components, verb, and method.
+// The method either returns a target OR the set of methods for the given path
+// and verb. If the target is non-nil, the request was matched. If the target
+// is nil but methods are non-nil, the path and verb matched a route, but not
+// the method. This can be used to send back a well-formed "Allow" response
+// header. If both are nil, the path and verb did not match.
+func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
 	if len(path) == 0 {
-		methods := trie.methods
-		if verb != "" {
-			methods = trie.verbs[verb]
-		}
-		target := methods[method]
-		if target != nil {
-			return target
-		}
-		// Could be a double-wildcard that matches zero path elements
-		childDblAst := trie.children["**"]
-		if childDblAst != nil {
-			return childDblAst.findTarget(nil, verb, method)
-		}
-		return nil
+		return trie.getTarget(verb, method)
 	}
 
 	current := path[0]
 	path = path[1:]
 
 	if child := trie.children[current]; child != nil {
-		target := child.findTarget(path, verb, method)
-		if target != nil {
-			return target
+		target, methods := child.findTarget(path, verb, method)
+		if target != nil || methods != nil {
+			return target, methods
 		}
 	}
 
 	if childAst := trie.children["*"]; childAst != nil {
-		target := childAst.findTarget(path, verb, method)
-		if target != nil {
-			return target
+		target, methods := childAst.findTarget(path, verb, method)
+		if target != nil || methods != nil {
+			return target, methods
 		}
 	}
 
@@ -177,9 +185,34 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 	// So it consumes all remaining path elements.
 	childDblAst := trie.children["**"]
 	if childDblAst == nil {
-		return nil
+		return nil, nil
 	}
 	return childDblAst.findTarget(nil, verb, method)
+}
+
+// getTarget gets the target for the given verb and method from the
+// node trie. It is like findTarget, except that it does not use a
+// path to first descend into a sub-trie.
+func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) {
+	methods := trie.methods
+	if verb != "" {
+		methods = trie.verbs[verb]
+	}
+	target := methods[method]
+	if target != nil {
+		return target, nil
+	}
+	// See if a wildcard method was used
+	target = methods["*"]
+	if target != nil {
+		return target, nil
+	}
+	// TODO: If final segment is ** and nothing is provided that matches, the request path should
+	//       have trailing slash. For example, if the pattern is "foo/bar/**", an empty match
+	//       should look like "foo/bar/". However, *should* it support having no trailing slash?
+	//       For example, should pattern "foo/bar/**" allow "foo/bar"? If so, we'd need to do a
+	//       little more work here, to see if trie has a ** child that has a matching method.
+	return nil, methods
 }
 
 type routeMethods map[string]*routeTarget

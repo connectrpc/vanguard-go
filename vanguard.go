@@ -7,6 +7,7 @@ package vanguard
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -89,12 +90,11 @@ type Mux struct {
 	// will be [protoregistry.GlobalTypes].
 	TypeResolver TypeResolver
 
-	init              sync.Once
-	codecImpls        map[string]func(TypeResolver) Codec
-	compressorImpls   map[string]func() connect.Compressor
-	decompressorImpls map[string]func() connect.Decompressor
-	methods           map[protoreflect.FullName]*methodConfig
-	restRoutes        routeTrie
+	init             sync.Once
+	codecImpls       map[string]func(TypeResolver) Codec
+	compressionPools map[string]*compressionPool
+	methods          map[string]*methodConfig
+	restRoutes       routeTrie
 }
 
 // AsHandler returns HTTP middleware that applies the given configuration
@@ -103,8 +103,17 @@ type Mux struct {
 // This should only be called after the configuration is finalized.
 func (m *Mux) AsHandler() http.Handler {
 	m.maybeInit()
-	// TODO: implement me!
-	return nil
+	canDecompress := make([]string, 0, len(m.compressionPools))
+	for compression := range m.compressionPools {
+		canDecompress = append(canDecompress, compression)
+	}
+	sort.Strings(canDecompress)
+	return &handler{
+		mux:           m,
+		bufferPool:    newBufferPool(),
+		codecs:        newCodecMap(m.methods, m.codecImpls),
+		canDecompress: canDecompress,
+	}
 }
 
 // RegisterServiceByName registers the given handler for the named service.
@@ -158,7 +167,7 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 	// empty is allowed here: non-nil but empty means do not send compressed data to handler
 	svcOpts.codecNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
 	for compressorName := range svcOpts.compressorNames {
-		if _, known := m.compressorImpls[compressorName]; !known {
+		if _, known := m.compressionPools[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use config.AddCompression to add known algorithms first", compressorName)
 		}
 	}
@@ -206,38 +215,39 @@ func (m *Mux) AddCodec(name string, newCodec func(TypeResolver) Codec) {
 // or compression level.
 func (m *Mux) AddCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) {
 	m.maybeInit()
-	m.compressorImpls[name] = newCompressor
-	m.decompressorImpls[name] = newDecompressor
+	m.compressionPools[name] = newCompressionPool(name, newCompressor, newDecompressor)
 }
 
 func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
-	if _, ok := m.methods[methodDesc.FullName()]; ok {
+	methodPath := string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
+	if _, ok := m.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodOpts, ok := methodDesc.Options().(*descriptorpb.MethodOptions)
 	if !ok {
-		return fmt.Errorf("method %s has unknown options type %T", methodDesc.FullName(), methodDesc.Options())
+		return fmt.Errorf("method %s has unknown options type %T", methodPath, methodDesc.Options())
 	}
 	methodConf := &methodConfig{
 		descriptor:      methodDesc,
+		methodPath:      "/" + methodPath, // this usage wants proper URI path, with leading slash
 		handler:         handler,
 		resolver:        opts.resolver,
 		protocols:       opts.protocols,
 		codecNames:      opts.codecNames,
 		compressorNames: opts.compressorNames,
 	}
-	m.methods[methodDesc.FullName()] = methodConf
+	m.methods[methodPath] = methodConf
 	if proto.HasExtension(methodOpts, annotations.E_Http) {
 		httpRule, ok := proto.GetExtension(methodOpts, annotations.E_Http).(*annotations.HttpRule)
 		if !ok {
-			return fmt.Errorf("method %s has unexpected type for google.api.http annotation: %T", methodDesc.FullName(), proto.GetExtension(methodOpts, annotations.E_Http))
+			return fmt.Errorf("method %s has unexpected type for google.api.http annotation: %T", methodPath, proto.GetExtension(methodOpts, annotations.E_Http))
 		}
 		if err := m.restRoutes.addRoute(methodConf, httpRule); err != nil {
-			return fmt.Errorf("failed to add REST route for method %s: %w", methodDesc.FullName(), err)
+			return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
 		}
 		for i, rule := range httpRule.AdditionalBindings {
 			if err := m.restRoutes.addRoute(methodConf, rule); err != nil {
-				return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodDesc.FullName(), err)
+				return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 			}
 		}
 	}
@@ -251,13 +261,10 @@ func (m *Mux) maybeInit() {
 			CodecProto: DefaultProtoCodec,
 			CodecJSON:  DefaultJSONCodec,
 		}
-		m.compressorImpls = map[string]func() connect.Compressor{
-			CompressionGzip: DefaultGzipCompressor,
+		m.compressionPools = map[string]*compressionPool{
+			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
 		}
-		m.decompressorImpls = map[string]func() connect.Decompressor{
-			CompressionGzip: DefaultGzipDecompressor,
-		}
-		m.methods = map[protoreflect.FullName]*methodConfig{}
+		m.methods = map[string]*methodConfig{}
 	})
 }
 
@@ -358,43 +365,6 @@ type TypeResolver interface {
 	protoregistry.ExtensionTypeResolver
 }
 
-// Protocol represents an on-the-wire protocol for RPCs.
-type Protocol int
-
-const (
-	// ProtocolUnknown is not a valid value. Since it is the zero value, this
-	// requires that all Protocol values must be explicitly initialized.
-	ProtocolUnknown = Protocol(iota)
-	// ProtocolConnect indicates the Connect protocol. This protocol supports
-	// unary and streaming endpoints. However, bidirectional streams are only
-	// supported when combined with HTTP/2.
-	ProtocolConnect
-	// ProtocolGRPC indicates the gRPC protocol. This protocol can only be
-	// used in combination with HTTP/2. It supports unary and all kinds of
-	// streaming endpoints.
-	ProtocolGRPC
-	// ProtocolGRPCWeb indicates the gRPC-Web protocol. This is a tweak of the
-	// gRPC protocol to support HTTP 1.1. This protocol supports unary and
-	// streaming endpoints. However, bidirectional streams are only supported
-	// when combined with HTTP/2.
-	ProtocolGRPCWeb
-	// ProtocolREST indicates the REST+JSON protocol. This protocol often
-	// requires non-trivial transformations between HTTP requests and responses
-	// and Protobuf request and response messages.
-	//
-	// Only methods that have the google.api.http annotation can be invoked
-	// with this protocol. The annotation defines the "shape" of the HTTP
-	// request and response, such as the URI path, HTTP method, and how URI
-	// path components, query string parameters, and an optional request
-	// body are mapped to the Protobuf request message.
-	//
-	// This protocol only supports unary and server-stream endpoints.
-	ProtocolREST
-
-	// protocolMax is the maximum valid value for a Protocol.
-	protocolMax = ProtocolREST
-)
-
 //nolint:gochecknoglobals
 var (
 	defaultProtocols = map[Protocol]struct{}{
@@ -420,6 +390,7 @@ type serviceOptions struct {
 
 type methodConfig struct {
 	descriptor                  protoreflect.MethodDescriptor
+	methodPath                  string
 	handler                     http.Handler
 	resolver                    TypeResolver
 	protocols                   map[Protocol]struct{}
