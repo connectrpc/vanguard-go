@@ -54,7 +54,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			expectedVars: map[string]string{"name": "1", "child.id": "2", "child.thing.id": "3"},
 		},
 		{
-			path:         []string{"foo", "bar", "baz", "123"},
+			path:         []string{"foo", "bar", "baz", "123", ""},
 			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}",
 			expectedVars: map[string]string{"thing.id": "123", "cat": ""},
 		},
