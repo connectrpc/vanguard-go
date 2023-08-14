@@ -20,10 +20,9 @@ import (
 type routeTrie struct {
 	// Child nodes, keyed by the next segment in the path.
 	children map[string]*routeTrie
-
-	// If the path to this node represents a complete path, this
-	// will be non-nil and represent the method table for the path.
-	methods map[routeKey]*routeTarget
+	// Final node in the path has a map of verbs to methods.
+	// Verbs are either an empty string or a single literal.
+	verbs map[string]routeMethods
 }
 
 // addRoute adds a target to the router for the given method and the given
@@ -76,6 +75,17 @@ func (trie *routeTrie) insertChild(segment string) *routeTrie {
 	}
 	return child
 }
+func (trie *routeTrie) insertVerb(verb string) routeMethods {
+	methods := trie.verbs[verb]
+	if methods == nil {
+		if trie.verbs == nil {
+			trie.verbs = make(map[string]routeMethods, 1)
+		}
+		methods = make(routeMethods, 1)
+		trie.verbs[verb] = methods
+	}
+	return methods
+}
 
 // insert the target into the trie using the given method and segment path.
 // The path is followed until the final segment is reached.
@@ -84,17 +94,12 @@ func (trie *routeTrie) insert(method string, target *routeTarget, segments pathS
 	for _, segment := range segments.path {
 		cursor = cursor.insertChild(segment)
 	}
-	key := routeKey{method: method, verb: segments.verb}
-	if existing := cursor.methods[key]; existing != nil {
+	if existing := cursor.verbs[segments.verb][method]; existing != nil {
 		return alreadyExistsError{
 			existing: existing, pathPattern: segments.String(), method: method,
 		}
 	}
-	// Lazily allocate the method map for a trie node.
-	if cursor.methods == nil {
-		cursor.methods = make(map[routeKey]*routeTarget, 1)
-	}
-	cursor.methods[key] = target
+	cursor.insertVerb(segments.verb)[method] = target
 	return nil
 }
 
@@ -110,23 +115,24 @@ func (trie *routeTrie) match(path string, method string) (*routeTarget, []routeT
 			verb = lastElement[pos+1:]
 		}
 	}
-	target := trie.findTarget(segments, verb, method)
+	target, _ := trie.findTarget(segments, verb, method)
 	if target == nil {
 		return nil, nil
 	}
 	return target, computeVarValues(segments, target)
 }
 
-func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarget {
+func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
 	if trie == nil {
-		return nil
+		return nil, nil
 	}
 	if len(path) == 0 {
-		if target := trie.methods[routeKey{method: method, verb: verb}]; target != nil {
-			return target
+		methods := trie.verbs[verb]
+		if target := methods[method]; target != nil {
+			return target, methods
 		}
-		if target := trie.methods[routeKey{method: "*", verb: verb}]; target != nil {
-			return target
+		if target := methods["*"]; target != nil {
+			return target, methods
 		}
 		// Could be a double-wildcard that matches zero path elements
 		return trie.children["**"].findTarget(nil, verb, method)
@@ -135,21 +141,18 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) *routeTarg
 	current := path[0]
 	path = path[1:]
 
-	if target := trie.children[current].findTarget(path, verb, method); target != nil {
-		return target
+	if target, methods := trie.children[current].findTarget(path, verb, method); target != nil {
+		return target, methods
 	}
-	if target := trie.children["*"].findTarget(path, verb, method); target != nil {
-		return target
+	if target, methods := trie.children["*"].findTarget(path, verb, method); target != nil {
+		return target, methods
 	}
 	// Double-asterisk must be the last element in pattern.
 	// So it consumes all remaining path elements.
 	return trie.children["**"].findTarget(nil, verb, method)
 }
 
-type routeKey struct {
-	verb   string // Last segment verb, can be empty.
-	method string // HTTP method, * for any method.
-}
+type routeMethods map[string]*routeTarget
 
 type routeTarget struct {
 	config           *methodConfig

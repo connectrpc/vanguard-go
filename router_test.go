@@ -139,7 +139,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target := trie.findTarget(testCase.path, testCase.verb, method)
+					target, _ := trie.findTarget(testCase.path, testCase.verb, method)
 					require.NotNil(t, target)
 					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.config.descriptor.Name())
 					vars := computeVarValues(testCase.path, target)
@@ -160,7 +160,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target := trie.findTarget(testCase.path, testCase.verb, method)
+					target, _ := trie.findTarget(testCase.path, testCase.verb, method)
 					require.Nil(t, target)
 				})
 			}
