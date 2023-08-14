@@ -106,7 +106,10 @@ func (trie *routeTrie) insert(method string, target *routeTarget, segments pathS
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
 func (trie *routeTrie) match(path string, method string) (*routeTarget, []routeTargetVarMatch) {
-	segments := strings.Split(path, "/")
+	if !strings.HasPrefix(path, "/") || strings.HasSuffix(path, ":") {
+		return nil, nil
+	}
+	segments := strings.Split(path[1:], "/")
 	var verb string
 	if len(path) > 0 {
 		lastElement := segments[len(segments)-1]
@@ -134,8 +137,7 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 		if target := methods["*"]; target != nil {
 			return target, methods
 		}
-		// Could be a double-wildcard that matches zero path elements
-		return trie.children["**"].findTarget(nil, verb, method)
+		return nil, nil
 	}
 
 	current := path[0]
