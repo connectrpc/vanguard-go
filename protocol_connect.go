@@ -49,7 +49,7 @@ func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseM
 	panic("implement me")
 }
 
-func (c connectUnaryGetClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (http.Header, error) {
+func (c connectUnaryGetClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -103,7 +103,7 @@ func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta response
 	panic("implement me")
 }
 
-func (c connectUnaryPostClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (http.Header, error) {
+func (c connectUnaryPostClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -120,9 +120,14 @@ type connectUnaryServerProtocol struct{}
 var _ serverProtocolHandler = connectUnaryServerProtocol{}
 var _ requestLineBuilder = connectUnaryServerProtocol{}
 var _ serverBodyPreparer = connectUnaryServerProtocol{}
+var _ serverProtocolEndMustBeInHeaders = connectUnaryServerProtocol{}
 
 func (c connectUnaryServerProtocol) protocol() Protocol {
 	return ProtocolConnect
+}
+
+func (c connectUnaryServerProtocol) endMustBeInHeaders() bool {
+	return true
 }
 
 func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
@@ -199,7 +204,7 @@ func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMet
 	panic("implement me")
 }
 
-func (c connectStreamClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (http.Header, error) {
+func (c connectStreamClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -254,7 +259,7 @@ func (c connectStreamServerProtocol) encodeEnvelope(e envelope) [5]byte {
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) decodeEndFromMessage(o *operation, reader io.Reader) (responseEnd, error) {
+func (c connectStreamServerProtocol) decodeEndFromMessage(codec Codec, reader io.Reader) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }

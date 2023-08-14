@@ -75,7 +75,7 @@ func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	panic("implement me")
 }
 
-func (g grpcClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (http.Header, error) {
+func (g grpcClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -130,7 +130,7 @@ func (g grpcServerProtocol) encodeEnvelope(e envelope) [5]byte {
 	panic("implement me")
 }
 
-func (g grpcServerProtocol) decodeEndFromMessage(o *operation, reader io.Reader) (responseEnd, error) {
+func (g grpcServerProtocol) decodeEndFromMessage(codec Codec, reader io.Reader) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -166,7 +166,7 @@ func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, hea
 	panic("implement me")
 }
 
-func (g grpcWebClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (http.Header, error) {
+func (g grpcWebClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -223,7 +223,7 @@ func (g grpcWebServerProtocol) encodeEnvelope(e envelope) [5]byte {
 	panic("implement me")
 }
 
-func (g grpcWebServerProtocol) decodeEndFromMessage(o *operation, reader io.Reader) (responseEnd, error) {
+func (g grpcWebServerProtocol) decodeEndFromMessage(codec Codec, reader io.Reader) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }

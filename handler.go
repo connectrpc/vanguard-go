@@ -41,6 +41,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	defer cancel()
 	request = request.WithContext(ctx)
 	op := operation{
+		muxConfig:     h.mux,
 		writer:        writer,
 		request:       request,
 		contentType:   originalContentType,
@@ -61,8 +62,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			cannotDecompressRequest = true
 		}
 	}
-	newCodec := h.mux.codecImpls[reqMeta.codec]
-	if newCodec == nil {
+
+	if newCodec := h.mux.codecImpls[reqMeta.codec]; newCodec == nil {
 		http.Error(writer, fmt.Sprintf("%q sub-format not supported", reqMeta.codec), http.StatusUnsupportedMediaType)
 		return
 	}
@@ -100,7 +101,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	op.client.codec = newCodec(methodConf.resolver)
+	op.client.codec = h.codecs[codecKey{res: methodConf.resolver, name: reqMeta.codec}]
 
 	// Now we can determine the destination protocol details
 	if _, supportsProtocol := methodConf.protocols[clientProtoHandler.protocol()]; supportsProtocol {
@@ -210,17 +211,15 @@ func (h *handler) findMethod(op *operation) (*methodConfig, *httpError) {
 }
 
 type clientProtocolDetails struct {
-	protocol        clientProtocolHandler
-	codec           Codec
-	reqCompression  *compressionPool
-	respCompression *compressionPool
+	protocol       clientProtocolHandler
+	codec          Codec
+	reqCompression *compressionPool
 }
 
 type serverProtocolDetails struct {
-	protocol        serverProtocolHandler
-	codec           Codec
-	reqCompression  *compressionPool
-	respCompression *compressionPool
+	protocol       serverProtocolHandler
+	codec          Codec
+	reqCompression *compressionPool
 }
 
 func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType string) {
@@ -293,6 +292,7 @@ type httpError struct {
 // operation represents a single HTTP operation, which maps to an incoming HTTP request.
 // It tracks properties needed to implement protocol transformation.
 type operation struct {
+	muxConfig     *Mux
 	writer        http.ResponseWriter
 	request       *http.Request
 	contentType   string // original content-type in incoming request headers
@@ -309,6 +309,11 @@ type operation struct {
 
 	client clientProtocolDetails
 	server serverProtocolDetails
+	// response compression won't vary between response received from
+	// server and response sent to client because we tell server handler
+	// that we only accept encodings that both the middleware and the
+	// client can decompress.
+	respCompression *compressionPool
 
 	// only used when clientProtocolDetails.protocol == ProtocolREST
 	restTarget *routeTarget
@@ -409,16 +414,21 @@ func (op *operation) handle() {
 
 	// Finally, define the transforming response writer (which
 	// must delay most logic until it sees WriteHeader).
-	var err error
-	op.writer, err = op.serverWriter()
+	rw, err := op.serverWriter()
 	if err != nil {
 		op.handleError(err)
 	}
+	defer rw.close()
+	op.writer = rw
 	op.delegate.ServeHTTP(op.writer, op.request)
 }
 
-func (op *operation) handleError(err error) {
-	// TODO: determine status code from error and then send error to op.writer
+// handleError handles an error that occurs while setting up the operation. It should not be used
+// once the underlying server handler has been invoked. For those errors, responseWriter.reportError
+// must be used instead.
+func (op *operation) handleError(_ error) {
+	// TODO: determine status code from error
+	http.Error(op.writer, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 }
 
 func (op *operation) readRequestMessage(msg *message) error {
@@ -452,9 +462,9 @@ func (op *operation) readAndDecodeRequestMessage(msg *message) error {
 func (op *operation) serverBody(msg *message) io.ReadCloser {
 	if msg == nil {
 		// no need to decompress or decode; just transforming envelopes
-		return &envelopingReader{op: op}
+		return &envelopingReader{op: op, r: op.request.Body}
 	}
-	ret := &transformingReader{op: op, msg: msg}
+	ret := &transformingReader{op: op, msg: msg, r: op.request.Body}
 	if !msg.isZero() {
 		// TODO: we have the first message already; setup ret to use it
 		_ = msg.msg
@@ -462,11 +472,11 @@ func (op *operation) serverBody(msg *message) io.ReadCloser {
 	return ret
 }
 
-func (op *operation) serverWriter() (http.ResponseWriter, error) {
+func (op *operation) serverWriter() (*responseWriter, error) {
 	if _, ok := op.writer.(http.Flusher); !ok {
 		return nil, errors.New("http.ResponseWriter must implement http.Flusher")
 	}
-	return &responseWriter{op: op}, nil
+	return &responseWriter{op: op, delegate: op.writer}, nil
 }
 
 func (op *operation) drainBody(body io.ReadCloser) {
@@ -484,6 +494,7 @@ func (op *operation) drainBody(body io.ReadCloser) {
 // It does not do any decompressing or deserializing of data.
 type envelopingReader struct {
 	op *operation
+	r  io.ReadCloser
 }
 
 func (er envelopingReader) Read(p []byte) (n int, err error) {
@@ -503,6 +514,7 @@ func (er envelopingReader) Close() error {
 type transformingReader struct {
 	op  *operation
 	msg *message
+	r   io.ReadCloser
 }
 
 func (tr *transformingReader) Read(p []byte) (n int, err error) {
@@ -523,25 +535,110 @@ func (tr *transformingReader) Close() error {
 // When the headers are written, the actual transformation that is
 // needed is determined and a writer decorator created.
 type responseWriter struct {
-	op   *operation
-	code int
+	op       *operation
+	delegate http.ResponseWriter
+	code     int
+	// has WriteHeader or first call to Write occurred?
+	headersWritten bool
+	// have headers actually been flushed to delegate?
+	headersFlushed bool
+	respMeta       *responseMeta
+	err            error
 	// wraps op.writer; initialized after headers are written
-	w io.Writer
+	w io.WriteCloser
 }
 
 func (rw *responseWriter) Header() http.Header {
-	//TODO implement me
-	panic("implement me")
+	return rw.delegate.Header()
 }
 
-func (rw *responseWriter) Write(i []byte) (int, error) {
-	//TODO implement me
-	panic("implement me")
+func (rw *responseWriter) Write(data []byte) (int, error) {
+	if !rw.headersWritten {
+		rw.WriteHeader(http.StatusOK)
+	}
+	if rw.err != nil {
+		return 0, rw.err
+	}
+	return rw.w.Write(data)
 }
 
 func (rw *responseWriter) WriteHeader(statusCode int) {
-	//TODO implement me
-	panic("implement me")
+	if rw.headersWritten {
+		return
+	}
+	rw.code = statusCode
+	respMeta, processBody, err := rw.op.server.protocol.extractProtocolResponseHeaders(statusCode, rw.Header())
+	if err != nil {
+		rw.reportError(err)
+		return
+	}
+	rw.respMeta = &respMeta
+	if respMeta.end != nil {
+		// RPC failed immediately.
+		if processBody != nil {
+			// We have to wait until we receive the body in order to process the error.
+			rw.w = &errorWriter{
+				rw:          rw,
+				respMeta:    rw.respMeta,
+				processBody: processBody,
+				buffer:      rw.op.bufferPool.Get(),
+			}
+			return
+		}
+		// We can send back error response immediately.
+		rw.flushHeaders()
+		return
+	}
+
+	if respMeta.compression != "" {
+		var ok bool
+		rw.op.respCompression, ok = rw.op.muxConfig.compressionPools[respMeta.compression]
+		if !ok {
+			rw.reportError(fmt.Errorf("response indicates unsupported compression encoding %q", respMeta.compression))
+			return
+		}
+	}
+	if respMeta.codec != "" && respMeta.codec != rw.op.server.codec.Name() {
+		// unexpected content-type for reply
+		rw.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", rw.op.server.codec.Name(), respMeta.codec))
+		return
+	}
+
+	sameCodec := rw.op.client.codec.Name() == rw.op.server.codec.Name()
+	// even if body encoding uses same content type, we can't treat them as the same
+	// (which means re-using encoded data) if either side needs to prep the data first
+	sameResponseCodec := sameCodec && !rw.op.clientRespNeedsPrep && !rw.op.serverRespNeedsPrep
+
+	respMsg := message{saveCompressed: sameResponseCodec}
+
+	if !sameResponseCodec {
+		// We will have to decode and re-encode, so we need the message type.
+		messageType, err := rw.op.resolver.FindMessageByName(rw.op.method.Output().FullName())
+		if err != nil {
+			rw.reportError(err)
+			return
+		}
+		respMsg.msg = messageType.New().Interface()
+	}
+
+	rw.respMeta = &respMeta
+	var endMustBeInHeaders bool
+	if mustBe, ok := rw.op.server.protocol.(serverProtocolEndMustBeInHeaders); ok {
+		endMustBeInHeaders = mustBe.endMustBeInHeaders()
+	}
+	if !endMustBeInHeaders {
+		// We can go ahead and flush headers now. Otherwise, we'll wait until we've verified we
+		// can handle the response data, so we still have an opportunity to send back an error.
+		rw.flushHeaders()
+	}
+
+	// Now we can define the transformed response body.
+	if respMsg.saveCompressed && respMsg.msg == nil {
+		// we do not need to decompress or decode
+		rw.w = &envelopingWriter{op: rw.op, w: rw.delegate}
+	} else {
+		rw.w = &transformingWriter{op: rw.op, msg: &respMsg, w: rw.delegate}
+	}
 }
 
 func (rw *responseWriter) Flush() {
@@ -551,13 +648,81 @@ func (rw *responseWriter) Flush() {
 	// transforming the response body.
 }
 
+func (rw *responseWriter) reportError(err error) {
+	var end responseEnd
+	if errors.As(err, &end.err) {
+		end.httpCode = httpStatusCodeFromRPC(end.err.Code())
+	} else {
+		// TODO: maybe this should be CodeUnknown instead?
+		end.err = connect.NewError(connect.CodeInternal, err)
+		end.httpCode = http.StatusBadGateway
+	}
+	rw.reportEnd(&end)
+}
+
+func (rw *responseWriter) reportEnd(end *responseEnd) {
+	switch {
+	case rw.headersFlushed:
+		// write error to body or trailers
+		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate)
+		if len(trailers) > 0 {
+			hdrs := rw.Header()
+			for k, v := range trailers {
+				if !strings.HasPrefix(k, http.TrailerPrefix) {
+					k = http.TrailerPrefix + k
+				}
+				hdrs[k] = v
+			}
+		}
+	case rw.respMeta != nil:
+		rw.respMeta.end = end
+		rw.flushHeaders()
+	default:
+		rw.respMeta = &responseMeta{end: end}
+		rw.flushHeaders()
+	}
+	// response is done
+	rw.op.cancel()
+	rw.err = context.Canceled
+}
+
+func (rw *responseWriter) flushHeaders() {
+	if rw.headersFlushed {
+		return // already flushed
+	}
+	allowedRequestCompression := intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
+	rw.op.client.protocol.addProtocolResponseHeaders(*rw.respMeta, rw.Header(), allowedRequestCompression)
+	if rw.respMeta.end != nil {
+		// response is done
+		rw.err = context.Canceled
+	}
+	rw.headersFlushed = true
+}
+
+func (rw *responseWriter) close() {
+	if !rw.headersWritten {
+		// treat as empty successful response
+		rw.WriteHeader(http.StatusOK)
+	}
+	if rw.w != nil {
+		_ = rw.w.Close()
+	}
+	rw.flushHeaders()
+}
+
 // envelopingWriter will translate between envelope styles as data is
 // written. It does not do any decompressing or deserializing of data.
 type envelopingWriter struct {
 	op *operation
+	w  io.Writer
 }
 
 func (ew envelopingWriter) Write(i []byte) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (ew envelopingWriter) Close() error {
 	//TODO implement me
 	panic("implement me")
 }
@@ -569,11 +734,38 @@ func (ew envelopingWriter) Write(i []byte) (int, error) {
 type transformingWriter struct {
 	op  *operation
 	msg *message
+	w   io.Writer
 }
 
 func (tw *transformingWriter) Write(i []byte) (int, error) {
 	//TODO implement me
 	panic("implement me")
+}
+
+func (tw *transformingWriter) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+type errorWriter struct {
+	rw          *responseWriter
+	respMeta    *responseMeta
+	processBody func(io.Reader, *responseEnd)
+	buffer      *bytes.Buffer
+}
+
+func (ew *errorWriter) Write(data []byte) (int, error) {
+	// TODO: limit on size of the error body and how much we'll buffer?
+	return ew.buffer.Write(data)
+}
+
+func (ew *errorWriter) Close() error {
+	if ew.respMeta.end == nil {
+		ew.respMeta.end = &responseEnd{}
+	}
+	ew.processBody(ew.buffer, ew.respMeta.end)
+	ew.rw.flushHeaders()
+	return nil
 }
 
 // message represents a single message in an RPC stream. It can be re-used in a stream,
