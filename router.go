@@ -120,7 +120,9 @@ func (trie *routeTrie) insert(method string, target *routeTarget, segments pathS
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
 func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
-	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == '/' || uriPath[len(uriPath)-1] == ':' {
+	// TODO: Not checking if path ends with "/" means we accept missing final segment
+	//       for both * and **. Is that right? Makes sense for **, but maybe not for *.
+	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == ':' {
 		// TODO: is this how grpc-gateway works? Is it lenient and forgives trailing slash
 		//       or absence of leading slash?
 		// if it doesn't start with "/" or if it ends with "/" it won't match
@@ -205,15 +207,11 @@ func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethod
 	if target != nil {
 		return target, nil
 	}
-	// Not this trie node. Could be a child with a double-wildcard that matches zero path elements.
-	childDblAst := trie.children["**"]
-	if childDblAst == nil {
-		return nil, methods
-	}
-	target, dblAstMethods := childDblAst.findTarget(nil, verb, method)
-	if target != nil || dblAstMethods != nil {
-		return target, dblAstMethods
-	}
+	// TODO: If final segment is ** and nothing is provided that matches, the request path should
+	//       have trailing slash. For example, if the pattern is "foo/bar/**", an empty match
+	//       should look like "foo/bar/". However, *should* it support having no trailing slash?
+	//       For example, should pattern "foo/bar/**" allow "foo/bar"? If so, we'd need to do a
+	//       little more work here, to see if trie has a ** child that has a matching method.
 	return nil, methods
 }
 

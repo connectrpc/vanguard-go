@@ -425,13 +425,22 @@ func (op *operation) handleError(err error) {
 
 func (op *operation) readRequestMessage(msg *message) error {
 	msg.reset(op.bufferPool)
-	// TODO: buffer and read one message
+	// TODO: buffer and read one message, just compressed bytes
+	if op.clientReqNeedsPrep {
+		// TODO: decode it and prepare it, merging with content
+		// from URI path and query params
+		_ = op
+	}
 	return nil
 }
 
 func (op *operation) readAndDecodeRequestMessage(msg *message) error {
 	if err := op.readRequestMessage(msg); err != nil {
 		return err
+	}
+	if msg.msgAvailable {
+		// no more work to decompress/decode; readRequestMessage provided a decoded message
+		return nil
 	}
 	decompressor := op.client.reqCompression.getDecompressor()
 
