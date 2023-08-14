@@ -198,15 +198,18 @@ func (h *handler) findMethod(op *operation) (*methodConfig, *httpError) {
 	}
 }
 
-type encodingDetails struct {
+type clientProtocolDetails struct {
+	protocol        clientProtocolHandler
 	codec           Codec
 	reqCompression  *compressionPool
 	respCompression *compressionPool
 }
 
-type protocolDetails[H any] struct {
-	protocol H
-	encodingDetails
+type serverProtocolDetails struct {
+	protocol        serverProtocolHandler
+	codec           Codec
+	reqCompression  *compressionPool
+	respCompression *compressionPool
 }
 
 func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType string) {
@@ -293,8 +296,8 @@ type operation struct {
 	methodPath string
 	streamType connect.StreamType
 
-	client                   protocolDetails[clientProtocolHandler]
-	server                   protocolDetails[serverProtocolHandler]
+	client                   clientProtocolDetails
+	server                   serverProtocolDetails
 	cannotDecompressRequest  bool
 	cannotDecompressResponse bool
 
@@ -360,7 +363,7 @@ func (op *operation) handle() {
 			op.handleError(err)
 			return
 		}
-		reqMsg.msgPrototype = messageType.New().Interface()
+		reqMsg.msg = messageType.New().Interface()
 	}
 
 	var skipBody bool
@@ -398,7 +401,7 @@ func (op *operation) handle() {
 		// drain any contents of body so downstream handler sees empty
 		op.drainBody(op.request.Body)
 	} else {
-		if reqMsg.saveCompressed && reqMsg.msgPrototype == nil {
+		if reqMsg.saveCompressed && reqMsg.msg == nil {
 			// we do not need to decompress or decode
 			op.request.Body = op.serverBody(nil)
 		} else {
@@ -460,16 +463,14 @@ func (op *operation) serverWriter() (http.ResponseWriter, error) {
 }
 
 func (op *operation) drainBody(body io.ReadCloser) {
+	if wt, ok := body.(io.WriterTo); ok {
+		_, _ = wt.WriteTo(io.Discard)
+		return
+	}
 	buf := op.bufferPool.Get()
 	defer op.bufferPool.Put(buf)
 	b := buf.Bytes()[0:buf.Cap()]
-	for {
-		_, err := body.Read(b)
-		if err != nil {
-			_ = body.Close()
-			return
-		}
-	}
+	_, _ = io.CopyBuffer(io.Discard, body, b)
 }
 
 // envelopingReader will translate between envelope styles as data is read.
@@ -597,8 +598,6 @@ type pipeTransformer struct {
 // so we only allocate one and then re-use it for subsequent messages (if stream has
 // more than one).
 type message struct {
-	// the message type for this stream
-	msgPrototype proto.Message
 	// flags indicating if compressed and data should be preserved after use
 	saveCompressed, saveData bool
 
@@ -609,8 +608,11 @@ type message struct {
 	// contents have not yet been decompressed or have been de-serialized
 	// into the msg field.
 	data *bytes.Buffer
-	// msg is the plain message; nil if the message has not yet been decoded.
+	// msg is the plain message
 	msg proto.Message
+	// if true, msg has been decoded and can be used. If false, msg is
+	// an empty value and data must first be decoded into it.
+	msgAvailable bool
 }
 
 // release releases all buffers associated with message to the given pool.
@@ -720,14 +722,12 @@ func compress(compressor connect.Compressor, pool *bufferPool, msg *message) err
 }
 
 func decode(codec Codec, pool *bufferPool, msg *message) error {
-	if msg.msg != nil {
+	if msg.msgAvailable {
 		return nil // no-op
 	}
 	if msg.data == nil {
 		return errors.New("no uncompressed source")
 	}
-	msg.msg = msg.msgPrototype
-	proto.Reset(msg.msg)
 	if err := codec.Unmarshal(msg.data.Bytes(), msg.msg); err != nil {
 		return err
 	}
@@ -735,6 +735,7 @@ func decode(codec Codec, pool *bufferPool, msg *message) error {
 		pool.Put(msg.data)
 		msg.data = nil
 	}
+	msg.msgAvailable = true
 	return nil
 }
 
@@ -742,7 +743,7 @@ func encode(codec Codec, pool *bufferPool, msg *message) error {
 	if msg.data != nil {
 		return nil // no-op
 	}
-	if msg.msg == nil {
+	if !msg.msgAvailable {
 		return errors.New("no decoded message source")
 	}
 	buf := pool.Get().Bytes()
