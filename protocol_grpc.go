@@ -50,7 +50,12 @@ var (
 	}()
 )
 
+// grpcClientProtocol implements the gRPC protocol for
+// processing RPCs received from the client.
 type grpcClientProtocol struct{}
+
+var _ clientProtocolHandler = grpcClientProtocol{}
+var _ envelopedProtocolHandler = grpcClientProtocol{}
 
 func (g grpcClientProtocol) protocol() Protocol {
 	return ProtocolGRPC
@@ -58,10 +63,6 @@ func (g grpcClientProtocol) protocol() Protocol {
 
 func (g grpcClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
 	return true
-}
-
-func (g grpcClientProtocol) allowsGetRequests() bool {
-	return false
 }
 
 func (g grpcClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
@@ -79,11 +80,26 @@ func (g grpcClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (http.H
 	panic("implement me")
 }
 
+func (g grpcClientProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g grpcClientProtocol) encodeEnvelope(e envelope) [5]byte {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (g grpcClientProtocol) String() string {
 	return protocolNameGRPC
 }
 
+// grpcServerProtocol implements the gRPC protocol for
+// sending RPCs to the server handler.
 type grpcServerProtocol struct{}
+
+var _ serverProtocolHandler = grpcServerProtocol{}
+var _ serverEnvelopedProtocolHandler = grpcServerProtocol{}
 
 func (g grpcServerProtocol) protocol() Protocol {
 	return ProtocolGRPC
@@ -104,11 +120,33 @@ func (g grpcServerProtocol) extractEndFromTrailers(o *operation, header http.Hea
 	panic("implement me")
 }
 
+func (g grpcServerProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g grpcServerProtocol) encodeEnvelope(e envelope) [5]byte {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g grpcServerProtocol) decodeEndFromMessage(o *operation, reader io.Reader) (responseEnd, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (g grpcServerProtocol) String() string {
 	return protocolNameGRPC
 }
 
+// grpcClientProtocol implements the gRPC protocol for
+// processing RPCs received from the client.
 type grpcWebClientProtocol struct{}
+
+// TODO: many of these methods can delegate to grpcClientProtocol since
+// the two protocols are extremely similar.
+var _ clientProtocolHandler = grpcWebClientProtocol{}
+var _ envelopedProtocolHandler = grpcWebClientProtocol{}
 
 func (g grpcWebClientProtocol) protocol() Protocol {
 	return ProtocolGRPCWeb
@@ -116,10 +154,6 @@ func (g grpcWebClientProtocol) protocol() Protocol {
 
 func (g grpcWebClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
 	return true
-}
-
-func (g grpcWebClientProtocol) allowsGetRequests() bool {
-	return false
 }
 
 func (g grpcWebClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
@@ -137,11 +171,28 @@ func (g grpcWebClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (htt
 	panic("implement me")
 }
 
+func (g grpcWebClientProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g grpcWebClientProtocol) encodeEnvelope(e envelope) [5]byte {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (g grpcWebClientProtocol) String() string {
 	return protocolNameGRPCWeb
 }
 
+// grpcServerProtocol implements the gRPC-Web protocol for
+// sending RPCs to the server handler.
 type grpcWebServerProtocol struct{}
+
+// TODO: many of these methods can delegate to grpcServerProtocol since
+// the two protocols are extremely similar.
+var _ serverProtocolHandler = grpcWebServerProtocol{}
+var _ serverEnvelopedProtocolHandler = grpcWebServerProtocol{}
 
 func (g grpcWebServerProtocol) protocol() Protocol {
 	return ProtocolGRPCWeb
@@ -158,6 +209,21 @@ func (g grpcWebServerProtocol) extractProtocolResponseHeaders(i int, header http
 }
 
 func (g grpcWebServerProtocol) extractEndFromTrailers(o *operation, header http.Header) (responseEnd, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g grpcWebServerProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g grpcWebServerProtocol) encodeEnvelope(e envelope) [5]byte {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (g grpcWebServerProtocol) decodeEndFromMessage(o *operation, reader io.Reader) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }

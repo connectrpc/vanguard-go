@@ -102,7 +102,6 @@ func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
 type clientProtocolHandler interface {
 	protocol() Protocol
 	acceptsStreamType(connect.StreamType) bool
-	allowsGetRequests() bool
 
 	// Extracts relevant request metadata from the given headers to
 	// determine the codec (aka sub-format), compression (aka encoding),
@@ -121,6 +120,12 @@ type clientProtocolHandler interface {
 
 	// String returns a human-readable name/description of protocol.
 	String() string
+}
+
+// clientProtocolSupportsGet is a marker interface implemented by
+// clientProtocolHandler instances that support the GET HTTP method.
+type clientProtocolAllowsGet interface {
+	allowsGetRequests()
 }
 
 // serverProtocolHandler handles the protocol used by the server.
@@ -153,7 +158,13 @@ type serverProtocolHandler interface {
 type envelopedProtocolHandler interface {
 	decodeEnvelope([5]byte) (envelope, error)
 	encodeEnvelope(envelope) [5]byte
+}
 
+// serverEnvelopedProtocolHandler is an optional interface implemented
+// by serverProtocolHandler instances whose protocol uses an envelope
+// around messages.
+type serverEnvelopedProtocolHandler interface {
+	envelopedProtocolHandler
 	// If a stream includes an envelope with the trailer bit
 	// set, this is called to parse the message contents. The
 	// given reader will be decompressed (even if the envelope
