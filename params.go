@@ -260,14 +260,12 @@ func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Value) ([]byte, error) {
 	//nolint:exhaustive
 	switch kind := field.Kind(); kind {
-	case protoreflect.BoolKind:
-		return json.Marshal(value.Bool())
-	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
-		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
-		return json.Marshal(value.Int())
-	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
+	case protoreflect.BoolKind,
+		protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
+		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
+		protoreflect.Uint32Kind, protoreflect.Fixed32Kind,
 		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		return json.Marshal(value.Uint())
+		return json.Marshal(value.Interface())
 	case protoreflect.FloatKind:
 		return marshalFloat(value.Float(), 32)
 	case protoreflect.DoubleKind:
