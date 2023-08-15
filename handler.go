@@ -51,13 +51,14 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	op.client.protocol = clientProtoHandler
 
+	var cannotDecompressRequest bool
 	if reqMeta.compression != "" {
 		var ok bool
 		op.client.reqCompression, ok = h.mux.compressionPools[reqMeta.compression]
 		if !ok {
 			// This might be okay, like if the transformation doesn't require decoding.
 			op.client.reqCompression = nil
-			op.cannotDecompressRequest = true
+			cannotDecompressRequest = true
 		}
 	}
 	newCodec := h.mux.codecImpls[reqMeta.codec]
@@ -127,7 +128,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		op.server.codec = h.mux.codecImpls[CodecProto](methodConf.resolver)
 	}
 
-	if reqMeta.compression != "" && !op.cannotDecompressRequest {
+	if reqMeta.compression != "" && !cannotDecompressRequest {
 		if _, supportsCompression := methodConf.compressorNames[reqMeta.compression]; supportsCompression {
 			op.server.reqCompression = op.client.reqCompression
 		} // else: no compression
@@ -135,11 +136,21 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	if op.client.protocol.protocol() == op.server.protocol.protocol() &&
 		op.client.codec.Name() == op.server.codec.Name() &&
-		(op.cannotDecompressRequest || op.client.reqCompression.Name() == op.server.reqCompression.Name()) {
+		(cannotDecompressRequest || op.client.reqCompression.Name() == op.server.reqCompression.Name()) {
 		// No transformation needed.
 		methodConf.handler.ServeHTTP(writer, request)
 		return
 	}
+
+	if cannotDecompressRequest {
+		// At this point, we have to perform some transformation, so we'll need to
+		// be able to decompress/compress.
+		// TODO: should result in 415 Unsupported Media Type
+		// TODO: should send back accept-encoding (or relevant protocol header)
+		op.handleError(errors.New("unable to decode"))
+		return
+	}
+
 	op.handle()
 }
 
@@ -178,7 +189,7 @@ func (h *handler) findMethod(op *operation) (*methodConfig, *httpError) {
 		if methodConf == nil {
 			return nil, &httpError{code: http.StatusNotFound}
 		}
-		allowGet := op.client.protocol.allowsGetRequests()
+		_, allowGet := op.client.protocol.(clientProtocolAllowsGet)
 		if allowGet && op.request.Method != http.MethodPost && op.request.Method != http.MethodGet {
 			return nil, &httpError{
 				code: http.StatusMethodNotAllowed,
@@ -296,10 +307,8 @@ type operation struct {
 	methodPath string
 	streamType connect.StreamType
 
-	client                   clientProtocolDetails
-	server                   serverProtocolDetails
-	cannotDecompressRequest  bool
-	cannotDecompressResponse bool
+	client clientProtocolDetails
+	server serverProtocolDetails
 
 	// only used when clientProtocolDetails.protocol == ProtocolREST
 	restTarget *routeTarget
@@ -336,21 +345,13 @@ func (op *operation) handle() {
 		requireMessageForRequestLine = serverRequestBuilder.requiresMessageToProvideRequestLine(op)
 	}
 
-	sameRequestCompression := op.cannotDecompressRequest || (op.client.reqCompression.Name() == op.server.reqCompression.Name())
+	sameRequestCompression := op.client.reqCompression.Name() == op.server.reqCompression.Name()
 	sameCodec := op.client.codec.Name() == op.server.codec.Name()
 	// even if body encoding uses same content type, we can't treat them as the same
 	// (which means re-using encoded data) if either side needs to prep the data first
 	sameRequestCodec := sameCodec && !op.clientReqNeedsPrep && !op.serverReqNeedsPrep
-	sameResponseCodec := sameCodec && !op.clientRespNeedsPrep && !op.serverRespNeedsPrep
 	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine
-	mustDecodeResponse := !sameResponseCodec
 
-	if mustDecodeRequest && op.cannotDecompressRequest {
-		// TODO: should result in 415 Unsupported Media Type
-		// TODO: should send back accept-encoding (or relevant protocol header)
-		op.handleError(errors.New("unable to decode"))
-		return
-	}
 	reqMsg := message{
 		saveCompressed: sameRequestCodec && sameRequestCompression,
 		saveData:       sameRequestCodec && !sameRequestCompression,
@@ -390,10 +391,7 @@ func (op *operation) handle() {
 		op.request.Method = http.MethodPost
 	}
 	op.request.URL.ForceQuery = false
-	allowedResponseCompression := op.reqMeta.acceptCompression
-	if mustDecodeResponse {
-		allowedResponseCompression = op.canDecompress
-	}
+	allowedResponseCompression := intersect(op.reqMeta.acceptCompression, op.canDecompress)
 	op.server.protocol.addProtocolRequestHeaders(op.reqMeta, op.writer.Header(), allowedResponseCompression)
 
 	// Now we can define the transformed request body.
@@ -578,31 +576,6 @@ func (tw *transformingWriter) Write(i []byte) (int, error) {
 	panic("implement me")
 }
 
-// pipeWriter transforms the data from the original response into a new
-// protocol form as the data is written. Its main difference from
-// transformingWriter is that it must use an io.Pipe and a goroutine
-// in order to consume the response stream and identify message
-// boundaries. This is needed to handle non-enveloped server streams
-// (i.e. REST protocol), where the response is a concatenation of
-// the JSON values for each message. (Only needed for REST server
-// streams.)
-type pipeWriter struct {
-	op          *operation
-	pipe        *io.PipeWriter
-	transformer *pipeTransformer
-}
-
-func (pw *pipeWriter) Write(i []byte) (int, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-type pipeTransformer struct {
-	op   *operation
-	pipe *io.PipeReader
-	msg  *message
-}
-
 // message represents a single message in an RPC stream. It can be re-used in a stream,
 // so we only allocate one and then re-use it for subsequent messages (if stream has
 // more than one).
@@ -759,4 +732,25 @@ func encode(codec Codec, pool *bufferPool, msg *message) error {
 	buf, err := codec.MarshalAppend(buf, msg.msg)
 	msg.data = bytes.NewBuffer(buf)
 	return err
+}
+
+func intersect(setA, setB []string) []string {
+	length := len(setA)
+	if len(setB) < length {
+		length = len(setB)
+	}
+	if length == 0 {
+		// if either set is empty, the intersection is empty
+		return nil
+	}
+	result := make([]string, 0, length)
+	for _, item := range setA {
+		for _, other := range setB {
+			if other == item {
+				result = append(result, item)
+				break
+			}
+		}
+	}
+	return result
 }

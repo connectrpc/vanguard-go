@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -24,6 +25,10 @@ const (
 // HTTP method.
 type connectUnaryGetClientProtocol struct{}
 
+var _ clientProtocolHandler = connectUnaryGetClientProtocol{}
+var _ clientProtocolAllowsGet = connectUnaryGetClientProtocol{}
+var _ clientBodyPreparer = connectUnaryGetClientProtocol{}
+
 func (c connectUnaryGetClientProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
@@ -32,9 +37,7 @@ func (c connectUnaryGetClientProtocol) acceptsStreamType(streamType connect.Stre
 	return streamType == connect.StreamTypeUnary
 }
 
-func (c connectUnaryGetClientProtocol) allowsGetRequests() bool {
-	return true
-}
+func (c connectUnaryGetClientProtocol) allowsGetRequests() {}
 
 func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
 	//TODO implement me
@@ -51,6 +54,26 @@ func (c connectUnaryGetClientProtocol) encodeEnd(end responseEnd, writer io.Writ
 	panic("implement me")
 }
 
+func (c connectUnaryGetClientProtocol) requestNeedsPrep(o *operation) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryGetClientProtocol) responseNeedsPrep(o *operation) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryGetClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c connectUnaryGetClientProtocol) String() string {
 	return protocolNameConnectUnaryGet
 }
@@ -60,16 +83,14 @@ func (c connectUnaryGetClientProtocol) String() string {
 // HTTP method.
 type connectUnaryPostClientProtocol struct{}
 
+var _ clientProtocolHandler = connectUnaryPostClientProtocol{}
+
 func (c connectUnaryPostClientProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
 func (c connectUnaryPostClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
 	return streamType == connect.StreamTypeUnary
-}
-
-func (c connectUnaryPostClientProtocol) allowsGetRequests() bool {
-	return false
 }
 
 func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
@@ -91,9 +112,14 @@ func (c connectUnaryPostClientProtocol) String() string {
 	return protocolNameConnectUnaryPost
 }
 
-// connectUnaryBackendProtocol implements the Connect protocol for
-// sending unary RPCs to the handler.
+// connectUnaryServerProtocol implements the Connect protocol for
+// sending unary RPCs to the server handler.
 type connectUnaryServerProtocol struct{}
+
+// NB: the latter two interfaces must be implemented to handle GET requests.
+var _ serverProtocolHandler = connectUnaryServerProtocol{}
+var _ requestLineBuilder = connectUnaryServerProtocol{}
+var _ serverBodyPreparer = connectUnaryServerProtocol{}
 
 func (c connectUnaryServerProtocol) protocol() Protocol {
 	return ProtocolConnect
@@ -114,11 +140,46 @@ func (c connectUnaryServerProtocol) extractEndFromTrailers(o *operation, header 
 	panic("implement me")
 }
 
+func (c connectUnaryServerProtocol) requestNeedsPrep(o *operation) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryServerProtocol) prepareMarshalledRequest(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryServerProtocol) responseNeedsPrep(o *operation) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(o *operation) bool {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectUnaryServerProtocol) requestLine(op *operation, req proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c connectUnaryServerProtocol) String() string {
 	return protocolNameConnectUnary
 }
 
+// connectStreamClientProtocol implements the Connect protocol for
+// processing streaming RPCs received from the client.
 type connectStreamClientProtocol struct{}
+
+var _ clientProtocolHandler = connectStreamClientProtocol{}
+var _ envelopedProtocolHandler = connectStreamClientProtocol{}
 
 func (c connectStreamClientProtocol) protocol() Protocol {
 	return ProtocolConnect
@@ -126,10 +187,6 @@ func (c connectStreamClientProtocol) protocol() Protocol {
 
 func (c connectStreamClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
 	return streamType != connect.StreamTypeUnary
-}
-
-func (c connectStreamClientProtocol) allowsGetRequests() bool {
-	return false
 }
 
 func (c connectStreamClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
@@ -147,11 +204,26 @@ func (c connectStreamClientProtocol) encodeEnd(end responseEnd, writer io.Writer
 	panic("implement me")
 }
 
+func (c connectStreamClientProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectStreamClientProtocol) encodeEnvelope(e envelope) [5]byte {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (c connectStreamClientProtocol) String() string {
 	return protocolNameConnectStream
 }
 
+// connectStreamServerProtocol implements the Connect protocol for
+// sending streaming RPCs to the server handler.
 type connectStreamServerProtocol struct{}
+
+var _ serverProtocolHandler = connectStreamServerProtocol{}
+var _ serverEnvelopedProtocolHandler = connectStreamServerProtocol{}
 
 func (c connectStreamServerProtocol) protocol() Protocol {
 	return ProtocolConnect
@@ -168,6 +240,21 @@ func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, heade
 }
 
 func (c connectStreamServerProtocol) extractEndFromTrailers(o *operation, header http.Header) (responseEnd, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectStreamServerProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectStreamServerProtocol) encodeEnvelope(e envelope) [5]byte {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (c connectStreamServerProtocol) decodeEndFromMessage(o *operation, reader io.Reader) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }
