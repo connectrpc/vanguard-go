@@ -736,8 +736,12 @@ func encode(codec Codec, pool *bufferPool, msg *message) error {
 
 func intersect(setA, setB []string) []string {
 	length := len(setA)
-	if len(setA) < length {
-		length = len(setA)
+	if len(setB) < length {
+		length = len(setB)
+	}
+	if length == 0 {
+		// if either set is empty, the intersection is empty
+		return nil
 	}
 	result := make([]string, 0, length)
 	for _, item := range setA {
