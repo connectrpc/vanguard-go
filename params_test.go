@@ -43,6 +43,9 @@ func TestIsParameter(t *testing.T) {
 	}, {
 		fieldPath: "timestamp",
 		isParam:   true,
+	}, {
+		fieldPath: "value",
+		isParam:   false,
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase

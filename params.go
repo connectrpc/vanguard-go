@@ -18,6 +18,24 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+//nolint:gochecknoglobals
+var isScalarWellKnownType = map[protoreflect.FullName]bool{
+	"google.protobuf.Duration":    true,
+	"google.protobuf.Empty":       true,
+	"google.protobuf.FieldMask":   true,
+	"google.protobuf.Timestamp":   true,
+	"google.protobuf.NullValue":   true,
+	"google.protobuf.StringValue": true,
+	"google.protobuf.BytesValue":  true,
+	"google.protobuf.Int32Value":  true,
+	"google.protobuf.Int64Value":  true,
+	"google.protobuf.UInt32Value": true,
+	"google.protobuf.UInt64Value": true,
+	"google.protobuf.FloatValue":  true,
+	"google.protobuf.DoubleValue": true,
+	"google.protobuf.BoolValue":   true,
+}
+
 func isParameterType(field protoreflect.FieldDescriptor) bool {
 	kind := field.Kind()
 	return kind < protoreflect.GroupKind ||
@@ -30,18 +48,7 @@ func isScalarWKT(field protoreflect.FieldDescriptor) bool {
 		return false
 	}
 	msgDesc := field.Message()
-	name := string(msgDesc.FullName())
-	if !strings.HasPrefix(name, "google.protobuf.") {
-		return false
-	}
-	switch name[16:] {
-	//nolint:goconst
-	case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask",
-		"BoolValue", "Int32Value", "Int64Value", "UInt32Value",
-		"UInt64Value", "FloatValue", "DoubleValue":
-		return true
-	}
-	return false
+	return isScalarWellKnownType[msgDesc.FullName()]
 }
 
 // setParameter sets the value of a field on a message using the ident fields.
@@ -179,7 +186,7 @@ func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescrip
 	if !isScalarWKT(field) {
 		return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
-	switch field.Message().FullName()[16:] {
+	switch field.Message().Name() {
 	case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask":
 		data = quote(data)
 	}
@@ -279,7 +286,8 @@ func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Valu
 	if !isScalarWKT(field) {
 		return nil, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
-	if msg := field.Message().FullName()[16:]; msg == "BytesValue" {
+	msgName := string(field.Message().Name())
+	if msgName == "BytesValue" {
 		// Switch to base64.URLEncoding
 		field := field.Message().Fields().ByName("value")
 		value := value.Message().Get(field)
@@ -289,7 +297,7 @@ func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Valu
 	if err != nil {
 		return nil, err
 	}
-	switch field.Message().FullName()[16:] {
+	switch msgName {
 	case "Timestamp", "Duration", "StringValue", "FieldMask",
 		"Int64Value", "UInt64Value": // Large ints unquoted
 		return unquote(data)
