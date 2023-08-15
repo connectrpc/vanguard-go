@@ -29,31 +29,34 @@ func encodeMessageAsHTTPRule(
 	// Singular fields can be referenced multiple times.
 	// Repeated fields can be referenced multiple times up to the number of elements.
 	// Map fields are not supported.
+	// A field count of 0 indicates that the field has not been used.
 	fieldPathCounts := make(map[string]int)
 
-	// Find variable and set the path segments.
+	// Find path variables and set the path segments, ensuring that the path
+	// matches the pattern.
 	for _, variable := range target.vars {
-		fieldPath := resolveFieldDescriptorsToPath(variable.varPath)
-		fieldIndex := fieldPathCounts[fieldPath]
-		fieldPathCounts[fieldPath]++
+		fieldIndex := fieldPathCounts[variable.fieldPath]
+		fieldPathCounts[variable.fieldPath]++
 
-		value, err := getParameter(input, variable.varPath, fieldIndex)
+		value, err := getParameter(input, variable.fields, fieldIndex)
 		if err != nil {
 			return "", nil, nil, err
 		}
-		if variable.start-variable.end == 1 {
-			// simple insert
-			segments[variable.start] = value
-			continue
+		variableSize := variable.size()
+		var values []string
+		if variableSize == 1 {
+			values = []string{value}
+		} else {
+			values = strings.Split(value, "/")
 		}
 
-		values := strings.Split(value, "/")
-		if variable.end != -1 && len(values) != variable.end-variable.start {
+		if variableSize > 1 && len(values) != variableSize {
 			return "", nil, nil, fmt.Errorf(
-				"value %q expected to have %d segments, but has %d",
-				value, variable.end-variable.start, len(values),
+				"expected field %s to match pattern %q: instead got %q",
+				variable.fieldPath, variable.capture(segments), value,
 			)
 		}
+
 		for i, part := range values {
 			segmentIndex := variable.start + i
 			if segmentIndex >= len(segments) {
@@ -65,42 +68,49 @@ func encodeMessageAsHTTPRule(
 			segment := segments[segmentIndex]
 			if segment == "*" || segment == "**" {
 				segments[segmentIndex] = part
-				continue
-			}
-
-			if segment != part {
+			} else if segment != part {
 				return "", nil, nil, fmt.Errorf(
-					"value %q part %q does not match path segment %q",
-					value, part, segment,
+					"expected field %s to match pattern %q: instead got %q",
+					variable.fieldPath, variable.capture(segments), value,
 				)
 			}
 		}
 	}
 
 	// Encode the path URL.
+	var pathSize int
+	for _, segment := range segments {
+		pathSize += len(segment) + 1
+	}
 	var pathURL strings.Builder
+	pathURL.Grow(pathSize)
 	for _, segment := range segments {
 		pathURL.WriteByte('/')
 		pathURL.WriteString(url.PathEscape(segment))
 	}
 	if target.verb != "" {
 		pathURL.WriteByte(':')
-		pathURL.WriteString(url.PathEscape(target.verb))
+		pathURL.WriteString(target.verb)
 	}
 	path = pathURL.String()
 
+	if target.requestBodyFieldPath == "*" {
+		return path, nil, input, nil
+	}
+
 	// Traverse the request body, if any.
-	if target.requestBodyPath != nil {
+	if target.requestBodyFields != nil {
 		body = input
 	}
-	for _, field := range target.requestBodyPath {
+	for _, field := range target.requestBodyFields {
 		body = body.Get(field).Message()
 	}
 
 	// Exclude the request body path from the query.
-	fieldPathCounts[resolveFieldDescriptorsToPath(target.requestBodyPath)]++
+	fieldPathCounts[target.requestBodyFieldPath]++
 
-	// Build the query using the remaining fields.
+	// Build the query by traversing the fields in the message.
+	// Any non path or request body fields are included in the query.
 	query = url.Values{}
 
 	fields := make([]protoreflect.FieldDescriptor, 0, 3)
@@ -112,16 +122,26 @@ func encodeMessageAsHTTPRule(
 		fieldPath := resolveFieldDescriptorsToPath(fields)
 		fieldIndex := fieldPathCounts[fieldPath]
 
-		if !isParameterType(field) {
-			if field.Kind() == protoreflect.MessageKind &&
-				!field.IsMap() && // ignore map fields
-				fieldIndex == 0 {
-				value.Message().Range(fieldRanger)
+		switch {
+		case !isParameterType(field):
+			if fieldIndex > 0 {
+				break
 			}
-			return true
-		}
-
-		if field.IsList() {
+			if field.IsMap() || field.IsList() ||
+				field.Kind() != protoreflect.MessageKind {
+				fieldError = fmt.Errorf(
+					"unexpected field %s: cannot be URL encoded",
+					fieldPath,
+				)
+				return false
+			}
+			// Recurse into the message fields.
+			value.Message().Range(fieldRanger)
+			if fieldError != nil {
+				return false
+			}
+			fieldIndex++
+		case field.IsList():
 			listValue := value.List()
 			for fieldIndex < listValue.Len() {
 				value := listValue.Get(fieldIndex)
@@ -133,7 +153,7 @@ func encodeMessageAsHTTPRule(
 				query.Add(fieldPath, string(encoded))
 				fieldIndex++
 			}
-		} else if fieldIndex == 0 {
+		case fieldIndex == 0:
 			encoded, err := marshalFieldValue(field, value)
 			if err != nil {
 				fieldError = err

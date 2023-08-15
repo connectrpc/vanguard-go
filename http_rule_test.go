@@ -19,40 +19,22 @@ import (
 func TestHTTPRule_EncodeMessage(t *testing.T) {
 	t.Parallel()
 
-	type pathVar struct {
-		fieldPath  string
-		start, end int
-	}
-
 	testCases := []struct {
 		input        proto.Message
 		tmpl         string
-		path         []string
-		verb         string
 		reqFieldPath string
-		vars         []pathVar
 		wantPath     string
 		wantQuery    url.Values
 		wantBody     proto.Message
 		wantErr      string
 	}{{
-		input: &testv1.ParameterValues{StringValue: "books/1"},
-		tmpl:  "/v1/{string_value=books/*}:get",
-		path:  []string{"v1", "books", "*"},
-		verb:  "get",
-		vars: []pathVar{
-			{fieldPath: "string_value", start: 1, end: 3},
-		},
+		input:     &testv1.ParameterValues{StringValue: "books/1"},
+		tmpl:      "/v1/{string_value=books/*}:get",
 		wantPath:  "/v1/books/1:get",
 		wantQuery: url.Values{},
 	}, {
-		input: &testv1.ParameterValues{StringValue: "books/1/2/3/4"},
-		tmpl:  "/v1/{string_value=books/**}:get",
-		path:  []string{"v1", "books", "**"},
-		verb:  "get",
-		vars: []pathVar{
-			{fieldPath: "string_value", start: 1, end: -1},
-		},
+		input:     &testv1.ParameterValues{StringValue: "books/1/2/3/4"},
+		tmpl:      "/v1/{string_value=books/**}:get",
 		wantPath:  "/v1/books/1/2/3/4:get",
 		wantQuery: url.Values{},
 	}, {
@@ -63,13 +45,8 @@ func TestHTTPRule_EncodeMessage(t *testing.T) {
 			},
 		},
 		tmpl:         "/v1/{string_value=books/*}:create",
-		path:         []string{"v1", "books", "*"},
-		verb:         "create",
 		reqFieldPath: "recursive",
-		vars: []pathVar{
-			{fieldPath: "string_value", start: 1, end: -1},
-		},
-		wantPath: "/v1/books/1:create",
+		wantPath:     "/v1/books/1:create",
 		wantBody: &testv1.ParameterValues{
 			StringValue: "Title",
 		},
@@ -91,14 +68,8 @@ func TestHTTPRule_EncodeMessage(t *testing.T) {
 			},
 		},
 		tmpl:         "/v2/{string_value=books/*}/{double_list}:create",
-		path:         []string{"v2", "books", "*", "*"},
-		verb:         "query",
 		reqFieldPath: "recursive",
-		vars: []pathVar{
-			{fieldPath: "string_value", start: 1, end: 3},
-			{fieldPath: "double_list", start: 3, end: 4},
-		},
-		wantPath: "/v2/books/1/1:query",
+		wantPath:     "/v2/books/1/1:create",
 		wantBody: &testv1.ParameterValues{
 			StringValue: "Title",
 		},
@@ -116,57 +87,51 @@ func TestHTTPRule_EncodeMessage(t *testing.T) {
 				3.0,
 			},
 		},
-		tmpl: "/v2/{double_list=**}",
-		path: []string{"v2", "**"},
-		vars: []pathVar{
-			{fieldPath: "double_list", start: 1, end: -1},
-		},
+		tmpl:     "/v2/{double_list=**}",
 		wantPath: "/v2/1",
 		wantQuery: url.Values{
 			"double_list": []string{"2", "3"},
 		},
 	}, {
-		// Map fields are not supported in path templates.
+		// Map fields are not supported as URL values.
 		input: &testv1.ParameterValues{
-			StringMap: map[string]string{
-				"key1": "value1",
-				"key2": "value2",
+			StringMap: map[string]string{"key1": "value1"},
+		},
+		tmpl:    "/v2/mapfields",
+		wantErr: "unexpected field string_map: cannot be URL encoded",
+	}, {
+		input: &testv1.ParameterValues{
+			Recursive: &testv1.ParameterValues{
+				StringMap: map[string]string{"key1": "value1"},
 			},
 		},
-		tmpl:      "/v2/mapfields",
-		path:      []string{"v2", "mapfields"},
-		wantPath:  "/v2/mapfields",
-		wantQuery: url.Values{},
+		tmpl:    "/v2/mapfields",
+		wantErr: "unexpected field recursive.string_map: cannot be URL encoded",
+	}, {
+		// Repeated message fields are not supported as URL values.
+		input: &testv1.ParameterValues{
+			RecursiveList: []*testv1.ParameterValues{
+				{StringValue: "value2"},
+			},
+		},
+		tmpl:    "/v2/repeatedmsgs",
+		wantErr: "unexpected field recursive_list: cannot be URL encoded",
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase
 		t.Run(testCase.tmpl, func(t *testing.T) {
 			t.Parallel()
-			// TODO(emcfarlane): fix this
-			// routePath, err := parsePathTemplate(testCase.tmpl)
-			// require.NoError(t, err)
-
-			input := testCase.input.ProtoReflect()
-			fields, err := resolvePathToDescriptors(input.Descriptor(), testCase.reqFieldPath)
+			segments, variables, err := parsePathTemplate(testCase.tmpl)
 			require.NoError(t, err)
-
-			var vars []routeTargetVar
-			for _, variable := range testCase.vars {
-				fields, err := resolvePathToDescriptors(input.Descriptor(), variable.fieldPath)
-				require.NoError(t, err)
-				vars = append(vars, routeTargetVar{
-					varPath: fields,
-					start:   variable.start,
-					end:     variable.end,
-				})
+			config := &methodConfig{
+				descriptor: &fakeMethodDescriptor{
+					name: testCase.tmpl,
+					in:   testCase.input.ProtoReflect().Descriptor(),
+				},
 			}
-
-			target := &routeTarget{
-				path:            testCase.path,
-				verb:            testCase.verb,
-				requestBodyPath: fields,
-				vars:            vars,
-			}
+			input := testCase.input.ProtoReflect()
+			target, err := makeTarget(config, "POST", testCase.reqFieldPath, "*", segments, variables)
+			require.NoError(t, err)
 
 			path, query, body, err := encodeMessageAsHTTPRule(input, target)
 			if err != nil {
