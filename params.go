@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -38,17 +39,13 @@ var isScalarWellKnownType = map[protoreflect.FullName]bool{
 
 func isParameterType(field protoreflect.FieldDescriptor) bool {
 	kind := field.Kind()
-	return kind < protoreflect.GroupKind ||
-		(kind > protoreflect.MessageKind && kind <= protoreflect.Sint64Kind) ||
-		(kind == protoreflect.MessageKind && isScalarWKT(field))
+	return kind != protoreflect.GroupKind &&
+		(kind != protoreflect.MessageKind || isScalarWKT(field))
 }
 
 func isScalarWKT(field protoreflect.FieldDescriptor) bool {
-	if field.Kind() != protoreflect.MessageKind {
-		return false
-	}
-	msgDesc := field.Message()
-	return isScalarWellKnownType[msgDesc.FullName()]
+	return field.Kind() == protoreflect.MessageKind &&
+		isScalarWellKnownType[field.Message().FullName()]
 }
 
 // setParameter sets the value of a field on a message using the ident fields.
@@ -58,17 +55,12 @@ func isScalarWKT(field protoreflect.FieldDescriptor) bool {
 //
 // See: https://github.com/googleapis/googleapis/blob/2c28ce13ade62398e152ff3eb840f4f934812597/google/api/http.proto#L117-L122
 func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescriptor, param string) error {
-	if len(fields) == 0 {
-		return connect.NewError(connect.CodeInternal,
-			fmt.Errorf("parameter missing field descriptors"),
-		)
-	}
-
 	// Traverse the message to the last field.
-	leaf, field := msg, fields[0]
+	leaf := msg
 	for i := 0; i < len(fields)-1; i++ {
-		leaf, field = leaf.Mutable(field).Message(), fields[i+1]
+		leaf = leaf.Mutable(fields[i]).Message()
 	}
+	field := fields[len(fields)-1]
 
 	data := []byte(param)
 	value, err := unmarshalFieldValue(leaf, field, data)
@@ -133,17 +125,9 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 		}
 		return protoreflect.ValueOfUint64(x), nil
 	case protoreflect.FloatKind:
-		var x float32
-		if err := json.Unmarshal(data, &x); err != nil {
-			return protoreflect.Value{}, err
-		}
-		return protoreflect.ValueOfFloat32(x), nil
+		return unmarshalFloat(data, 32)
 	case protoreflect.DoubleKind:
-		var x float64
-		if err := json.Unmarshal(data, &x); err != nil {
-			return protoreflect.Value{}, err
-		}
-		return protoreflect.ValueOfFloat64(x), nil
+		return unmarshalFloat(data, 64)
 	case protoreflect.StringKind:
 		return protoreflect.ValueOfString(string(data)), nil
 	case protoreflect.BytesKind:
@@ -201,6 +185,38 @@ func unmarshalFieldMessage(msg protoreflect.Message, field protoreflect.FieldDes
 	return value, nil
 }
 
+func unmarshalFloat(data []byte, bitSize int) (protoreflect.Value, error) {
+	switch string(data) {
+	case "NaN":
+		if bitSize == 32 {
+			return protoreflect.ValueOfFloat32(float32(math.NaN())), nil
+		}
+		return protoreflect.ValueOfFloat64(math.NaN()), nil
+	case "Infinity":
+		if bitSize == 32 {
+			return protoreflect.ValueOfFloat32(float32(math.Inf(+1))), nil
+		}
+		return protoreflect.ValueOfFloat64(math.Inf(+1)), nil
+	case "-Infinity":
+		if bitSize == 32 {
+			return protoreflect.ValueOfFloat32(float32(math.Inf(-1))), nil
+		}
+		return protoreflect.ValueOfFloat64(math.Inf(-1)), nil
+	}
+	if bitSize == 32 {
+		var x float32
+		if err := json.Unmarshal(data, &x); err != nil {
+			return protoreflect.Value{}, err
+		}
+		return protoreflect.ValueOfFloat32(x), nil
+	}
+	var x float64
+	if err := json.Unmarshal(data, &x); err != nil {
+		return protoreflect.Value{}, err
+	}
+	return protoreflect.ValueOfFloat64(x), nil
+}
+
 func quote(raw []byte) []byte {
 	if len(raw) > 0 && (raw[0] != '"' || raw[len(raw)-1] != '"') {
 		raw = strconv.AppendQuote(raw[:0], string(raw))
@@ -220,17 +236,12 @@ func isNullValue(field protoreflect.FieldDescriptor) bool {
 // getParameter gets the value of a field on a message using the ident fields.
 // Optionally, an index can be provided to get the value of a repeated field.
 func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescriptor, index int) (string, error) {
-	if len(fields) == 0 {
-		return "", connect.NewError(connect.CodeInternal,
-			fmt.Errorf("parameter missing field descriptors"),
-		)
-	}
-
 	// Traverse the message to the last field.
-	leaf, field := msg, fields[0]
+	leaf := msg
 	for i := 0; i < len(fields)-1; i++ {
-		leaf, field = leaf.Mutable(field).Message(), fields[i+1]
+		leaf = leaf.Mutable(fields[i]).Message()
 	}
+	field := fields[len(fields)-1]
 
 	value := leaf.Get(field)
 	if field.IsList() {
@@ -258,9 +269,9 @@ func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Va
 		protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
 		return json.Marshal(value.Uint())
 	case protoreflect.FloatKind:
-		return json.Marshal(float32(value.Float()))
+		return marshalFloat(value.Float(), 32)
 	case protoreflect.DoubleKind:
-		return json.Marshal(value.Float())
+		return marshalFloat(value.Float(), 64)
 	case protoreflect.StringKind:
 		return []byte(value.String()), nil
 	case protoreflect.BytesKind:
@@ -303,4 +314,19 @@ func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Valu
 		return unquote(data)
 	}
 	return data, nil
+}
+
+func marshalFloat(num float64, bitSize int) ([]byte, error) {
+	switch {
+	case math.IsNaN(num):
+		return []byte(`NaN`), nil
+	case math.IsInf(num, +1):
+		return []byte(`Infinity`), nil
+	case math.IsInf(num, -1):
+		return []byte(`-Infinity`), nil
+	}
+	if bitSize == 32 {
+		return json.Marshal(float32(num))
+	}
+	return json.Marshal(num)
 }

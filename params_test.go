@@ -13,6 +13,7 @@ import (
 
 	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -73,9 +74,33 @@ func TestSetParameter(t *testing.T) {
 		value:  strconv.FormatFloat(math.MaxFloat64, 'f', -1, 64),
 		want:   &testv1.ParameterValues{DoubleValue: math.MaxFloat64},
 	}, {
+		fields: "double_value",
+		value:  "NaN",
+		want:   &testv1.ParameterValues{DoubleValue: math.NaN()},
+	}, {
+		fields: "double_value",
+		value:  "Infinity",
+		want:   &testv1.ParameterValues{DoubleValue: math.Inf(1)},
+	}, {
+		fields: "double_value",
+		value:  "-Infinity",
+		want:   &testv1.ParameterValues{DoubleValue: math.Inf(-1)},
+	}, {
 		fields: "float_value",
 		value:  strconv.FormatFloat(math.MaxFloat32, 'f', -1, 32),
 		want:   &testv1.ParameterValues{FloatValue: math.MaxFloat32},
+	}, {
+		fields: "float_value",
+		value:  "NaN",
+		want:   &testv1.ParameterValues{FloatValue: float32(math.NaN())},
+	}, {
+		fields: "float_value",
+		value:  "-Infinity",
+		want:   &testv1.ParameterValues{FloatValue: float32(math.Inf(-1))},
+	}, {
+		fields: "float_value",
+		value:  "Infinity",
+		want:   &testv1.ParameterValues{FloatValue: float32(math.Inf(+1))},
 	}, {
 		fields: "int32_value",
 		value:  strconv.FormatInt(math.MaxInt32, 10),
@@ -338,7 +363,7 @@ func TestSetParameter(t *testing.T) {
 			require.NoError(t, err)
 
 			got := value.Interface()
-			assert.Empty(t, cmp.Diff(testCase.want, got, protocmp.Transform()))
+			assert.Empty(t, cmp.Diff(testCase.want, got, protocmp.Transform(), cmpopts.EquateNaNs()))
 		})
 	}
 }
@@ -356,9 +381,33 @@ func TestGetParameter(t *testing.T) {
 		msg:    &testv1.ParameterValues{DoubleValue: math.MaxFloat64},
 		want:   "1.7976931348623157e+308",
 	}, {
+		fields: "double_value",
+		msg:    &testv1.ParameterValues{DoubleValue: math.NaN()},
+		want:   "NaN",
+	}, {
+		fields: "double_value",
+		msg:    &testv1.ParameterValues{DoubleValue: math.Inf(1)},
+		want:   "Infinity",
+	}, {
+		fields: "double_value",
+		msg:    &testv1.ParameterValues{DoubleValue: math.Inf(-1)},
+		want:   "-Infinity",
+	}, {
 		fields: "float_value",
 		msg:    &testv1.ParameterValues{FloatValue: math.MaxFloat32},
 		want:   "3.4028235e+38",
+	}, {
+		fields: "float_value",
+		msg:    &testv1.ParameterValues{FloatValue: float32(math.NaN())},
+		want:   "NaN",
+	}, {
+		fields: "float_value",
+		msg:    &testv1.ParameterValues{FloatValue: float32(math.Inf(1))},
+		want:   "Infinity",
+	}, {
+		fields: "float_value",
+		msg:    &testv1.ParameterValues{FloatValue: float32(math.Inf(-1))},
+		want:   "-Infinity",
 	}, {
 		fields: "int32_value",
 		msg:    &testv1.ParameterValues{Int32Value: math.MaxInt32},
