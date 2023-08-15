@@ -94,7 +94,6 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 }
 
 func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
-	//nolint:exhaustive
 	switch kind := field.Kind(); kind {
 	case protoreflect.BoolKind:
 		var b bool
