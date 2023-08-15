@@ -133,6 +133,24 @@ func TestHTTPEncodePathValues(t *testing.T) {
 		},
 		tmpl:    "/v2/repeatedmsgs",
 		wantErr: "unexpected field recursive_list: cannot be URL encoded",
+	}, {
+		// Single capture should be escaped for the URL.
+		input:     &testv1.ParameterValues{StringValue: "/世界"},
+		tmpl:      "/v1/{string_value=*}:get",
+		wantPath:  "/v1/%2F%E4%B8%96%E7%95%8C:get",
+		wantQuery: url.Values{},
+	}, {
+		// Single capture should be escaped for the URL.
+		input:     &testv1.ParameterValues{StringValue: "%2F%2f 世界"},
+		tmpl:      "/v1/{string_value=*}:get",
+		wantPath:  "/v1/%252F%252f%20%E4%B8%96%E7%95%8C:get",
+		wantQuery: url.Values{},
+	}, {
+		// Multi capture variables should be escaped for the URL.
+		input:     &testv1.ParameterValues{StringValue: "books/%2F%2f 世界"},
+		tmpl:      "/v1/{string_value=books/*}:get",
+		wantPath:  "/v1/books/%2F%2F%20%E4%B8%96%E7%95%8C:get",
+		wantQuery: url.Values{},
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase

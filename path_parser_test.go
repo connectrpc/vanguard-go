@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRoutePath_ParsePathTemplate(t *testing.T) {
+func TestPath_ParsePathTemplate(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -23,8 +23,8 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 		expectedErr string
 	}{{
 		// no error, but lots of encoding for special/reserved characters
-		tmpl:     "/my%2Fcool+blog&about%2Cstuff%5Bwat%5D/{var={abc}/{def=**}}:baz",
-		wantPath: []string{"my/cool+blog&about,stuff[wat]", "*", "**"},
+		tmpl:     "/my%2fcool-blog~about%2Cstuff%5Bwat%5D/{var={abc=%2F%2A}/{def=%2F%2A/**}}:baz",
+		wantPath: []string{"my%2Fcool-blog~about%2Cstuff%5Bwat%5D", "%2F%2A", "%2F%2A", "**"},
 		wantVerb: "baz",
 		wantVars: []pathVariable{
 			{fieldPath: "var", start: 1, end: -1},
@@ -70,7 +70,7 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	}, {
 		tmpl:     "/foo/bar:baz%12xyz%abcde",
 		wantPath: []string{"foo", "bar"},
-		wantVerb: "baz\x12xyz\xabcde",
+		wantVerb: "baz%12xyz%ABcde",
 	}, {
 		tmpl:     "/{hello}/world",
 		wantPath: []string{"*", "world"},
@@ -230,9 +230,9 @@ func TestRoutePath_ParsePathTemplate(t *testing.T) {
 	}
 }
 
-func TestRoutePath_SafeLiterals(t *testing.T) {
+func TestPath_SafeLiterals(t *testing.T) {
 	t.Parallel()
-	literalvalues := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._%25~$&+=@"
+	literalvalues := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._%25~"
 	for _, r := range literalvalues {
 		if !isLiteral(r) {
 			t.Errorf("isLiteral(%q) = false, want true", r)
@@ -242,4 +242,55 @@ func TestRoutePath_SafeLiterals(t *testing.T) {
 	assert.NoError(t, err)
 	escaped := url.PathEscape(unescaped)
 	assert.Equal(t, literalvalues, escaped)
+}
+
+func TestPath_Escaping(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		input       string
+		mode        pathEncoding
+		want        string
+		wantEscaped string
+		wantErr     string
+	}{{
+		input: "foo",
+		mode:  pathEncodeSingle,
+		want:  "foo",
+	}, {
+		input: "foo%2Fbar",
+		mode:  pathEncodeSingle,
+		want:  "foo/bar",
+	}, {
+		input: "foo%252Fbar",
+		mode:  pathEncodeSingle,
+		want:  "foo%2Fbar",
+	}, {
+		input: "foo%2Fbar",
+		mode:  pathEncodeMulti,
+		want:  "foo%2Fbar",
+	}, {
+		input:       "foo%2fbar",
+		mode:        pathEncodeMulti,
+		want:        "foo%2Fbar",
+		wantEscaped: "foo%2Fbar",
+	}}
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.input, func(t *testing.T) {
+			t.Parallel()
+			dec, err := pathUnescape(testCase.input, testCase.mode)
+			if err != nil {
+				assert.EqualError(t, err, testCase.wantErr)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, testCase.want, dec)
+			enc := pathEscape(dec, testCase.mode)
+			if testCase.wantEscaped != "" {
+				assert.Equal(t, testCase.wantEscaped, enc)
+			} else {
+				assert.Equal(t, testCase.input, enc)
+			}
+		})
+	}
 }

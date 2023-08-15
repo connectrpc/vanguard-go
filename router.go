@@ -287,6 +287,7 @@ func (v routeTargetVar) capture(segments []string) string {
 		}
 		end = len(segments)
 	}
+	// TODO: values should be pathUnescape'd
 	return strings.Join(segments[start:end], "/")
 }
 

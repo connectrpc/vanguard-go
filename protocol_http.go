@@ -88,12 +88,22 @@ func httpErrorFromResponse(body io.Reader) *connect.Error {
 	return connectErr
 }
 
+func httpSplitVar(variable string, multi bool) []string {
+	if !multi {
+		return []string{pathEscape(variable, pathEncodeSingle)}
+	}
+	values := strings.Split(variable, "/")
+	for i, value := range values {
+		values[i] = pathEscape(value, pathEncodeMulti)
+	}
+	return values
+}
+
 // httpEncodePathValues encodes the given message for the route target.
 // The path and query are returned.
 func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	path string, query url.Values, err error,
 ) {
-
 	// Copy segments to build URL
 	segments := make([]string, len(target.path))
 	copy(segments, target.path)
@@ -116,12 +126,8 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 			return "", nil, err
 		}
 		variableSize := variable.size()
-		var values []string
-		if variableSize == 1 {
-			values = []string{value}
-		} else {
-			values = strings.Split(value, "/")
-		}
+
+		values := httpSplitVar(value, variableSize != 1)
 
 		if variableSize > 1 && len(values) != variableSize {
 			return "", nil, fmt.Errorf(
@@ -159,7 +165,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	pathURL.Grow(pathSize)
 	for _, segment := range segments {
 		pathURL.WriteByte('/')
-		pathURL.WriteString(url.PathEscape(segment))
+		pathURL.WriteString(segment)
 	}
 	if target.verb != "" {
 		pathURL.WriteByte(':')
@@ -237,5 +243,4 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 		return "", nil, fieldError
 	}
 	return path, query, nil
-
 }
