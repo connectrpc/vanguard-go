@@ -89,14 +89,8 @@ func TestHTTPEncodePathValues(t *testing.T) {
 		},
 		tmpl:         "/v2/{string_value=books/*}/{double_list}:create",
 		reqFieldPath: "recursive",
-		wantPath:     "/v2/books/1/1:create",
-		wantQuery: url.Values{
-			"bool_value":        []string{"true"},
-			"nested.enum_value": []string{"ENUM_VALUE"},
-			"double_list":       []string{"2", "3"},
-		},
+		wantErr:      "unexpected path variable \"double_list\": cannot be a repeated field",
 	}, {
-		// TODO: should we support list values as path segments?
 		input: &testv1.ParameterValues{
 			DoubleList: []float64{
 				1.0,
@@ -104,11 +98,8 @@ func TestHTTPEncodePathValues(t *testing.T) {
 				3.0,
 			},
 		},
-		tmpl:     "/v2/{double_list=**}",
-		wantPath: "/v2/1",
-		wantQuery: url.Values{
-			"double_list": []string{"2", "3"},
-		},
+		tmpl:    "/v2/{double_list=**}",
+		wantErr: "unexpected path variable \"double_list\": cannot be a repeated field",
 	}, {
 		// Map fields are not supported as URL values.
 		input: &testv1.ParameterValues{
@@ -157,6 +148,10 @@ func TestHTTPEncodePathValues(t *testing.T) {
 		t.Run(testCase.tmpl, func(t *testing.T) {
 			t.Parallel()
 			segments, variables, err := parsePathTemplate(testCase.tmpl)
+			if err != nil {
+				assert.Equal(t, testCase.wantErr, err.Error())
+				return
+			}
 			require.NoError(t, err)
 			config := &methodConfig{
 				descriptor: &fakeMethodDescriptor{
@@ -166,6 +161,10 @@ func TestHTTPEncodePathValues(t *testing.T) {
 			}
 			input := testCase.input.ProtoReflect()
 			target, err := makeTarget(config, "POST", testCase.reqFieldPath, "*", segments, variables)
+			if err != nil {
+				assert.Equal(t, testCase.wantErr, err.Error())
+				return
+			}
 			require.NoError(t, err)
 
 			path, query, err := httpEncodePathValues(input, target)

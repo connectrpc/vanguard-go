@@ -249,6 +249,12 @@ func makeTarget(
 		if err != nil {
 			return nil, err
 		}
+		if last := fields[len(fields)-1]; last.IsList() {
+			return nil, fmt.Errorf(
+				"unexpected path variable %q: cannot be a repeated field",
+				variable.fieldPath,
+			)
+		}
 		routeTargetVars[i] = routeTargetVar{
 			pathVariable: variable,
 			fields:       fields,
