@@ -37,7 +37,386 @@ func TestHandler_Errors(t *testing.T) {
 	// These tests exercise error-handling in the way the operation is initialized.
 	// These tests should not reach the underlying handler or any particular protocol
 	// handler implementation (other than extracting request metadata).
-	// TODO
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "nope", http.StatusTeapot)
+	})
+	grpcMux := &Mux{Protocols: []Protocol{ProtocolGRPC, ProtocolGRPCWeb}}
+	connectMux := &Mux{Protocols: []Protocol{ProtocolConnect}}
+	allMux := &Mux{} // supports all three
+	for _, mux := range []*Mux{grpcMux, connectMux, allMux} {
+		err := mux.RegisterServiceByName(handler, elizav1connect.ElizaServiceName)
+		require.NoError(t, err)
+	}
+
+	// We use a handful of servers w/ different config.
+	server := httptest.NewUnstartedServer(allMux.AsHandler())
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	grpcServer := httptest.NewUnstartedServer(grpcMux.AsHandler())
+	grpcServer.EnableHTTP2 = true
+	grpcServer.StartTLS()
+	t.Cleanup(grpcServer.Close)
+	connectServer := httptest.NewUnstartedServer(connectMux.AsHandler())
+	connectServer.EnableHTTP2 = true
+	connectServer.StartTLS()
+	t.Cleanup(connectServer.Close)
+	http1Server := httptest.NewServer(allMux.AsHandler())
+	t.Cleanup(http1Server.Close)
+
+	testCases := []struct {
+		name                    string
+		server                  *httptest.Server // default to server if unspecified
+		requestURL              string
+		requestMethod           string
+		requestHeaders          map[string][]string
+		expectedCode            int
+		expectedResponseHeaders map[string]string
+	}{
+		{
+			name:          "multiple content types",
+			requestURL:    "/service.Foo/Bar",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/proto", "application/json"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "no content type, looks like connect from header",
+			requestURL:    "/service.Foo/Bar",
+			requestMethod: "DELETE",
+			requestHeaders: map[string][]string{
+				"Connect-Protocol-Version": {"1"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "no content type, looks like connect from query string",
+			requestURL:    "/service.Foo/Bar?connect=v1",
+			requestMethod: "DELETE",
+			expectedCode:  http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "rest, route not found",
+			requestURL:    "/foo/bar/baz",
+			requestMethod: "PUT",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/json"},
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:          "connect stream, method not found",
+			requestURL:    "/service.Foo/Bar",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/connect+proto"},
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:          "connect post, method not found",
+			requestURL:    "/service.Foo/Bar",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Connect-Protocol-Version": {"1"},
+				"Content-Type":             {"application/proto"},
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:          "connect get, method not found",
+			requestURL:    "/service.Foo/Bar?connect=v1",
+			requestMethod: "GET",
+			expectedCode:  http.StatusNotFound,
+		},
+		{
+			name:          "grpc, method not found",
+			requestURL:    "/service.Foo/Bar",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc+proto"},
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:          "grpc-web, method not found",
+			requestURL:    "/service.Foo/Bar",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc-web+proto"},
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:          "connect get, method not idempotent",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say?connect=v1",
+			requestMethod: "GET",
+			expectedCode:  http.StatusMethodNotAllowed,
+			expectedResponseHeaders: map[string]string{
+				"Allow": "POST",
+			},
+		},
+		{
+			name:          "connect post, bad HTTP method",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "DELETE",
+			requestHeaders: map[string][]string{
+				"Connect-Protocol-Version": {"1"},
+				"Content-Type":             {"application/proto"},
+			},
+			expectedCode: http.StatusMethodNotAllowed,
+			expectedResponseHeaders: map[string]string{
+				"Allow": "POST",
+			},
+		},
+		{
+			name:          "connect stream, bad HTTP method",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/connect+proto"},
+			},
+			expectedCode: http.StatusMethodNotAllowed,
+			expectedResponseHeaders: map[string]string{
+				"Allow": "POST",
+			},
+		},
+		{
+			name:          "grpc, bad HTTP method",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "PUT",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc+proto"},
+			},
+			expectedCode: http.StatusMethodNotAllowed,
+			expectedResponseHeaders: map[string]string{
+				"Allow": "POST",
+			},
+		},
+		{
+			name:          "grpc-web, bad HTTP method",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "PATCH",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc-web+proto"},
+			},
+			expectedCode: http.StatusMethodNotAllowed,
+			expectedResponseHeaders: map[string]string{
+				"Allow": "POST",
+			},
+		},
+		{
+			name:          "connect stream, unknown codec",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/connect+text"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "connect post, unknown codec",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Connect-Protocol-Version": {"1"},
+				"Content-Type":             {"application/text"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "grpc, unknown codec",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc+text"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "grpc-web, unknown codec",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc-web+text"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "connect stream, unknown compression, pass-through",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type":             {"application/connect+proto"},
+				"Connect-Content-Encoding": {"blah"},
+			},
+			// When a supported protocol and codec, middleware will pass through
+			// with unsupported compression and let underlying handler complain.
+			expectedCode: http.StatusTeapot,
+		},
+		{
+			name:          "connect stream, unknown compression",
+			server:        grpcServer, // must target different protocol for the error
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type":             {"application/connect+proto"},
+				"Connect-Content-Encoding": {"blah"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "connect post, unknown compression, pass-through",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Connect-Protocol-Version": {"1"},
+				"Content-Type":             {"application/proto"},
+				"Content-Encoding":         {"blah"},
+			},
+			expectedCode: http.StatusTeapot,
+		},
+		{
+			name:          "connect post, unknown compression",
+			server:        grpcServer,
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Connect-Protocol-Version": {"1"},
+				"Content-Type":             {"application/proto"},
+				"Content-Encoding":         {"blah"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "grpc, unknown compression, pass-through",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type":  {"application/grpc+proto"},
+				"Grpc-Encoding": {"blah"},
+			},
+			expectedCode: http.StatusTeapot,
+		},
+		{
+			name:          "grpc, unknown compression",
+			server:        connectServer,
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type":  {"application/grpc+proto"},
+				"Grpc-Encoding": {"blah"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "grpc-web, unknown compression, pass-through",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type":  {"application/grpc-web+proto"},
+				"Grpc-Encoding": {"blah"},
+			},
+			expectedCode: http.StatusTeapot,
+		},
+		{
+			name:          "grpc-web, unknown compression",
+			server:        connectServer,
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type":  {"application/grpc-web+proto"},
+				"Grpc-Encoding": {"blah"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "connect stream, bidi and http 1.1",
+			server:        http1Server,
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/connect+proto"},
+			},
+			expectedCode: http.StatusHTTPVersionNotSupported,
+		},
+		{
+			name:          "grpc stream, bidi and http 1.1",
+			server:        http1Server,
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc+proto"},
+			},
+			expectedCode: http.StatusHTTPVersionNotSupported,
+		},
+		{
+			name:          "grpc-web stream, bidi and http 1.1",
+			server:        http1Server,
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/grpc-web+proto"},
+			},
+			expectedCode: http.StatusHTTPVersionNotSupported,
+		},
+		{
+			name:          "connect post, stream method",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Connect-Protocol-Version": {"1"},
+				"Content-Type":             {"application/proto"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name:          "connect stream, unary method",
+			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/connect+proto"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		// TODO: add more tests around connect GET when we have a test
+		//       proto to use other than eliza and a method that can
+		//       actually support GET.
+		// TODO: add more tests around REST when we have a test proto
+		//       to use other than eliza and methods with http
+		//       annotations.
+
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			targetServer := server
+			if testCase.server != nil {
+				targetServer = testCase.server
+			}
+			req, err := http.NewRequestWithContext(context.Background(), testCase.requestMethod, targetServer.URL+testCase.requestURL, http.NoBody)
+			require.NoError(t, err)
+			for k, vals := range testCase.requestHeaders {
+				for _, v := range vals {
+					req.Header.Add(k, v)
+				}
+			}
+			resp, err := targetServer.Client().Do(req)
+			require.NoError(t, err)
+			err = resp.Body.Close()
+			require.NoError(t, err)
+			require.Equal(t, testCase.expectedCode, resp.StatusCode)
+			for k, v := range testCase.expectedResponseHeaders {
+				require.Equal(t, v, resp.Header.Get(k))
+			}
+		})
+	}
 }
 
 func TestHandler_PassThrough(t *testing.T) {

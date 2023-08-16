@@ -126,10 +126,10 @@ type clientProtocolHandler interface {
 	String() string
 }
 
-// clientProtocolSupportsGet is a marker interface implemented by
-// clientProtocolHandler instances that support the GET HTTP method.
+// clientProtocolSupportsGet is an optional interface implemented by
+// clientProtocolHandler instances that can support the GET HTTP method.
 type clientProtocolAllowsGet interface {
-	allowsGetRequests()
+	allowsGetRequests(*methodConfig) bool
 }
 
 // serverProtocolHandler handles the protocol used by the server.

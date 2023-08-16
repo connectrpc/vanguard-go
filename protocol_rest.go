@@ -17,7 +17,6 @@ import (
 type restClientProtocol struct{}
 
 var _ clientProtocolHandler = restClientProtocol{}
-var _ clientProtocolAllowsGet = restClientProtocol{}
 var _ clientBodyPreparer = restClientProtocol{}
 
 // restClientProtocol implements the REST protocol for
@@ -30,8 +29,6 @@ func (r restClientProtocol) acceptsStreamType(streamType connect.StreamType) boo
 	// TODO: support connect.StreamTypeServer, too
 	return streamType == connect.StreamTypeUnary
 }
-
-func (r restClientProtocol) allowsGetRequests() {}
 
 func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
