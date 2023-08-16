@@ -146,11 +146,11 @@ func (p *pathParser) parseLiteral() (string, error) {
 		p.scan.next()
 		return "", p.errUnexpected()
 	}
-	unescaped, err := url.PathUnescape(literal)
+	unescaped, err := pathUnescape(literal, pathEncodeSingle)
 	if err != nil {
 		return "", p.errSyntax(err.Error())
 	}
-	return unescaped, nil
+	return pathEscape(unescaped, pathEncodeSingle), nil
 }
 func (p *pathParser) parseSegment() error {
 	var segment string
@@ -229,4 +229,123 @@ func (p *pathParser) parseVariable() error {
 	}
 	p.variables = append(p.variables, variable)
 	return nil
+}
+
+const upperhex = "0123456789ABCDEF"
+
+func ishex(char byte) bool {
+	switch {
+	case '0' <= char && char <= '9':
+		return true
+	case 'a' <= char && char <= 'f':
+		return true
+	case 'A' <= char && char <= 'F':
+		return true
+	}
+	return false
+}
+func unhex(char byte) byte {
+	switch {
+	case '0' <= char && char <= '9':
+		return char - '0'
+	case 'a' <= char && char <= 'f':
+		return char - 'a' + 10
+	case 'A' <= char && char <= 'F':
+		return char - 'A' + 10
+	}
+	return 0
+}
+
+// pathEncoding is the encoding used for path variables.
+type pathEncoding int
+
+const (
+	pathEncodeSingle pathEncoding = iota
+	pathEncodeMulti
+)
+
+func pathShouldEscape(char byte, _ pathEncoding) bool {
+	return !isVariable(rune(char))
+}
+func pathIsHexSlash(input string) bool {
+	if len(input) < 3 {
+		return false
+	}
+	return input[0] == '%' && input[1] == '2' && (input[2] == 'f' || input[2] == 'F')
+}
+
+func pathEscape(input string, mode pathEncoding) string {
+	// Count the number of characters that possibly escaping.
+	hexCount := 0
+	for i := 0; i < len(input); i++ {
+		if pathShouldEscape(input[i], mode) {
+			hexCount++
+		}
+	}
+	if hexCount == 0 {
+		return input
+	}
+
+	var sb strings.Builder
+	sb.Grow(len(input) + 2*hexCount)
+	for i := 0; i < len(input); i++ {
+		switch char := input[i]; {
+		case char == '%' && mode == pathEncodeMulti && pathIsHexSlash(input[i:]):
+			sb.WriteString("%2F")
+			i += 2
+		case pathShouldEscape(char, mode):
+			sb.WriteByte('%')
+			sb.WriteByte(upperhex[char>>4])
+			sb.WriteByte(upperhex[char&15])
+		default:
+			sb.WriteByte(char)
+		}
+	}
+	return sb.String()
+}
+func validateHex(input string) error {
+	if len(input) < 3 || input[0] != '%' || !ishex(input[1]) || !ishex(input[2]) {
+		if len(input) > 3 {
+			input = input[:3]
+		}
+		return url.EscapeError(input)
+	}
+	return nil
+}
+func pathUnescape(input string, mode pathEncoding) (string, error) {
+	// Count %, check that they're well-formed.
+	percentCount := 0
+	for i := 0; i < len(input); {
+		switch input[i] {
+		case '%':
+			percentCount++
+			if err := validateHex(input[i:]); err != nil {
+				return "", err
+			}
+			i += 3
+		default:
+			i++
+		}
+	}
+	if percentCount == 0 {
+		return input, nil
+	}
+
+	var sb strings.Builder
+	sb.Grow(len(input) - 2*percentCount)
+	for i := 0; i < len(input); i++ {
+		switch input[i] {
+		case '%':
+			if mode == pathEncodeMulti && pathIsHexSlash(input[i:]) {
+				// Multi doesn't escape /, so we don't escape.
+				sb.WriteString("%2F")
+			} else {
+				sb.WriteByte(unhex(input[i+1])<<4 | unhex(input[i+2]))
+			}
+			i += 2
+		default:
+			sb.WriteByte(input[i])
+		}
+	}
+	return sb.String(), nil
 }

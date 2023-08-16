@@ -189,11 +189,12 @@ func initTrie(t *testing.T) *routeTrie {
 		require.NoError(t, err)
 
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			target, err := makeTarget(&methodConfig{
+			config := &methodConfig{
 				descriptor: &fakeMethodDescriptor{
 					name: fmt.Sprintf("%s %s", method, route),
 				},
-			}, "*", "*", variables)
+			}
+			target, err := makeTarget(config, "POST", "*", "*", segments, variables)
 			require.NoError(t, err)
 			err = trie.insert(method, target, segments)
 			require.NoError(t, err)
@@ -285,4 +286,7 @@ func (f *fakeFieldDescriptor) Message() protoreflect.MessageDescriptor {
 		f.msg = &fakeMessageDescriptor{}
 	}
 	return f.msg
+}
+func (f *fakeFieldDescriptor) IsList() bool {
+	return false
 }

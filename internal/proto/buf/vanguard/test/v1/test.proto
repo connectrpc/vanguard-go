@@ -80,4 +80,6 @@ message ParameterValues {
   map<string, Enum> enum_map = 40;
   map<string, Nested> nested_map = 41;
   google.protobuf.Struct struct_value = 42;
+  google.protobuf.Value value = 43;
+  repeated ParameterValues recursive_list = 44;
 }

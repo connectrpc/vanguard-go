@@ -61,7 +61,7 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if err != nil {
 		return err
 	}
-	target, err := makeTarget(config, rule.Body, rule.ResponseBody, variables)
+	target, err := makeTarget(config, method, rule.Body, rule.ResponseBody, segments, variables)
 	if err != nil {
 		return err
 	}
@@ -218,29 +218,28 @@ func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethod
 type routeMethods map[string]*routeTarget
 
 type routeTarget struct {
-	config           *methodConfig
-	requestBodyPath  []protoreflect.FieldDescriptor
-	responseBodyPath []protoreflect.FieldDescriptor
-	vars             []routeTargetVar
+	config                *methodConfig
+	method                string // HTTP method
+	path                  []string
+	verb                  string
+	requestBodyFieldPath  string
+	requestBodyFields     []protoreflect.FieldDescriptor
+	responseBodyFieldPath string
+	responseBodyFields    []protoreflect.FieldDescriptor
+	vars                  []routeTargetVar
 }
 
-type routeTargetVar struct {
-	pathVariable
-
-	fields []protoreflect.FieldDescriptor
-}
-
-type routeTargetVarMatch struct {
-	fields []protoreflect.FieldDescriptor
-	value  string
-}
-
-func makeTarget(config *methodConfig, requestBody, responseBody string, variables []pathVariable) (*routeTarget, error) {
-	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
+func makeTarget(
+	config *methodConfig,
+	method, requestBody, responseBody string,
+	segments pathSegments,
+	variables []pathVariable,
+) (*routeTarget, error) {
+	requestBodyFields, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
 		return nil, err
 	}
-	responseBodyPath, err := resolvePathToDescriptors(config.descriptor.Output(), responseBody)
+	responseBodyFields, err := resolvePathToDescriptors(config.descriptor.Output(), responseBody)
 	if err != nil {
 		return nil, err
 	}
@@ -250,17 +249,57 @@ func makeTarget(config *methodConfig, requestBody, responseBody string, variable
 		if err != nil {
 			return nil, err
 		}
+		if last := fields[len(fields)-1]; last.IsList() {
+			return nil, fmt.Errorf(
+				"unexpected path variable %q: cannot be a repeated field",
+				variable.fieldPath,
+			)
+		}
 		routeTargetVars[i] = routeTargetVar{
 			pathVariable: variable,
 			fields:       fields,
 		}
 	}
 	return &routeTarget{
-		config:           config,
-		requestBodyPath:  requestBodyPath,
-		responseBodyPath: responseBodyPath,
-		vars:             routeTargetVars,
+		config:                config,
+		method:                method,
+		path:                  segments.path,
+		verb:                  segments.verb,
+		requestBodyFieldPath:  requestBody,
+		requestBodyFields:     requestBodyFields,
+		responseBodyFieldPath: responseBody,
+		responseBodyFields:    responseBodyFields,
+		vars:                  routeTargetVars,
 	}, nil
+}
+
+type routeTargetVar struct {
+	pathVariable
+
+	fields []protoreflect.FieldDescriptor
+}
+
+func (v routeTargetVar) size() int {
+	if v.end == -1 {
+		return -1
+	}
+	return v.end - v.start
+}
+func (v routeTargetVar) capture(segments []string) string {
+	start, end := v.start, v.end
+	if v.end == -1 {
+		if start >= len(segments) {
+			return ""
+		}
+		end = len(segments)
+	}
+	// TODO: values should be pathUnescape'd
+	return strings.Join(segments[start:end], "/")
+}
+
+type routeTargetVarMatch struct {
+	fields []protoreflect.FieldDescriptor
+	value  string
 }
 
 func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch {
@@ -270,18 +309,7 @@ func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch 
 	vars := make([]routeTargetVarMatch, len(target.vars))
 	for i, varDef := range target.vars {
 		vars[i].fields = varDef.fields
-		var pathElements []string
-		if varDef.end == -1 {
-			if varDef.start < len(path) {
-				pathElements = path[varDef.start:]
-			} else {
-				// leave value blank; it was double-asterisk that matched zero path elements
-				continue
-			}
-		} else {
-			pathElements = path[varDef.start:varDef.end]
-		}
-		vars[i].value = strings.Join(pathElements, "/")
+		vars[i].value = varDef.capture(path)
 	}
 	return vars
 }

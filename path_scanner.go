@@ -77,8 +77,14 @@ func isFieldPath(char rune) bool {
 	return isIdent(char) || char == '.'
 }
 func isLiteral(char rune) bool {
-	// Allow all characters that are allowed in a URL path segment.
-	// Follows [url.PathUnescape](https://golang.org/pkg/net/url/#PathUnescape).
-	// [https://cs.opensource.google/go/go/+/refs/tags/go1.21.0:src/net/url/url.go;l=138]
-	return isFieldPath(char) || char == '%' || char == '~' || char == '-' || char == '$' || char == '&' || char == '+' || char == '=' || char == '@'
+	// Allow [-_.~0-9a-zA-Z] and % for escaped characters.
+	return isVariable(char) || char == '%'
+}
+
+// isVariable is used to determine if a character is allowed in a single variable segment.
+//
+// See: https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L251C34-L251C38
+func isVariable(char rune) bool {
+	// Allow [-_.~0-9a-zA-Z].
+	return isFieldPath(char) || char == '-' || char == '~'
 }
