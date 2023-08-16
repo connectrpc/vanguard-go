@@ -301,7 +301,7 @@ func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Valu
 	if !isScalarWKT(field) {
 		return nil, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
-	msgName := string(field.Message().Name())
+	msgName := field.Message().Name()
 	switch msgName {
 	case "BytesValue", "DoubleValue", "FloatValue":
 		// Switch to base64.URLEncoding for BytesValue and handling
