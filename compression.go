@@ -52,11 +52,22 @@ func (p *compressionPool) Name() string {
 	return p.name
 }
 
-//nolint:unused // temporary
-func (p *compressionPool) getCompressor() connect.Compressor {
-	return p.compressors.Get().(connect.Compressor) //nolint:forcetypeassert
+func (p *compressionPool) getCompressor() (connect.Compressor, func()) {
+	if p == nil {
+		return nil, nil
+	}
+	result := p.compressors.Get().(connect.Compressor) //nolint:forcetypeassert,errcheck
+	return result, func() {
+		p.compressors.Put(result)
+	}
 }
 
-func (p *compressionPool) getDecompressor() connect.Decompressor {
-	return p.decompressors.Get().(connect.Decompressor) //nolint:forcetypeassert
+func (p *compressionPool) getDecompressor() (connect.Decompressor, func()) {
+	if p == nil {
+		return nil, nil
+	}
+	result := p.decompressors.Get().(connect.Decompressor) //nolint:forcetypeassert,errcheck
+	return result, func() {
+		p.decompressors.Put(result)
+	}
 }
