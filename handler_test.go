@@ -5,13 +5,24 @@
 package vanguard
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	"buf.build/gen/go/connectrpc/eliza/connectrpc/go/connectrpc/eliza/v1/elizav1connect"
+	"buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -21,11 +32,180 @@ const (
 	testCompressedDataString = "nop qrs tuv" // rot13 of above
 )
 
-func TestHandleErrors(t *testing.T) {
+func TestHandler_Errors(t *testing.T) {
 	t.Parallel()
 	// These tests exercise error-handling in the way the operation is initialized.
-	// Non-error tests are instead covered by a separate matrix of protocol tests.
+	// These tests should not reach the underlying handler or any particular protocol
+	// handler implementation (other than extracting request metadata).
 	// TODO
+}
+
+func TestHandler_PassThrough(t *testing.T) {
+	t.Parallel()
+	// These cases don't do any transformation and just pass through to the
+	// underlying handler.
+
+	// TODO: Use library service that combinatorial tests will use? Maybe use upcoming
+	//       test interceptor to set up the scenarios instead of handler impl?
+	_, impl := elizav1connect.NewElizaServiceHandler(&elizaHandler{})
+
+	const testCaseIDKey = "Test-Case-Id"
+	var testCaseID atomic.Int32
+	var testCaseMap sync.Map
+	checkPassThrough := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
+		// Get a *testing.T for this request so we can attribute error to correct case.
+		testID := request.Header.Get(testCaseIDKey)
+		if testID == "" {
+			http.Error(respWriter, "request did not include test case ID", http.StatusBadRequest)
+			return
+		}
+		val, ok := testCaseMap.Load(testID)
+		if !ok {
+			http.Error(respWriter, fmt.Sprintf("test case ID %q not found", testID), http.StatusBadRequest)
+			return
+		}
+		t, ok := val.(*testing.T)
+		if !ok {
+			http.Error(respWriter, fmt.Sprintf("test case ID %q has unexpected type: %T", testID, val), http.StatusBadRequest)
+			return
+		}
+
+		_, isWrapped := respWriter.(*responseWriter)
+		require.False(t, isWrapped)
+		_, isWrapped = request.Body.(*envelopingReader)
+		require.False(t, isWrapped)
+		_, isWrapped = request.Body.(*transformingReader)
+		require.False(t, isWrapped)
+
+		// carry on...
+		impl.ServeHTTP(respWriter, request)
+	})
+
+	var mux Mux
+	err := mux.RegisterServiceByName(checkPassThrough, elizav1connect.ElizaServiceName)
+	require.NoError(t, err)
+
+	// Use HTTP/2 so we can test a bidi stream.
+	server := httptest.NewUnstartedServer(mux.AsHandler())
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	t.Cleanup(server.Close)
+
+	type connectClientCase struct {
+		name string
+		opts []connect.ClientOption
+	}
+	compressionOptions := []connectClientCase{
+		{
+			name: "identity",
+		},
+		{
+			name: "gzip",
+			opts: []connect.ClientOption{connect.WithSendCompression(CompressionGzip)},
+		},
+	}
+	encodingOptions := []connectClientCase{
+		{
+			name: "proto",
+			opts: []connect.ClientOption{connect.WithCodec(protoConnectCodec{})},
+		},
+		{
+			name: "json",
+			opts: []connect.ClientOption{connect.WithCodec(jsonConnectCodec{})},
+		},
+	}
+	protocolOptions := []connectClientCase{
+		{
+			name: "connect",
+		},
+		{
+			name: "grpc",
+			opts: []connect.ClientOption{connect.WithGRPC()},
+		},
+		{
+			name: "grpc-web",
+			opts: []connect.ClientOption{connect.WithGRPCWeb()},
+		},
+	}
+
+	for _, protocolCase := range protocolOptions {
+		protocolCase := protocolCase
+		t.Run(protocolCase.name, func(t *testing.T) {
+			t.Parallel()
+			for _, encodingCase := range encodingOptions {
+				encodingCase := encodingCase
+				t.Run(encodingCase.name, func(t *testing.T) {
+					t.Parallel()
+					for _, compressionCase := range compressionOptions {
+						compressionCase := compressionCase
+						t.Run(compressionCase.name, func(t *testing.T) {
+							t.Parallel()
+
+							testID := strconv.Itoa(int(testCaseID.Add(1)))
+							testCaseMap.Store(testID, t)
+
+							clientOptions := make([]connect.ClientOption, 0, 4)
+							clientOptions = append(clientOptions, protocolCase.opts...)
+							clientOptions = append(clientOptions, encodingCase.opts...)
+							clientOptions = append(clientOptions, compressionCase.opts...)
+							clientOptions = append(clientOptions, connect.WithInterceptors(
+								addHeaderClientInterceptor{name: testCaseIDKey, value: testID},
+							))
+							client := elizav1connect.NewElizaServiceClient(server.Client(), server.URL, clientOptions...)
+
+							// Unary cases
+							resp, err := client.Say(context.Background(), connect.NewRequest(&elizav1.SayRequest{
+								Sentence: "I feel happy today",
+							}))
+							require.NoError(t, err)
+							require.NotEmpty(t, resp.Msg.Sentence)
+
+							_, err = client.Say(context.Background(), connect.NewRequest(&elizav1.SayRequest{
+								Sentence: "error:the vibe is in shambles:resource_exhausted",
+							}))
+							require.ErrorContains(t, err, "the vibe is in shambles")
+							require.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
+
+							// Stream
+							str, err := client.Introduce(context.Background(), connect.NewRequest(&elizav1.IntroduceRequest{
+								Name: "Bob Loblaw",
+							}))
+							require.NoError(t, err)
+							var count int
+							for str.Receive() {
+								count++
+								require.NotEmpty(t, str.Msg().Sentence)
+							}
+							require.NoError(t, str.Err())
+							require.Equal(t, 3, count)
+
+							// Bidi stream
+							bidi := client.Converse(context.Background())
+							defer func() {
+								err := bidi.CloseResponse()
+								require.NoError(t, err)
+							}()
+							bidi.RequestHeader().Set(testCaseIDKey, testID)
+							for i := 0; i < 10; i++ {
+								sentence := strings.Repeat("foo,", i)
+								err := bidi.Send(&elizav1.ConverseRequest{
+									Sentence: sentence,
+								})
+								require.NoError(t, err)
+								resp, err := bidi.Receive()
+								require.NoError(t, err)
+								require.Contains(t, resp.Sentence, sentence)
+							}
+							err = bidi.CloseRequest()
+							require.NoError(t, err)
+							_, err = bidi.Receive()
+							require.ErrorIs(t, err, io.EOF)
+						})
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestMessage_AdvanceStage(t *testing.T) {
@@ -462,4 +642,141 @@ func rot13(data []byte) {
 		}
 		data[index] = char
 	}
+}
+
+type elizaHandler struct {
+	elizav1connect.UnimplementedElizaServiceHandler
+}
+
+func (elizaHandler) Say(_ context.Context, req *connect.Request[elizav1.SayRequest]) (*connect.Response[elizav1.SayResponse], error) {
+	if err := shouldFail(req.Msg.Sentence); err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&elizav1.SayResponse{
+		Sentence: "Oh really? Are you sure " + req.Msg.Sentence + "?",
+	}), nil
+}
+
+func (elizaHandler) Converse(_ context.Context, str *connect.BidiStream[elizav1.ConverseRequest, elizav1.ConverseResponse]) error {
+	for {
+		req, err := str.Receive()
+		if errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if err := shouldFail(req.Sentence); err != nil {
+			return err
+		}
+		err = str.Send(&elizav1.ConverseResponse{
+			Sentence: "Oh really? Are you sure " + req.Sentence + "?",
+		})
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (elizaHandler) Introduce(_ context.Context, req *connect.Request[elizav1.IntroduceRequest], str *connect.ServerStream[elizav1.IntroduceResponse]) error {
+	err := str.Send(&elizav1.IntroduceResponse{
+		Sentence: "Hi, " + req.Msg.Name + ".",
+	})
+	if err != nil {
+		return err
+	}
+	err = str.Send(&elizav1.IntroduceResponse{
+		Sentence: "I'm Eliza.",
+	})
+	if err != nil {
+		return err
+	}
+	return str.Send(&elizav1.IntroduceResponse{
+		Sentence: "Have a nice day!",
+	})
+}
+
+func shouldFail(str string) error {
+	if !strings.HasPrefix(str, "error:") {
+		return nil
+	}
+	parts := strings.SplitN(str, ":", 3)
+	msg := parts[1]
+	code := connect.CodeUnknown
+	if len(parts) == 3 {
+		codeStr := parts[2]
+		for c := connect.CodeCanceled; c <= connect.CodeUnauthenticated; c++ {
+			if c.String() == codeStr {
+				code = c
+				break
+			}
+		}
+	}
+	return connect.NewError(code, errors.New(msg))
+}
+
+type protoConnectCodec struct{}
+
+func (p protoConnectCodec) Name() string {
+	return CodecProto
+}
+
+func (p protoConnectCodec) Marshal(a any) ([]byte, error) {
+	msg, ok := a.(proto.Message)
+	if !ok {
+		return nil, errors.New("not a message")
+	}
+	return proto.Marshal(msg)
+}
+
+func (p protoConnectCodec) Unmarshal(bytes []byte, a any) error {
+	msg, ok := a.(proto.Message)
+	if !ok {
+		return errors.New("not a message")
+	}
+	return proto.Unmarshal(bytes, msg)
+}
+
+type jsonConnectCodec struct{}
+
+func (j jsonConnectCodec) Name() string {
+	return CodecJSON
+}
+
+func (j jsonConnectCodec) Marshal(a any) ([]byte, error) {
+	msg, ok := a.(proto.Message)
+	if !ok {
+		return nil, errors.New("not a message")
+	}
+	return protojson.Marshal(msg)
+}
+
+func (j jsonConnectCodec) Unmarshal(bytes []byte, a any) error {
+	msg, ok := a.(proto.Message)
+	if !ok {
+		return errors.New("not a message")
+	}
+	return protojson.Unmarshal(bytes, msg)
+}
+
+type addHeaderClientInterceptor struct {
+	name, value string
+}
+
+func (i addHeaderClientInterceptor) WrapUnary(f connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		req.Header().Set(i.name, i.value)
+		return f(ctx, req)
+	}
+}
+
+func (i addHeaderClientInterceptor) WrapStreamingClient(h connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
+		str := h(ctx, spec)
+		str.RequestHeader().Set(i.name, i.value)
+		return str
+	}
+}
+
+func (i addHeaderClientInterceptor) WrapStreamingHandler(h connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return h
 }

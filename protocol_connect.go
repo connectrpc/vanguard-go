@@ -8,6 +8,7 @@ package vanguard
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
@@ -39,12 +40,19 @@ func (c connectUnaryGetClientProtocol) acceptsStreamType(streamType connect.Stre
 
 func (c connectUnaryGetClientProtocol) allowsGetRequests() {}
 
-func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
-	//TODO implement me
-	panic("implement me")
+func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
+	var reqMeta requestMeta
+	if err := extractConnectTimeout(headers, &reqMeta); err != nil {
+		return reqMeta, err
+	}
+	query := op.queryValues()
+	reqMeta.codec = query.Get("encoding")
+	reqMeta.compression = query.Get("compression")
+	reqMeta.acceptCompression = parseMultiple(headers.Values("Accept-Encoding"))
+	return reqMeta, nil
 }
 
-func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
+func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -93,12 +101,24 @@ func (c connectUnaryPostClientProtocol) acceptsStreamType(streamType connect.Str
 	return streamType == connect.StreamTypeUnary
 }
 
-func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
-	//TODO implement me
-	panic("implement me")
+func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
+	var reqMeta requestMeta
+	if err := extractConnectTimeout(headers, &reqMeta); err != nil {
+		return reqMeta, err
+	}
+	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), "application/")
+	if reqMeta.codec == CodecJSON+"; charset=utf-8" {
+		// TODO: should we support other text formats that may need charset check?
+		reqMeta.codec = CodecJSON
+	}
+	reqMeta.compression = headers.Get("Content-Encoding")
+	headers.Del("Content-Encoding")
+	reqMeta.acceptCompression = parseMultiple(headers.Values("Accept-Encoding"))
+	headers.Del("Accept-Encoding")
+	return reqMeta, nil
 }
 
-func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
+func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -130,17 +150,17 @@ func (c connectUnaryServerProtocol) endMustBeInHeaders() bool {
 	return true
 }
 
-func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
+func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(i int, header http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectUnaryServerProtocol) extractEndFromTrailers(o *operation, header http.Header) (responseEnd, error) {
+func (c connectUnaryServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -194,12 +214,20 @@ func (c connectStreamClientProtocol) acceptsStreamType(streamType connect.Stream
 	return streamType != connect.StreamTypeUnary
 }
 
-func (c connectStreamClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
-	//TODO implement me
-	panic("implement me")
+func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
+	var reqMeta requestMeta
+	if err := extractConnectTimeout(headers, &reqMeta); err != nil {
+		return reqMeta, err
+	}
+	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), "application/connect+")
+	reqMeta.compression = headers.Get("Connect-Content-Encoding")
+	headers.Del("Connect-Content-Encoding")
+	reqMeta.acceptCompression = parseMultiple(headers.Values("Connect-Accept-Encoding"))
+	headers.Del("Connect-Accept-Encoding")
+	return reqMeta, nil
 }
 
-func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
+func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -234,17 +262,17 @@ func (c connectStreamServerProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
+func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, header http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) extractEndFromTrailers(o *operation, header http.Header) (responseEnd, error) {
+func (c connectStreamServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -266,4 +294,9 @@ func (c connectStreamServerProtocol) decodeEndFromMessage(codec Codec, reader io
 
 func (c connectStreamServerProtocol) String() string {
 	return protocolNameConnectStream
+}
+
+func extractConnectTimeout(headers http.Header, meta *requestMeta) error {
+	// TODO
+	return nil
 }

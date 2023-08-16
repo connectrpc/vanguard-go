@@ -11,6 +11,7 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type restClientProtocol struct{}
@@ -32,12 +33,30 @@ func (r restClientProtocol) acceptsStreamType(streamType connect.StreamType) boo
 
 func (r restClientProtocol) allowsGetRequests() {}
 
-func (r restClientProtocol) extractProtocolRequestHeaders(header http.Header) (requestMeta, error) {
-	//TODO implement me
-	panic("implement me")
+func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
+	var reqMeta requestMeta
+	reqMeta.compression = headers.Get("Content-Encoding")
+	headers.Del("Content-Encoding")
+	reqMeta.acceptCompression = parseMultiple(headers.Values("Accept-Encoding"))
+	headers.Del("Accept-Encoding")
+
+	reqMeta.codec = CodecJSON // if actually a custom content-type, handled by body preparer methods
+	contentType := headers.Get("Content-Type")
+	if contentType != "" && contentType != "application/json" && contentType != "application/json; charset=utf-8" {
+		// only allowed if body is google.api.HttpBody
+		if len(op.restTarget.responseBodyFields) == 0 {
+			reqMeta.codec = contentType + "?"
+		}
+		field := op.restTarget.responseBodyFields[len(op.restTarget.responseBodyFields)-1]
+		if field.Kind() != protoreflect.MessageKind || field.Message().FullName() != "google.api.HttpBody" {
+			reqMeta.codec = contentType + "?"
+		}
+	}
+
+	return reqMeta, nil
 }
 
-func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header http.Header, allowedCompression []string) {
+func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -90,17 +109,17 @@ func (r restServerProtocol) endMustBeInHeaders() bool {
 	return true
 }
 
-func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {
+func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r restServerProtocol) extractProtocolResponseHeaders(i int, header http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (r restServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r restServerProtocol) extractEndFromTrailers(o *operation, header http.Header) (responseEnd, error) {
+func (r restServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
 	//TODO implement me
 	panic("implement me")
 }

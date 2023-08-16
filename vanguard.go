@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	CompressionGzip = "gzip"
+	CompressionGzip     = "gzip"
+	CompressionIdentity = "identity"
 	// TODO: Connect protocol spec also references "br" (Brotli) and "zstd". And gRPC
 	//       protocol spec references "deflate" and "snappy". Should we also support
 	//       those out of the box?
@@ -165,7 +166,7 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		}
 	}
 	// empty is allowed here: non-nil but empty means do not send compressed data to handler
-	svcOpts.codecNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
+	svcOpts.compressorNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
 	for compressorName := range svcOpts.compressorNames {
 		if _, known := m.compressionPools[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use config.AddCompression to add known algorithms first", compressorName)

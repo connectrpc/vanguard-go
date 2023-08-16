@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -107,7 +108,7 @@ type clientProtocolHandler interface {
 	// determine the codec (aka sub-format), compression (aka encoding),
 	// timeout, etc. The relevant headers are interpreted into the
 	// returned requestMeta and also *removed* from the given headers.
-	extractProtocolRequestHeaders(http.Header) (requestMeta, error)
+	extractProtocolRequestHeaders(*operation, http.Header) (requestMeta, error)
 	// Encodes the given responseMeta as headers into the given target
 	// headers. If provided, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
@@ -266,6 +267,7 @@ type envelope struct {
 // protocol-specific.
 type requestMeta struct {
 	timeout           time.Duration
+	hasTimeout        bool
 	codec             string
 	compression       string
 	acceptCompression []string
@@ -292,4 +294,32 @@ type responseEnd struct {
 	// occur for REST streaming responses, where the final message may
 	// include both gRPC and HTTP codes.
 	httpCode int
+}
+
+func parseMultiple(vals []string) []string {
+	if len(vals) == 0 {
+		return nil
+	}
+	var count int
+	for _, val := range vals {
+		count += strings.Count(val, ",") + 1
+	}
+	result := make([]string, 0, count)
+	for _, val := range vals {
+		for {
+			pos := strings.IndexByte(val, ',')
+			if pos == -1 {
+				if val != "" {
+					result = append(result, val)
+				}
+				break
+			}
+			item := val[:pos]
+			if item != "" {
+				result = append(result, item)
+			}
+			val = val[pos+1:]
+		}
+	}
+	return result
 }
