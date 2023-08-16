@@ -303,19 +303,12 @@ func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Valu
 	}
 	msgName := string(field.Message().Name())
 	switch msgName {
-	case "BytesValue":
-		// Switch to base64.URLEncoding
+	case "BytesValue", "DoubleValue", "FloatValue":
+		// Switch to base64.URLEncoding for BytesValue and handling
+		// of float/double string values.
 		field := field.Message().Fields().ByName("value")
 		value := value.Message().Get(field)
 		return marshalFieldValue(field, value)
-	case "DoubleValue":
-		field := field.Message().Fields().ByName("value")
-		value := value.Message().Get(field)
-		return marshalFloat(value.Float(), 64)
-	case "FloatValue":
-		field := field.Message().Fields().ByName("value")
-		value := value.Message().Get(field)
-		return marshalFloat(value.Float(), 32)
 	}
 	data, err := protojson.Marshal(value.Message().Interface())
 	if err != nil {
