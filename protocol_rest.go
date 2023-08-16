@@ -42,7 +42,7 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	panic("implement me")
 }
 
-func (r restClientProtocol) encodeEnd(end responseEnd, writer io.Writer) (http.Header, error) {
+func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -78,9 +78,16 @@ type restServerProtocol struct{}
 var _ serverProtocolHandler = restServerProtocol{}
 var _ requestLineBuilder = restServerProtocol{}
 var _ serverBodyPreparer = restServerProtocol{}
+var _ serverProtocolEndMustBeInHeaders = restServerProtocol{}
 
 func (r restServerProtocol) protocol() Protocol {
 	return ProtocolREST
+}
+
+func (r restServerProtocol) endMustBeInHeaders() bool {
+	// TODO: when we support server streams over REST, this
+	//       should return false when streaming
+	return true
 }
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, header http.Header, allowedCompression []string) {

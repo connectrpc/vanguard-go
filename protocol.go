@@ -116,7 +116,10 @@ type clientProtocolHandler interface {
 	// writer. It can also return any trailers to add to the response.
 	// Some protocols may ignore the writer, some will return no
 	// trailers.
-	encodeEnd(responseEnd, io.Writer) (http.Header, error)
+	//
+	// The given codec represents the sub-format that the client used
+	// (which may be used to encode the error).
+	encodeEnd(Codec, *responseEnd, io.Writer) http.Header
 
 	// String returns a human-readable name/description of protocol.
 	String() string
@@ -152,6 +155,15 @@ type serverProtocolHandler interface {
 	String() string
 }
 
+// serverProtocolEndMustBeInHeaders is an optional interface implemented
+// by serverProtocolHandler instances to indicate if the end of an RPC
+// must be indicated in response headers (not trailers or in the body).
+// If a protocol handler does not implement this, it is assumed to be
+// false.
+type serverProtocolEndMustBeInHeaders interface {
+	endMustBeInHeaders() bool
+}
+
 // envelopedProtocolHandler is an optional interface implemented
 // by clientProtocolHandler and serverProtocolHandler instances
 // whose protocol uses an envelope around messages.
@@ -169,7 +181,11 @@ type serverEnvelopedProtocolHandler interface {
 	// set, this is called to parse the message contents. The
 	// given reader will be decompressed (even if the envelope
 	// had its compressed bit set).
-	decodeEndFromMessage(*operation, io.Reader) (responseEnd, error)
+	//
+	// The given codec represents the sub-format used to send
+	// the request to the server (which may be used to decode
+	// the error).
+	decodeEndFromMessage(Codec, io.Reader) (responseEnd, error)
 }
 
 // requestLineBuilder is an optional interface implemented by
