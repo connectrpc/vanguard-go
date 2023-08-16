@@ -170,8 +170,8 @@ func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescrip
 	if !isScalarWKT(field) {
 		return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
-	msgName := string(field.Message().Name())
-	if msgName == "DoubleValue" || msgName == "FloatValue" {
+	switch field.Message().Name() {
+	case "DoubleValue", "FloatValue":
 		value := msg.NewField(field)
 		floatField := value.Message().Descriptor().Fields().ByName("value")
 		floatValue, err := unmarshalFloat(data, 64)
@@ -180,8 +180,6 @@ func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescrip
 		}
 		value.Message().Set(floatField, floatValue)
 		return value, nil
-	}
-	switch msgName {
 	case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask":
 		data = quote(data)
 	}
