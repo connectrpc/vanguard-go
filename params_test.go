@@ -90,6 +90,11 @@ func TestSetParameter(t *testing.T) {
 		value:  strconv.FormatFloat(math.MaxFloat32, 'f', -1, 32),
 		want:   &testv1.ParameterValues{FloatValue: math.MaxFloat32},
 	}, {
+		fields:  "float_value",
+		value:   strconv.FormatFloat(math.MaxFloat64, 'f', -1, 64),
+		want:    &testv1.ParameterValues{},
+		wantErr: "invalid_argument: invalid parameter \"float_value\" value for type \"float\": 179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+	}, {
 		fields: "float_value",
 		value:  "NaN",
 		want:   &testv1.ParameterValues{FloatValue: float32(math.NaN())},
@@ -397,6 +402,7 @@ func TestSetParameter(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			assert.Empty(t, testCase.wantErr)
 
 			got := value.Interface()
 			assert.Empty(t, cmp.Diff(testCase.want, got, protocmp.Transform(), cmpopts.EquateNaNs()))
@@ -692,6 +698,7 @@ func TestGetParameter(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			assert.Empty(t, testCase.wantErr)
 			assert.Equal(t, testCase.want, value)
 		})
 	}

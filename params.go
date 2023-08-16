@@ -173,12 +173,12 @@ func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescrip
 	switch field.Message().Name() {
 	case "DoubleValue", "FloatValue":
 		value := msg.NewField(field)
-		floatField := value.Message().Descriptor().Fields().ByName("value")
-		floatValue, err := unmarshalFloat(data, 64)
+		subField := value.Message().Descriptor().Fields().ByName("value")
+		subValue, err := unmarshalFieldValue(value.Message(), subField, data)
 		if err != nil {
 			return protoreflect.Value{}, err
 		}
-		value.Message().Set(floatField, floatValue)
+		value.Message().Set(subField, subValue)
 		return value, nil
 	case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask":
 		data = quote(data)
