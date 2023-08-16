@@ -69,7 +69,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 			// protojson errors are not exported, check the error string.
 			strings.HasPrefix(err.Error(), "proto") {
 			return connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("invalid parameter %q value for %s type: %s",
+				fmt.Errorf("invalid parameter %q value for type %q: %s",
 					resolveFieldDescriptorsToPath(fields), field.Kind(), data,
 				),
 			)
@@ -170,7 +170,18 @@ func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescrip
 	if !isScalarWKT(field) {
 		return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
-	switch field.Message().Name() {
+	msgName := string(field.Message().Name())
+	if msgName == "DoubleValue" || msgName == "FloatValue" {
+		value := msg.NewField(field)
+		floatField := value.Message().Descriptor().Fields().ByName("value")
+		floatValue, err := unmarshalFloat(data, 64)
+		if err != nil {
+			return protoreflect.Value{}, err
+		}
+		value.Message().Set(floatField, floatValue)
+		return value, nil
+	}
+	switch msgName {
 	case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask":
 		data = quote(data)
 	}
@@ -186,35 +197,32 @@ func unmarshalFieldMessage(msg protoreflect.Message, field protoreflect.FieldDes
 }
 
 func unmarshalFloat(data []byte, bitSize int) (protoreflect.Value, error) {
+	var value float64
 	switch string(data) {
 	case "NaN":
-		if bitSize == 32 {
-			return protoreflect.ValueOfFloat32(float32(math.NaN())), nil
-		}
-		return protoreflect.ValueOfFloat64(math.NaN()), nil
+		value = math.NaN()
 	case "Infinity":
-		if bitSize == 32 {
-			return protoreflect.ValueOfFloat32(float32(math.Inf(+1))), nil
-		}
-		return protoreflect.ValueOfFloat64(math.Inf(+1)), nil
+		value = math.Inf(+1)
 	case "-Infinity":
+		value = math.Inf(-1)
+	default:
 		if bitSize == 32 {
-			return protoreflect.ValueOfFloat32(float32(math.Inf(-1))), nil
+			var x float32
+			if err := json.Unmarshal(data, &x); err != nil {
+				return protoreflect.Value{}, err
+			}
+			return protoreflect.ValueOfFloat32(x), nil
 		}
-		return protoreflect.ValueOfFloat64(math.Inf(-1)), nil
-	}
-	if bitSize == 32 {
-		var x float32
+		var x float64
 		if err := json.Unmarshal(data, &x); err != nil {
 			return protoreflect.Value{}, err
 		}
-		return protoreflect.ValueOfFloat32(x), nil
+		return protoreflect.ValueOfFloat64(x), nil
 	}
-	var x float64
-	if err := json.Unmarshal(data, &x); err != nil {
-		return protoreflect.Value{}, err
+	if bitSize == 32 {
+		return protoreflect.ValueOfFloat32(float32(value)), nil
 	}
-	return protoreflect.ValueOfFloat64(x), nil
+	return protoreflect.ValueOfFloat64(value), nil
 }
 
 func quote(raw []byte) []byte {
@@ -224,8 +232,8 @@ func quote(raw []byte) []byte {
 	return raw
 }
 func unquote(raw []byte) ([]byte, error) {
-	val, err := strconv.Unquote(string(raw))
-	return []byte(val), err
+	value, err := strconv.Unquote(string(raw))
+	return []byte(value), err
 }
 
 func isNullValue(field protoreflect.FieldDescriptor) bool {
@@ -296,11 +304,20 @@ func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Valu
 		return nil, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
 	msgName := string(field.Message().Name())
-	if msgName == "BytesValue" {
+	switch msgName {
+	case "BytesValue":
 		// Switch to base64.URLEncoding
 		field := field.Message().Fields().ByName("value")
 		value := value.Message().Get(field)
 		return marshalFieldValue(field, value)
+	case "DoubleValue":
+		field := field.Message().Fields().ByName("value")
+		value := value.Message().Get(field)
+		return marshalFloat(value.Float(), 64)
+	case "FloatValue":
+		field := field.Message().Fields().ByName("value")
+		value := value.Message().Get(field)
+		return marshalFloat(value.Float(), 32)
 	}
 	data, err := protojson.Marshal(value.Message().Interface())
 	if err != nil {
@@ -308,7 +325,7 @@ func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Valu
 	}
 	switch msgName {
 	case "Timestamp", "Duration", "StringValue", "FieldMask",
-		"Int64Value", "UInt64Value": // Large ints unquoted
+		"Int64Value", "UInt64Value": // Large numbers unquoted
 		return unquote(data)
 	}
 	return data, nil

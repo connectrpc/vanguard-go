@@ -109,7 +109,7 @@ func TestSetParameter(t *testing.T) {
 		fields:  "int32_value",
 		value:   strconv.FormatInt(math.MaxInt64, 10),
 		want:    &testv1.ParameterValues{},
-		wantErr: "invalid_argument: invalid parameter \"int32_value\" value for int32 type: 9223372036854775807",
+		wantErr: "invalid_argument: invalid parameter \"int32_value\" value for type \"int32\": 9223372036854775807",
 	}, {
 		fields: "int64_value",
 		value:  strconv.FormatInt(math.MaxInt64, 10),
@@ -188,7 +188,7 @@ func TestSetParameter(t *testing.T) {
 		fields:  "int32_value_wrapper",
 		value:   strconv.FormatInt(math.MaxInt64, 10),
 		want:    &testv1.ParameterValues{},
-		wantErr: "invalid_argument: invalid parameter \"int32_value_wrapper\" value for message type: 9223372036854775807",
+		wantErr: "invalid_argument: invalid parameter \"int32_value_wrapper\" value for type \"message\": 9223372036854775807",
 	}, {
 		fields: "int64_value_wrapper",
 		value:  strconv.FormatInt(math.MaxInt64, 10),
@@ -214,10 +214,46 @@ func TestSetParameter(t *testing.T) {
 			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.MaxFloat64},
 		},
 	}, {
+		fields: "double_value_wrapper",
+		value:  "NaN",
+		want: &testv1.ParameterValues{
+			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.NaN()},
+		},
+	}, {
+		fields: "double_value_wrapper",
+		value:  "Infinity",
+		want: &testv1.ParameterValues{
+			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.Inf(1)},
+		},
+	}, {
+		fields: "double_value_wrapper",
+		value:  "-Infinity",
+		want: &testv1.ParameterValues{
+			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.Inf(-1)},
+		},
+	}, {
 		fields: "float_value_wrapper",
 		value:  strconv.FormatFloat(math.MaxFloat32, 'f', -1, 32),
 		want: &testv1.ParameterValues{
 			FloatValueWrapper: &wrapperspb.FloatValue{Value: math.MaxFloat32},
+		},
+	}, {
+		fields: "float_value_wrapper",
+		value:  "NaN",
+		want: &testv1.ParameterValues{
+			FloatValueWrapper: &wrapperspb.FloatValue{Value: float32(math.NaN())},
+		},
+	}, {
+		fields: "float_value_wrapper",
+		value:  "-Infinity",
+		want: &testv1.ParameterValues{
+			FloatValueWrapper: &wrapperspb.FloatValue{Value: float32(math.Inf(-1))},
+		},
+	}, {
+		fields: "float_value_wrapper",
+		value:  "Infinity",
+		want: &testv1.ParameterValues{
+			FloatValueWrapper: &wrapperspb.FloatValue{Value: float32(math.Inf(+1))},
 		},
 	}, {
 		fields: "bytes_value_wrapper",
@@ -497,17 +533,59 @@ func TestGetParameter(t *testing.T) {
 		},
 		want: strconv.FormatUint(math.MaxUint64, 10),
 	}, {
+		fields: "uint64_value_wrapper",
+		msg: &testv1.ParameterValues{
+			Uint64ValueWrapper: &wrapperspb.UInt64Value{Value: 1},
+		},
+		want: strconv.FormatUint(1, 10),
+	}, {
 		fields: "double_value_wrapper",
 		msg: &testv1.ParameterValues{
 			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.MaxFloat64},
 		},
 		want: "1.7976931348623157e+308",
 	}, {
+		fields: "double_value_wrapper",
+		msg: &testv1.ParameterValues{
+			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.NaN()},
+		},
+		want: "NaN",
+	}, {
+		fields: "double_value_wrapper",
+		msg: &testv1.ParameterValues{
+			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.Inf(1)},
+		},
+		want: "Infinity",
+	}, {
+		fields: "double_value_wrapper",
+		msg: &testv1.ParameterValues{
+			DoubleValueWrapper: &wrapperspb.DoubleValue{Value: math.Inf(-1)},
+		},
+		want: "-Infinity",
+	}, {
 		fields: "float_value_wrapper",
 		msg: &testv1.ParameterValues{
 			FloatValueWrapper: &wrapperspb.FloatValue{Value: math.MaxFloat32},
 		},
 		want: "3.4028235e+38",
+	}, {
+		fields: "float_value_wrapper",
+		msg: &testv1.ParameterValues{
+			FloatValueWrapper: &wrapperspb.FloatValue{Value: float32(math.NaN())},
+		},
+		want: "NaN",
+	}, {
+		fields: "float_value_wrapper",
+		msg: &testv1.ParameterValues{
+			FloatValueWrapper: &wrapperspb.FloatValue{Value: float32(math.Inf(-1))},
+		},
+		want: "-Infinity",
+	}, {
+		fields: "float_value_wrapper",
+		msg: &testv1.ParameterValues{
+			FloatValueWrapper: &wrapperspb.FloatValue{Value: float32(math.Inf(+1))},
+		},
+		want: "Infinity",
 	}, {
 		fields: "bytes_value_wrapper",
 		msg: &testv1.ParameterValues{
