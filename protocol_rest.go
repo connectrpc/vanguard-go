@@ -45,11 +45,14 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	contentType := headers.Get("Content-Type")
 	if contentType != "" && contentType != "application/json" && contentType != "application/json; charset=utf-8" {
 		// only allowed if body is google.api.HttpBody
-		if len(op.restTarget.responseBodyFields) == 0 {
-			reqMeta.codec = contentType + "?"
+		msg := op.method.Input()
+		if len(op.restTarget.requestBodyFields) > 0 {
+			field := op.restTarget.requestBodyFields[len(op.restTarget.requestBodyFields)-1]
+			msg = field.Message()
+			if field.Kind() != protoreflect.MessageKind || field.Message().FullName() != "google.api.HttpBody" {
+			}
 		}
-		field := op.restTarget.responseBodyFields[len(op.restTarget.responseBodyFields)-1]
-		if field.Kind() != protoreflect.MessageKind || field.Message().FullName() != "google.api.HttpBody" {
+		if msg == nil || msg.FullName() != "google.api.HttpBody" {
 			reqMeta.codec = contentType + "?"
 		}
 	}

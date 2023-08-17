@@ -43,8 +43,17 @@ const (
 	ContentServiceIndexProcedure = "/buf.vanguard.test.v1.ContentService/Index"
 	// ContentServiceUploadProcedure is the fully-qualified name of the ContentService's Upload RPC.
 	ContentServiceUploadProcedure = "/buf.vanguard.test.v1.ContentService/Upload"
+	// ContentServiceUploadChunksProcedure is the fully-qualified name of the ContentService's
+	// UploadChunks RPC.
+	ContentServiceUploadChunksProcedure = "/buf.vanguard.test.v1.ContentService/UploadChunks"
 	// ContentServiceDownloadProcedure is the fully-qualified name of the ContentService's Download RPC.
 	ContentServiceDownloadProcedure = "/buf.vanguard.test.v1.ContentService/Download"
+	// ContentServiceDownloadChunksProcedure is the fully-qualified name of the ContentService's
+	// DownloadChunks RPC.
+	ContentServiceDownloadChunksProcedure = "/buf.vanguard.test.v1.ContentService/DownloadChunks"
+	// ContentServiceSubscribeProcedure is the fully-qualified name of the ContentService's Subscribe
+	// RPC.
+	ContentServiceSubscribeProcedure = "/buf.vanguard.test.v1.ContentService/Subscribe"
 )
 
 // ContentServiceClient is a client for the buf.vanguard.test.v1.ContentService service.
@@ -52,9 +61,15 @@ type ContentServiceClient interface {
 	// Index returns a html index page at the given path.
 	Index(context.Context, *connect.Request[v1.IndexRequest]) (*connect.Response[httpbody.HttpBody], error)
 	// Upload a file to the given path.
-	Upload(context.Context) *connect.ClientStreamForClient[v1.UploadRequest, emptypb.Empty]
+	Upload(context.Context, *connect.Request[v1.UploadRequest]) (*connect.Response[emptypb.Empty], error)
+	// Upload a file to the given path, streaming chunks of the data.
+	UploadChunks(context.Context) *connect.ClientStreamForClient[v1.UploadChunkRequest, emptypb.Empty]
 	// Download a file from the given path.
-	Download(context.Context, *connect.Request[v1.DownloadRequest]) (*connect.ServerStreamForClient[v1.DownloadResponse], error)
+	Download(context.Context, *connect.Request[v1.DownloadRequest]) (*connect.Response[v1.DownloadResponse], error)
+	// Download a file from the given path, streaming chunks of the data.
+	DownloadChunks(context.Context, *connect.Request[v1.DownloadChunkRequest]) (*connect.ServerStreamForClient[v1.DownloadChunkResponse], error)
+	// Subscribe to updates for changes to content.
+	Subscribe(context.Context) *connect.BidiStreamForClient[v1.SubscribeRequest, v1.SubscribeResponse]
 }
 
 // NewContentServiceClient constructs a client for the buf.vanguard.test.v1.ContentService service.
@@ -77,9 +92,24 @@ func NewContentServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			baseURL+ContentServiceUploadProcedure,
 			opts...,
 		),
+		uploadChunks: connect.NewClient[v1.UploadChunkRequest, emptypb.Empty](
+			httpClient,
+			baseURL+ContentServiceUploadChunksProcedure,
+			opts...,
+		),
 		download: connect.NewClient[v1.DownloadRequest, v1.DownloadResponse](
 			httpClient,
 			baseURL+ContentServiceDownloadProcedure,
+			opts...,
+		),
+		downloadChunks: connect.NewClient[v1.DownloadChunkRequest, v1.DownloadChunkResponse](
+			httpClient,
+			baseURL+ContentServiceDownloadChunksProcedure,
+			opts...,
+		),
+		subscribe: connect.NewClient[v1.SubscribeRequest, v1.SubscribeResponse](
+			httpClient,
+			baseURL+ContentServiceSubscribeProcedure,
 			opts...,
 		),
 	}
@@ -87,9 +117,12 @@ func NewContentServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 
 // contentServiceClient implements ContentServiceClient.
 type contentServiceClient struct {
-	index    *connect.Client[v1.IndexRequest, httpbody.HttpBody]
-	upload   *connect.Client[v1.UploadRequest, emptypb.Empty]
-	download *connect.Client[v1.DownloadRequest, v1.DownloadResponse]
+	index          *connect.Client[v1.IndexRequest, httpbody.HttpBody]
+	upload         *connect.Client[v1.UploadRequest, emptypb.Empty]
+	uploadChunks   *connect.Client[v1.UploadChunkRequest, emptypb.Empty]
+	download       *connect.Client[v1.DownloadRequest, v1.DownloadResponse]
+	downloadChunks *connect.Client[v1.DownloadChunkRequest, v1.DownloadChunkResponse]
+	subscribe      *connect.Client[v1.SubscribeRequest, v1.SubscribeResponse]
 }
 
 // Index calls buf.vanguard.test.v1.ContentService.Index.
@@ -98,13 +131,28 @@ func (c *contentServiceClient) Index(ctx context.Context, req *connect.Request[v
 }
 
 // Upload calls buf.vanguard.test.v1.ContentService.Upload.
-func (c *contentServiceClient) Upload(ctx context.Context) *connect.ClientStreamForClient[v1.UploadRequest, emptypb.Empty] {
-	return c.upload.CallClientStream(ctx)
+func (c *contentServiceClient) Upload(ctx context.Context, req *connect.Request[v1.UploadRequest]) (*connect.Response[emptypb.Empty], error) {
+	return c.upload.CallUnary(ctx, req)
+}
+
+// UploadChunks calls buf.vanguard.test.v1.ContentService.UploadChunks.
+func (c *contentServiceClient) UploadChunks(ctx context.Context) *connect.ClientStreamForClient[v1.UploadChunkRequest, emptypb.Empty] {
+	return c.uploadChunks.CallClientStream(ctx)
 }
 
 // Download calls buf.vanguard.test.v1.ContentService.Download.
-func (c *contentServiceClient) Download(ctx context.Context, req *connect.Request[v1.DownloadRequest]) (*connect.ServerStreamForClient[v1.DownloadResponse], error) {
-	return c.download.CallServerStream(ctx, req)
+func (c *contentServiceClient) Download(ctx context.Context, req *connect.Request[v1.DownloadRequest]) (*connect.Response[v1.DownloadResponse], error) {
+	return c.download.CallUnary(ctx, req)
+}
+
+// DownloadChunks calls buf.vanguard.test.v1.ContentService.DownloadChunks.
+func (c *contentServiceClient) DownloadChunks(ctx context.Context, req *connect.Request[v1.DownloadChunkRequest]) (*connect.ServerStreamForClient[v1.DownloadChunkResponse], error) {
+	return c.downloadChunks.CallServerStream(ctx, req)
+}
+
+// Subscribe calls buf.vanguard.test.v1.ContentService.Subscribe.
+func (c *contentServiceClient) Subscribe(ctx context.Context) *connect.BidiStreamForClient[v1.SubscribeRequest, v1.SubscribeResponse] {
+	return c.subscribe.CallBidiStream(ctx)
 }
 
 // ContentServiceHandler is an implementation of the buf.vanguard.test.v1.ContentService service.
@@ -112,9 +160,15 @@ type ContentServiceHandler interface {
 	// Index returns a html index page at the given path.
 	Index(context.Context, *connect.Request[v1.IndexRequest]) (*connect.Response[httpbody.HttpBody], error)
 	// Upload a file to the given path.
-	Upload(context.Context, *connect.ClientStream[v1.UploadRequest]) (*connect.Response[emptypb.Empty], error)
+	Upload(context.Context, *connect.Request[v1.UploadRequest]) (*connect.Response[emptypb.Empty], error)
+	// Upload a file to the given path, streaming chunks of the data.
+	UploadChunks(context.Context, *connect.ClientStream[v1.UploadChunkRequest]) (*connect.Response[emptypb.Empty], error)
 	// Download a file from the given path.
-	Download(context.Context, *connect.Request[v1.DownloadRequest], *connect.ServerStream[v1.DownloadResponse]) error
+	Download(context.Context, *connect.Request[v1.DownloadRequest]) (*connect.Response[v1.DownloadResponse], error)
+	// Download a file from the given path, streaming chunks of the data.
+	DownloadChunks(context.Context, *connect.Request[v1.DownloadChunkRequest], *connect.ServerStream[v1.DownloadChunkResponse]) error
+	// Subscribe to updates for changes to content.
+	Subscribe(context.Context, *connect.BidiStream[v1.SubscribeRequest, v1.SubscribeResponse]) error
 }
 
 // NewContentServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -128,14 +182,29 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 		svc.Index,
 		opts...,
 	)
-	contentServiceUploadHandler := connect.NewClientStreamHandler(
+	contentServiceUploadHandler := connect.NewUnaryHandler(
 		ContentServiceUploadProcedure,
 		svc.Upload,
 		opts...,
 	)
-	contentServiceDownloadHandler := connect.NewServerStreamHandler(
+	contentServiceUploadChunksHandler := connect.NewClientStreamHandler(
+		ContentServiceUploadChunksProcedure,
+		svc.UploadChunks,
+		opts...,
+	)
+	contentServiceDownloadHandler := connect.NewUnaryHandler(
 		ContentServiceDownloadProcedure,
 		svc.Download,
+		opts...,
+	)
+	contentServiceDownloadChunksHandler := connect.NewServerStreamHandler(
+		ContentServiceDownloadChunksProcedure,
+		svc.DownloadChunks,
+		opts...,
+	)
+	contentServiceSubscribeHandler := connect.NewBidiStreamHandler(
+		ContentServiceSubscribeProcedure,
+		svc.Subscribe,
 		opts...,
 	)
 	return "/buf.vanguard.test.v1.ContentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -144,8 +213,14 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 			contentServiceIndexHandler.ServeHTTP(w, r)
 		case ContentServiceUploadProcedure:
 			contentServiceUploadHandler.ServeHTTP(w, r)
+		case ContentServiceUploadChunksProcedure:
+			contentServiceUploadChunksHandler.ServeHTTP(w, r)
 		case ContentServiceDownloadProcedure:
 			contentServiceDownloadHandler.ServeHTTP(w, r)
+		case ContentServiceDownloadChunksProcedure:
+			contentServiceDownloadChunksHandler.ServeHTTP(w, r)
+		case ContentServiceSubscribeProcedure:
+			contentServiceSubscribeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -159,10 +234,22 @@ func (UnimplementedContentServiceHandler) Index(context.Context, *connect.Reques
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.Index is not implemented"))
 }
 
-func (UnimplementedContentServiceHandler) Upload(context.Context, *connect.ClientStream[v1.UploadRequest]) (*connect.Response[emptypb.Empty], error) {
+func (UnimplementedContentServiceHandler) Upload(context.Context, *connect.Request[v1.UploadRequest]) (*connect.Response[emptypb.Empty], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.Upload is not implemented"))
 }
 
-func (UnimplementedContentServiceHandler) Download(context.Context, *connect.Request[v1.DownloadRequest], *connect.ServerStream[v1.DownloadResponse]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.Download is not implemented"))
+func (UnimplementedContentServiceHandler) UploadChunks(context.Context, *connect.ClientStream[v1.UploadChunkRequest]) (*connect.Response[emptypb.Empty], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.UploadChunks is not implemented"))
+}
+
+func (UnimplementedContentServiceHandler) Download(context.Context, *connect.Request[v1.DownloadRequest]) (*connect.Response[v1.DownloadResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.Download is not implemented"))
+}
+
+func (UnimplementedContentServiceHandler) DownloadChunks(context.Context, *connect.Request[v1.DownloadChunkRequest], *connect.ServerStream[v1.DownloadChunkResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.DownloadChunks is not implemented"))
+}
+
+func (UnimplementedContentServiceHandler) Subscribe(context.Context, *connect.BidiStream[v1.SubscribeRequest, v1.SubscribeResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.Subscribe is not implemented"))
 }

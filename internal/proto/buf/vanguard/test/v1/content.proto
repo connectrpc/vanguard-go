@@ -20,19 +20,25 @@ service ContentService {
     };
   }
   // Upload a file to the given path.
-  rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
+  rpc Upload(UploadRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {
       post : "/raw/{filename=**}"
       body : "file"
     };
   }
+  // Upload a file to the given path, streaming chunks of the data.
+  rpc UploadChunks(stream UploadChunkRequest) returns (google.protobuf.Empty);
   // Download a file from the given path.
-  rpc Download(DownloadRequest) returns (stream DownloadResponse) {
+  rpc Download(DownloadRequest) returns (DownloadResponse) {
     option (google.api.http) = {
       get : "/raw/{filename=**}"
       response_body : "file"
     };
   }
+  // Download a file from the given path, streaming chunks of the data.
+  rpc DownloadChunks(DownloadChunkRequest) returns (stream DownloadChunkResponse);
+  // Subscribe to updates for changes to content.
+  rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeResponse);
 }
 
 message IndexRequest {
@@ -47,6 +53,16 @@ message UploadRequest {
   google.api.HttpBody file = 2;
 }
 
+message UploadChunkRequest {
+  // The path to the file being uploaded.
+  string filename = 1;
+  string content_type = 2; // ignored if empty and offset > 0
+
+  uint32 offset = 3;
+  bytes chunk_data = 4;
+  bool last_chunk = 5;
+}
+
 message DownloadRequest {
   // The path to the file to download.
   string filename = 1;
@@ -55,4 +71,25 @@ message DownloadRequest {
 message DownloadResponse {
   // The file contents.
   google.api.HttpBody file = 1;
+}
+
+message DownloadChunkRequest {
+  // The path to the file to download.
+  string filename = 1;
+  uint32 starting_at_offset = 2;
+}
+
+message DownloadChunkResponse {
+  string content_type = 1; // only set on first response message
+  bytes chunk_data = 2;
+}
+
+message SubscribeRequest {
+  repeated string filename_patterns = 1;
+}
+
+message SubscribeResponse {
+  string filename_changed = 1;
+  google.protobuf.Timestamp update_time = 2;
+  bool deleted = 3;
 }

@@ -20,6 +20,7 @@ import (
 	"buf.build/gen/go/connectrpc/eliza/connectrpc/go/connectrpc/eliza/v1/elizav1connect"
 	"buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
 	"connectrpc.com/connect"
+	"github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -45,8 +46,8 @@ func TestHandler_Errors(t *testing.T) {
 	connectMux := &Mux{Protocols: []Protocol{ProtocolConnect}}
 	allMux := &Mux{} // supports all three
 	for _, mux := range []*Mux{grpcMux, connectMux, allMux} {
-		err := mux.RegisterServiceByName(handler, elizav1connect.ElizaServiceName)
-		require.NoError(t, err)
+		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.LibraryServiceName))
+		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.ContentServiceName))
 	}
 
 	testCases := []struct {
@@ -137,7 +138,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect get, method not idempotent",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say?connect=v1",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/CreateBook?connect=v1",
 			requestMethod: "GET",
 			expectedCode:  http.StatusMethodNotAllowed,
 			expectedResponseHeaders: map[string]string{
@@ -145,8 +146,8 @@ func TestHandler_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:          "connect post, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			name:          "connect unary, bad HTTP method",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "DELETE",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -159,7 +160,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "GET",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
@@ -171,7 +172,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "PUT",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+proto"},
@@ -183,7 +184,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "PATCH",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+proto"},
@@ -194,8 +195,17 @@ func TestHandler_Errors(t *testing.T) {
 			},
 		},
 		{
+			name:          "rest, unknown codec",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/foo"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "connect stream, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+text"},
@@ -204,7 +214,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -213,8 +223,14 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
+			name:          "connect get, unknown codec",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=text",
+			requestMethod: "GET",
+			expectedCode:  http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "grpc, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+text"},
@@ -223,7 +239,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+text"},
@@ -232,7 +248,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":             {"application/connect+proto"},
@@ -243,9 +259,19 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusTeapot,
 		},
 		{
+			name:          "rest, unknown compression",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type":     {"application/json"},
+				"Content-Encoding": {"blah"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "connect stream, unknown compression",
 			mux:           grpcMux, // must target different protocol for the error
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":             {"application/connect+proto"},
@@ -255,7 +281,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -267,7 +293,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "connect post, unknown compression",
 			mux:           grpcMux,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -277,8 +303,21 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
+			name:          "connect get, unknown compression, pass-through",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
+			requestMethod: "GET",
+			expectedCode:  http.StatusTeapot,
+		},
+		{
+			name:          "connect get, unknown compression",
+			mux:           grpcMux,
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
+			requestMethod: "GET",
+			expectedCode:  http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "grpc, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc+proto"},
@@ -289,7 +328,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "grpc, unknown compression",
 			mux:           connectMux,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc+proto"},
@@ -299,7 +338,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc-web+proto"},
@@ -310,7 +349,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "grpc-web, unknown compression",
 			mux:           connectMux,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc-web+proto"},
@@ -321,7 +360,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "connect stream, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
@@ -329,9 +368,9 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusHTTPVersionNotSupported,
 		},
 		{
-			name:          "grpc stream, bidi and http 1.1",
+			name:          "grpc, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+proto"},
@@ -339,9 +378,9 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusHTTPVersionNotSupported,
 		},
 		{
-			name:          "grpc-web stream, bidi and http 1.1",
+			name:          "grpc-web, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+proto"},
@@ -350,7 +389,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, stream method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -360,20 +399,13 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unary method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
 			},
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
-		// TODO: add more tests around connect GET when we have a test
-		//       proto to use other than eliza and a method that can
-		//       actually support GET.
-		// TODO: add more tests around REST when we have a test proto
-		//       to use other than eliza and methods with http
-		//       annotations.
-
 	}
 
 	for _, testCase := range testCases {
