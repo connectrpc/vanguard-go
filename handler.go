@@ -529,9 +529,6 @@ func (op *operation) serverBody(msg *message) io.ReadCloser {
 		return &envelopingReader{op: op, r: op.request.Body}
 	}
 	ret := &transformingReader{op: op, msg: msg, r: op.request.Body}
-	if msg.stage != stageEmpty {
-		ret.initFirstMessage()
-	}
 	return ret
 }
 
@@ -581,18 +578,19 @@ type transformingReader struct {
 }
 
 func (tr *transformingReader) Read(data []byte) (n int, err error) {
-	//TODO implement me
-	panic("implement me")
+	if tr.msg.stage == stageEmpty || tr.msg.stage == stageSend && tr.msg.data.Len() == 0 {
+		if err := tr.op.readRequestMessage(tr.r, tr.msg); err != nil {
+			return 0, err
+		}
+		if err := tr.msg.advanceToStage(tr.op, stageSend); err != nil {
+			return 0, err
+		}
+	}
+	return tr.msg.data.Read(data)
 }
 
 func (tr *transformingReader) Close() error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (tr *transformingReader) initFirstMessage() {
-	// TODO: make sure tr.msg is advanced to stageSend and arrange
-	//       for next call to Read to consume it
+	return tr.r.Close()
 }
 
 // responseWriter wraps the original writer and performs the protocol
