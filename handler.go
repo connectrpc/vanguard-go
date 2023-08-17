@@ -540,9 +540,12 @@ type transformingReader struct {
 	op  *operation
 	msg *message
 	r   io.ReadCloser
+
+	buf *bytes.Buffer // buffer for writing transformed data
 }
 
 func (tr *transformingReader) Read(data []byte) (n int, err error) {
+	tr.msg
 	//TODO implement me
 	panic("implement me")
 }
@@ -821,240 +824,75 @@ const (
 	stageSend
 )
 
-// message represents a single message in an RPC stream. It can be re-used in a stream,
-// so we only allocate one and then re-use it for subsequent messages (if stream has
-// more than one).
+// message is a bytes buffer of compressed and encoded data.
 type message struct {
-	// true if this is a request message read from the client; false if
-	// this is a response message written by the server.
-	isRequest bool
-
-	// flags indicating if compressed and data should be preserved after use.
-	sameCompression, sameCodec bool
-	// wasCompressed is true if the data was originally compressed; this can
-	// be false in a stream when the stream envelope's compressed bit is unset.
-	wasCompressed bool
-
-	stage messageStage
-
-	// compressed is the compressed bytes; may be nil if the contents have
-	// already been decompressed into the data field.
-	compressed *bytes.Buffer
-	// data is the serialized but uncompressed bytes; may be nil if the
-	// contents have not yet been decompressed or have been de-serialized
-	// into the msg field.
-	data *bytes.Buffer
-	// msg is the plain message; not valid unless stage is stageDecoded
-	msg proto.Message
+	buf   *bytes.Buffer
+	comp  *compressionPool
+	codec Codec
 }
 
-// release releases all buffers associated with message to the given pool.
-func (m *message) release(pool *bufferPool) {
-	if m.compressed != nil {
-		pool.Put(m.compressed)
-	}
-	if m.data != nil && m.data != m.compressed {
-		pool.Put(m.data)
-	}
-	m.data, m.compressed, m.msg = nil, nil, nil
-}
-
-// reset arranges for message to be re-used by making sure it has
-// a compressed buffer that is ready to accept bytes and no data
-// buffer.
-func (m *message) reset(pool *bufferPool, isRequest, isCompressed bool) *bytes.Buffer {
-	m.stage = stageEmpty
-	m.isRequest = isRequest
-	m.wasCompressed = isCompressed
-	// we only need one buffer to start, so put
-	// a non-nil buffer into buffer1 and if we
-	// have a second non-nil buffer, release it
-	buffer1, buffer2 := m.compressed, m.data
-	if buffer1 == nil && buffer2 != nil {
-		buffer1, buffer2 = buffer2, buffer1
-	}
-	if buffer2 != nil && buffer2 != buffer1 {
-		pool.Put(buffer2)
-	}
-	if buffer1 == nil {
-		buffer1 = pool.Get()
-	}
-	if isCompressed {
-		m.compressed, m.data = buffer1, nil
-	} else {
-		m.data, m.compressed = buffer1, nil
-	}
-	return buffer1
-}
-
-func (m *message) advanceToStage(op *operation, newStage messageStage) error {
-	if m.stage == stageEmpty {
-		return errors.New("message has not yet been read")
-	}
-	if m.stage > newStage {
-		return fmt.Errorf("cannot advance message stage backwards: stage %v > target %v", m.stage, newStage)
-	}
-	if newStage == m.stage {
-		return nil // no-op
-	}
-
-	if newStage == stageSend && m.sameCodec &&
-		(!m.wasCompressed || (m.wasCompressed && m.sameCompression)) {
-		// We can re-use existing buffer; no more action to take.
-		m.stage = newStage
-		return nil // no more action to take
-	}
-
-	switch {
-	case m.stage == stageRead && newStage == stageSend:
-		if !m.sameCodec {
-			// If the codec is different we have to fully decode the message and
-			// then fully re-encode.
-			if err := m.advanceToStage(op, stageDecoded); err != nil {
-				return err
-			}
-			return m.advanceToStage(op, newStage)
+func (m *message) convert(buffers *bufferPool, comp *compressionPool, codec Codec, msg proto.Message) error {
+	src, buf := m.buf, (*bytes.Buffer)(nil)
+	defer func() {
+		if buf != nil {
+			buffers.Put(buf)
 		}
+	}()
+	needsRecoding := m.codec != codec
+	needsRecompressing := m.comp != comp || needsRecoding
+	if m.comp != nil && (needsRecompressing) {
+		// Decompress
+		decompressor, release := m.comp.getDecompressor()
+		defer release()
 
-		// We must de-compress and re-compress the data.
-		if err := m.decompress(op, false); err != nil {
+		if err := decompressor.Reset(src); err != nil {
 			return err
 		}
-		if err := m.compress(op); err != nil {
+		defer decompressor.Close()
+
+		buf = buffers.Get()
+		if _, err := buf.ReadFrom(decompressor); err != nil {
 			return err
 		}
-		m.stage = newStage
-		return nil
-
-	case m.stage == stageRead && newStage == stageDecoded:
-		if m.wasCompressed {
-			if err := m.decompress(op, m.sameCompression && m.sameCodec); err != nil {
-				return err
-			}
-		}
-		if err := m.decode(op, m.sameCodec); err != nil {
+		src.Reset()
+		src, buf = buf, src
+		m.comp = nil
+	}
+	if needsRecoding {
+		// Decode
+		if err := codec.Unmarshal(src.Bytes(), msg); err != nil {
 			return err
 		}
-		m.stage = newStage
-		return nil
 
-	case m.stage == stageDecoded && newStage == stageSend:
-		if !m.sameCodec {
-			// re-encode
-			if err := m.encode(op); err != nil {
-				return err
-			}
+		// Encode
+		bytes, err := codec.MarshalAppend(src.Bytes(), msg)
+		if err != nil {
+			return err
 		}
-		if m.wasCompressed {
-			// re-compress
-			if err := m.compress(op); err != nil {
-				return err
-			}
+		src.Reset()
+		src.Write(bytes)
+	}
+	if comp != nil && needsRecompressing {
+		// Compress
+		compressor, release := comp.getCompressor()
+		defer release()
+
+		if buf == nil {
+			buf = buffers.Get()
 		}
-		m.stage = newStage
-		return nil
 
-	default:
-		return fmt.Errorf("unknown stage transition: stage %v to target %v", m.stage, newStage)
-	}
-}
-
-func (m *message) decompress(op *operation, saveBuffer bool) error {
-	var pool *compressionPool
-	if m.isRequest {
-		pool = op.client.reqCompression
-	} else {
-		pool = op.respCompression
-	}
-	decomp, release := pool.getDecompressor()
-	if decomp == nil {
-		// identity compression, so nothing to do
-		m.data = m.compressed
-		if !saveBuffer {
-			m.compressed = nil
+		compressor.Reset(buf)
+		defer compressor.Close()
+		_, err := src.WriteTo(compressor)
+		if err != nil {
+			return err
 		}
-		return nil
+		src.Reset()
+		src, buf = buf, src
+		m.comp = comp
 	}
-	defer release()
-
-	var src io.Reader
-	if saveBuffer {
-		// we allocate a new reader, but it's cheaper than re-compressing later
-		src = bytes.NewReader(m.compressed.Bytes())
-	} else {
-		src = m.compressed
-	}
-	m.data = op.bufferPool.Get()
-	if err := decomp.Reset(src); err != nil {
-		return err
-	}
-	if _, err := m.data.ReadFrom(decomp); err != nil {
-		return err
-	}
-	if !saveBuffer {
-		op.bufferPool.Put(m.compressed)
-		m.compressed = nil
-	}
-	return decomp.Close()
-}
-
-func (m *message) compress(op *operation) error {
-	var pool *compressionPool
-	if m.isRequest {
-		pool = op.server.reqCompression
-	} else {
-		pool = op.respCompression
-	}
-	comp, release := pool.getCompressor()
-	if comp == nil {
-		// identity compression, so nothing to do
-		m.compressed = m.data
-		m.data = nil
-		return nil
-	}
-	defer release()
-
-	m.compressed = op.bufferPool.Get()
-	comp.Reset(m.compressed)
-	_, err := m.data.WriteTo(comp)
-	if err != nil {
-		return err
-	}
-	op.bufferPool.Put(m.data)
-	m.data = nil
-	return comp.Close()
-}
-
-func (m *message) decode(op *operation, saveBuffer bool) error {
-	var codec Codec
-	if m.isRequest {
-		codec = op.client.codec
-	} else {
-		codec = op.server.codec
-	}
-
-	if err := codec.Unmarshal(m.data.Bytes(), m.msg); err != nil {
-		return err
-	}
-	if !saveBuffer {
-		op.bufferPool.Put(m.data)
-		m.data = nil
-	}
+	m.buf = src
 	return nil
-}
-
-func (m *message) encode(op *operation) error {
-	var codec Codec
-	if m.isRequest {
-		codec = op.server.codec
-	} else {
-		codec = op.client.codec
-	}
-
-	buf := op.bufferPool.Get().Bytes()
-	buf, err := codec.MarshalAppend(buf, m.msg)
-	m.data = bytes.NewBuffer(buf)
-	return err
 }
 
 func intersect(setA, setB []string) []string {

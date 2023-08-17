@@ -47,7 +47,7 @@ func newCompressionPool(
 
 func (p *compressionPool) Name() string {
 	if p == nil {
-		return ""
+		return CompressionIdentity
 	}
 	return p.name
 }
