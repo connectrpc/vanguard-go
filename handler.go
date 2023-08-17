@@ -582,6 +582,8 @@ func (tr *transformingReader) Read(data []byte) (n int, err error) {
 		if err := tr.op.readRequestMessage(tr.r, tr.msg); err != nil {
 			return 0, err
 		}
+	}
+	if tr.msg.stage != stageSend {
 		if err := tr.msg.advanceToStage(tr.op, stageSend); err != nil {
 			return 0, err
 		}
