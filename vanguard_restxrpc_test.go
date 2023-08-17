@@ -29,13 +29,6 @@ import (
 func TestMux_RESTxRPC(t *testing.T) {
 	t.Parallel()
 
-	var interceptor testInterceptor
-	serveMux := http.NewServeMux()
-	serveMux.Handle(testv1connect.NewLibraryServiceHandler(
-		testv1connect.UnimplementedLibraryServiceHandler{},
-		connect.WithInterceptors(&interceptor),
-	))
-
 	services := []protoreflect.FullName{
 		"buf.vanguard.test.v1.LibraryService",
 	}
@@ -51,6 +44,13 @@ func TestMux_RESTxRPC(t *testing.T) {
 		ProtocolGRPC,
 		// TODO: grpc-web & connect
 	}
+
+	var interceptor testInterceptor
+	serveMux := http.NewServeMux()
+	serveMux.Handle(testv1connect.NewLibraryServiceHandler(
+		testv1connect.UnimplementedLibraryServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	))
 
 	// protocolMiddelware asserts the request headers for the given protocol.
 	protocolMiddelware := func(

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -19,24 +18,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
-
-// testClient implements connect.HTTPClient.
-type testClient struct {
-	hdlr http.Handler
-	rec  *httptest.ResponseRecorder
-}
-
-func newTestClient(hdlr http.Handler) *testClient {
-	return &testClient{
-		hdlr: hdlr,
-		rec:  httptest.NewRecorder(),
-	}
-}
-
-func (c *testClient) Do(req *http.Request) *http.Response {
-	c.hdlr.ServeHTTP(c.rec, req)
-	return c.rec.Result()
-}
 
 type testStream struct {
 	reqHeader  http.Header // expected
@@ -69,6 +50,15 @@ func (o *testMsg) getOut() (*testMsgOut, error) {
 		return nil, fmt.Errorf("missing output message")
 	}
 	return o.out, nil
+}
+func (o *testMsg) get() any {
+	if o.in != nil {
+		return o.in
+	}
+	if o.out != nil {
+		return o.out
+	}
+	return nil
 }
 
 type testInterceptor struct {
@@ -155,6 +145,31 @@ func (o *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) 
 		ctx context.Context,
 		spec connect.Spec,
 	) connect.StreamingClientConn {
+		conn := next(ctx, spec)
+		val := conn.RequestHeader().Get("test")
+		if val == "" {
+			return conn // is this right?
+		}
+		stream, ok := o.get(val)
+		if !ok {
+			return conn
+		}
+		stream.Log("TODO: implement WrapStreamingClient")
+		assert.Equal(stream.T, stream.reqHeader, conn.RequestHeader())
+
+		// for _, msg := range stream.msgs {
+		// 	switch msg := msg.get().(type) {
+		// 	case *testMsgIn:
+
+		// 	case *testMsgOut:
+		// 		if msg.err != nil {
+		// 			conn.S
+		// 	default:
+		// 		return conn
+		// 	}
+
+		// }
+
 		return nil
 	})
 }
@@ -163,7 +178,17 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
 	) error {
-		return nil
+		val := conn.RequestHeader().Get("test")
+		if val == "" {
+			return next(ctx, conn)
+		}
+		stream, ok := o.get(val)
+		if !ok {
+			return fmt.Errorf("invalid testCase header: %s", val)
+		}
+		stream.Log("TODO: implement WrapStreamingHandler")
+		assert.Equal(stream.T, stream.reqHeader, conn.RequestHeader())
+		return fmt.Errorf("TODO: implement WrapStreamingHandler")
 	})
 }
 
