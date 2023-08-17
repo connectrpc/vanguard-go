@@ -29,12 +29,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 		"buf.vanguard.test.v1.LibraryService",
 	}
 	codecs := []string{
-		"json",
-		"proto",
+		CodecJSON,
+		CodecProto,
 	}
 	compressions := []string{
-		"gzip",
-		"identity",
+		CompressionGzip,
+		CompressionIdentity,
 	}
 	protocols := []Protocol{
 		ProtocolGRPC,
