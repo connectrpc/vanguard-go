@@ -183,12 +183,12 @@ type serverProtocolHandler interface {
 // server's codec, it also provided as the first argument.
 type responseEndUnmarshaler func(Codec, io.Reader, *responseEnd)
 
-// serverProtocolEndMustBeInHeaders is an optional interface implemented
-// by serverProtocolHandler instances to indicate if the end of an RPC
+// clientProtocolEndMustBeInHeaders is an optional interface implemented
+// by clientProtocolHandler instances to indicate if the end of an RPC
 // must be indicated in response headers (not trailers or in the body).
 // If a protocol handler does not implement this, it is assumed to be
 // false.
-type serverProtocolEndMustBeInHeaders interface {
+type clientProtocolEndMustBeInHeaders interface {
 	endMustBeInHeaders() bool
 }
 

@@ -18,6 +18,7 @@ type restClientProtocol struct{}
 
 var _ clientProtocolHandler = restClientProtocol{}
 var _ clientBodyPreparer = restClientProtocol{}
+var _ clientProtocolEndMustBeInHeaders = restClientProtocol{}
 
 // restClientProtocol implements the REST protocol for
 // processing RPCs received from the client.
@@ -28,6 +29,11 @@ func (r restClientProtocol) protocol() Protocol {
 func (r restClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
 	// TODO: support connect.StreamTypeServer, too
 	return streamType == connect.StreamTypeUnary
+}
+
+func (r restClientProtocol) endMustBeInHeaders() bool {
+	// TODO: when we support server streams over REST, this should return false when streaming
+	return true
 }
 
 func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
@@ -98,16 +104,9 @@ type restServerProtocol struct{}
 var _ serverProtocolHandler = restServerProtocol{}
 var _ requestLineBuilder = restServerProtocol{}
 var _ serverBodyPreparer = restServerProtocol{}
-var _ serverProtocolEndMustBeInHeaders = restServerProtocol{}
 
 func (r restServerProtocol) protocol() Protocol {
 	return ProtocolREST
-}
-
-func (r restServerProtocol) endMustBeInHeaders() bool {
-	// TODO: when we support server streams over REST, this
-	//       should return false when streaming
-	return true
 }
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {

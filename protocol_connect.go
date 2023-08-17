@@ -29,6 +29,7 @@ type connectUnaryGetClientProtocol struct{}
 
 var _ clientProtocolHandler = connectUnaryGetClientProtocol{}
 var _ clientProtocolAllowsGet = connectUnaryGetClientProtocol{}
+var _ clientProtocolEndMustBeInHeaders = connectUnaryGetClientProtocol{}
 var _ clientBodyPreparer = connectUnaryGetClientProtocol{}
 
 func (c connectUnaryGetClientProtocol) protocol() Protocol {
@@ -42,6 +43,10 @@ func (c connectUnaryGetClientProtocol) acceptsStreamType(streamType connect.Stre
 func (c connectUnaryGetClientProtocol) allowsGetRequests(conf *methodConfig) bool {
 	methodOpts, ok := conf.descriptor.Options().(*descriptorpb.MethodOptions)
 	return ok && methodOpts.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
+}
+
+func (c connectUnaryGetClientProtocol) endMustBeInHeaders() bool {
+	return true
 }
 
 func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
@@ -96,6 +101,7 @@ func (c connectUnaryGetClientProtocol) String() string {
 type connectUnaryPostClientProtocol struct{}
 
 var _ clientProtocolHandler = connectUnaryPostClientProtocol{}
+var _ clientProtocolEndMustBeInHeaders = connectUnaryPostClientProtocol{}
 
 func (c connectUnaryPostClientProtocol) protocol() Protocol {
 	return ProtocolConnect
@@ -103,6 +109,10 @@ func (c connectUnaryPostClientProtocol) protocol() Protocol {
 
 func (c connectUnaryPostClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
 	return streamType == connect.StreamTypeUnary
+}
+
+func (c connectUnaryPostClientProtocol) endMustBeInHeaders() bool {
+	return true
 }
 
 func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
@@ -144,14 +154,9 @@ type connectUnaryServerProtocol struct{}
 var _ serverProtocolHandler = connectUnaryServerProtocol{}
 var _ requestLineBuilder = connectUnaryServerProtocol{}
 var _ serverBodyPreparer = connectUnaryServerProtocol{}
-var _ serverProtocolEndMustBeInHeaders = connectUnaryServerProtocol{}
 
 func (c connectUnaryServerProtocol) protocol() Protocol {
 	return ProtocolConnect
-}
-
-func (c connectUnaryServerProtocol) endMustBeInHeaders() bool {
-	return true
 }
 
 func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
