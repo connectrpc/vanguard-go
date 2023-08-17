@@ -5,6 +5,8 @@
 package vanguard
 
 import (
+	"bytes"
+
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -64,4 +66,21 @@ func (p *jsonCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
 
 func (p *jsonCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return p.u.Unmarshal(bytes, msg)
+}
+
+func marshal(dst *bytes.Buffer, msg proto.Message, codec Codec) error {
+	raw, err := codec.MarshalAppend(dst.Bytes(), msg)
+	if err != nil {
+		return err
+	}
+	if cap(raw) > dst.Cap() {
+		// Dst buffer was too small, so MarshalAppend grew the slice.
+		// Replace the buffer with the larger, newly-allocated slice.
+		*dst = *bytes.NewBuffer(raw)
+	} else {
+		// The buffer from the pool was large enough, MarshalAppend didn't allocate.
+		// Copy to the same byte slice is a nop.
+		dst.Write(raw[dst.Len():])
+	}
+	return nil
 }

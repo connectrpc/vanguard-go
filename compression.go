@@ -25,6 +25,12 @@ func DefaultGzipDecompressor() connect.Decompressor {
 	return &gzip.Reader{}
 }
 
+type compressor interface {
+	Name() string
+	compress(dst io.Writer, src *bytes.Buffer) error
+	decompress(dst *bytes.Buffer, src io.Reader) error
+}
+
 type compressionPool struct {
 	name          string
 	decompressors sync.Pool
@@ -49,20 +55,20 @@ func newCompressionPool(
 
 func (p *compressionPool) Name() string {
 	if p == nil {
-		return ""
+		return CompressionIdentity
 	}
 	return p.name
 }
 
-func (p *compressionPool) compress(dest io.Writer, src *bytes.Buffer) error {
+func (p *compressionPool) compress(dst io.Writer, src *bytes.Buffer) error {
 	if p == nil {
-		_, err := io.Copy(dest, src)
+		_, err := io.Copy(dst, src)
 		return err
 	}
 	comp := p.compressors.Get().(connect.Compressor) //nolint:forcetypeassert,errcheck
 	defer p.compressors.Put(comp)
 
-	comp.Reset(dest)
+	comp.Reset(dst)
 	_, err := src.WriteTo(comp)
 	if err != nil {
 		return err
@@ -70,9 +76,9 @@ func (p *compressionPool) compress(dest io.Writer, src *bytes.Buffer) error {
 	return comp.Close()
 }
 
-func (p *compressionPool) decompress(dest *bytes.Buffer, src io.Reader) error {
+func (p *compressionPool) decompress(dst *bytes.Buffer, src io.Reader) error {
 	if p == nil {
-		_, err := io.Copy(dest, src)
+		_, err := io.Copy(dst, src)
 		return err
 	}
 	decomp := p.decompressors.Get().(connect.Decompressor) //nolint:forcetypeassert,errcheck
@@ -81,7 +87,7 @@ func (p *compressionPool) decompress(dest *bytes.Buffer, src io.Reader) error {
 	if err := decomp.Reset(src); err != nil {
 		return err
 	}
-	if _, err := dest.ReadFrom(decomp); err != nil {
+	if _, err := dst.ReadFrom(decomp); err != nil {
 		return err
 	}
 	return decomp.Close()
