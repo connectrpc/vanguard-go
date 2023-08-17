@@ -728,14 +728,14 @@ func (rw *responseWriter) reportError(err error) {
 		end.err = connect.NewError(connect.CodeInternal, err)
 		end.httpCode = http.StatusBadGateway
 	}
-	rw.reportEnd(&end)
+	rw.reportEnd(&end, false)
 }
 
-func (rw *responseWriter) reportEnd(end *responseEnd) {
+func (rw *responseWriter) reportEnd(end *responseEnd, inHeaders bool) {
 	switch {
 	case rw.headersFlushed:
 		// write error to body or trailers
-		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate)
+		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, inHeaders)
 		if len(trailers) > 0 {
 			hdrs := rw.Header()
 			for k, v := range trailers {
@@ -762,9 +762,11 @@ func (rw *responseWriter) flushHeaders() {
 		return // already flushed
 	}
 	allowedRequestCompression := intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
-	rw.op.client.protocol.addProtocolResponseHeaders(*rw.respMeta, rw.Header(), allowedRequestCompression)
+	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(*rw.respMeta, rw.Header(), allowedRequestCompression)
+	rw.delegate.WriteHeader(statusCode)
 	if rw.respMeta.end != nil {
 		// response is done
+		rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
 		rw.err = context.Canceled
 	}
 	rw.headersFlushed = true
