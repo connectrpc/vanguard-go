@@ -69,12 +69,12 @@ func (g grpcClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	return extractGRPCRequestMeta("application/grpc", "application/grpc+", headers)
 }
 
-func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
+func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (g grpcClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
+func (g grpcClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -109,7 +109,7 @@ func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	panic("implement me")
 }
 
-func (g grpcServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (g grpcServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -159,12 +159,12 @@ func (g grpcWebClientProtocol) extractProtocolRequestHeaders(op *operation, head
 	return extractGRPCRequestMeta("application/grpc-web", "application/grpc-web+", headers)
 }
 
-func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
+func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (g grpcWebClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
+func (g grpcWebClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -201,7 +201,7 @@ func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, heade
 	panic("implement me")
 }
 
-func (g grpcWebServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (g grpcWebServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }

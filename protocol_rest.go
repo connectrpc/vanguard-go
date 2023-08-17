@@ -57,12 +57,12 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	return reqMeta, nil
 }
 
-func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
+func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
+func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -115,7 +115,7 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	panic("implement me")
 }
 
-func (r restServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (r restServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }

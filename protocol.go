@@ -112,15 +112,32 @@ type clientProtocolHandler interface {
 	// Encodes the given responseMeta as headers into the given target
 	// headers. If provided, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
-	addProtocolResponseHeaders(meta responseMeta, target http.Header, allowedCompression []string)
+	//
+	// The return value is the status code that should be sent to the
+	// client. If the status code written was anything other than
+	// 200 OK, the given meta will include a responseEnd that has that
+	// original code.
+	//
+	// Note that this method's responsibility is to decide the status
+	// code and set headers. When meta.end is non-nil, encodeEnd will
+	// also be called, which is where a response body and trailers
+	// can be written.
+	addProtocolResponseHeaders(meta responseMeta, target http.Header, allowedCompression []string) int
 	// Encodes the given final disposition of the RPC to the given
 	// writer. It can also return any trailers to add to the response.
-	// Some protocols may ignore the writer, some will return no
+	// Some protocols may ignore the writer; some will return no
 	// trailers.
 	//
 	// The given codec represents the sub-format that the client used
-	// (which may be used to encode the error).
-	encodeEnd(Codec, *responseEnd, io.Writer) http.Header
+	// (which could be used, for example, to encode the error).
+	//
+	// The wasInHeaders flag indicates that end was signalled in the
+	// response headers. For some protocols, like gRPC and gRPC-Web,
+	// this is the difference between a trailers-only response and a
+	// normal response (where the end is signalled in the response
+	// body or trailers, not headers). When this is true, the end was
+	// also already provided to addProtocolResponseHeaders.
+	encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header
 
 	// String returns a human-readable name/description of protocol.
 	String() string
@@ -142,11 +159,16 @@ type serverProtocolHandler interface {
 	// headers. If provided, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
 	addProtocolRequestHeaders(meta requestMeta, target http.Header, allowedCompression []string)
-	// Returns the response metadata from the headers; if the second
-	// arg is non-nil, the caller should supply the body to it along
-	// with the responseMeta.end to finish processing the end of the
-	// response.
-	extractProtocolResponseHeaders(int, http.Header) (responseMeta, func(io.Reader, *responseEnd), error)
+	// Returns the response metadata from the headers. If the response
+	// meta's end field is set (i.e. headers indicate RPC is over), but
+	// the protocol needs to read the response body to populate it, it
+	// should return a non-nil function as the second returned value.
+	// This function will receive the server's codec (optionally used
+	// to encode other messages and could be used to decode the error
+	// body), the body, and a pointer to the responseEnd which should
+	// be populated with the details. If the response body was compressed,
+	// it will be decompressed before it is provided to the given function.
+	extractProtocolResponseHeaders(int, http.Header) (responseMeta, responseEndUnmarshaler, error)
 	// Called at end of RPC if responseEnd has not been returned by
 	// extractProtocolResponseHeaders or from an enveloped message
 	// in the response body whose trailer bit is set.
@@ -155,6 +177,11 @@ type serverProtocolHandler interface {
 	// String returns a human-readable name/description of protocol.
 	String() string
 }
+
+// responseEndUnmarshaler populates the given responseEnd by unmarshalling
+// information from the given reader. If unmarshalling needs to know the
+// server's codec, it also provided as the first argument.
+type responseEndUnmarshaler func(Codec, io.Reader, *responseEnd)
 
 // serverProtocolEndMustBeInHeaders is an optional interface implemented
 // by serverProtocolHandler instances to indicate if the end of an RPC
@@ -294,6 +321,12 @@ type responseEnd struct {
 	// occur for REST streaming responses, where the final message may
 	// include both gRPC and HTTP codes.
 	httpCode int
+
+	// For enveloping protocols where the end is in a special stream
+	// payload, this will be true if that special payload was compressed.
+	// This can be used by a protocol handler that also encodes the end
+	// in a stream payload to decide whether to compress the final frame.
+	wasCompressed bool
 }
 
 // parseMultiHeader parses headers that allow multiple values. It

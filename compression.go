@@ -5,7 +5,9 @@
 package vanguard
 
 import (
+	"bytes"
 	"compress/gzip"
+	"io"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -52,22 +54,35 @@ func (p *compressionPool) Name() string {
 	return p.name
 }
 
-func (p *compressionPool) getCompressor() (connect.Compressor, func()) {
+func (p *compressionPool) compress(dest io.Writer, src *bytes.Buffer) error {
 	if p == nil {
-		return nil, nil
+		_, err := io.Copy(dest, src)
+		return err
 	}
-	result := p.compressors.Get().(connect.Compressor) //nolint:forcetypeassert,errcheck
-	return result, func() {
-		p.compressors.Put(result)
+	comp := p.compressors.Get().(connect.Compressor) //nolint:forcetypeassert,errcheck
+	defer p.compressors.Put(comp)
+
+	comp.Reset(dest)
+	_, err := src.WriteTo(comp)
+	if err != nil {
+		return err
 	}
+	return comp.Close()
 }
 
-func (p *compressionPool) getDecompressor() (connect.Decompressor, func()) {
+func (p *compressionPool) decompress(dest *bytes.Buffer, src io.Reader) error {
 	if p == nil {
-		return nil, nil
+		_, err := io.Copy(dest, src)
+		return err
 	}
-	result := p.decompressors.Get().(connect.Decompressor) //nolint:forcetypeassert,errcheck
-	return result, func() {
-		p.decompressors.Put(result)
+	decomp := p.decompressors.Get().(connect.Decompressor) //nolint:forcetypeassert,errcheck
+	defer p.decompressors.Put(decomp)
+
+	if err := decomp.Reset(src); err != nil {
+		return err
 	}
+	if _, err := dest.ReadFrom(decomp); err != nil {
+		return err
+	}
+	return decomp.Close()
 }

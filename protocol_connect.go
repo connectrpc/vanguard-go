@@ -56,12 +56,12 @@ func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operati
 	return reqMeta, nil
 }
 
-func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
+func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectUnaryGetClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
+func (c connectUnaryGetClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -122,12 +122,12 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 	return reqMeta, nil
 }
 
-func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
+func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectUnaryPostClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
+func (c connectUnaryPostClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -159,7 +159,7 @@ func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, 
 	panic("implement me")
 }
 
-func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -231,12 +231,12 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 	return reqMeta, nil
 }
 
-func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) {
+func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectStreamClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer) http.Header {
+func (c connectStreamClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	//TODO implement me
 	panic("implement me")
 }
@@ -271,7 +271,7 @@ func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta,
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }

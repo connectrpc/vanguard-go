@@ -644,6 +644,20 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		rw.respMeta.compression = "" // normalize to empty string
 	}
 	rw.respMeta = &respMeta
+	if respMeta.compression != "" {
+		var ok bool
+		rw.op.respCompression, ok = rw.op.muxConfig.compressionPools[respMeta.compression]
+		if !ok {
+			rw.reportError(fmt.Errorf("response indicates unsupported compression encoding %q", respMeta.compression))
+			return
+		}
+	}
+	if respMeta.codec != "" && respMeta.codec != rw.op.server.codec.Name() {
+		// unexpected content-type for reply
+		rw.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", rw.op.server.codec.Name(), respMeta.codec))
+		return
+	}
+
 	if respMeta.end != nil {
 		// RPC failed immediately.
 		if processBody != nil {
@@ -658,20 +672,6 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		}
 		// We can send back error response immediately.
 		rw.flushHeaders()
-		return
-	}
-
-	if respMeta.compression != "" {
-		var ok bool
-		rw.op.respCompression, ok = rw.op.muxConfig.compressionPools[respMeta.compression]
-		if !ok {
-			rw.reportError(fmt.Errorf("response indicates unsupported compression encoding %q", respMeta.compression))
-			return
-		}
-	}
-	if respMeta.codec != "" && respMeta.codec != rw.op.server.codec.Name() {
-		// unexpected content-type for reply
-		rw.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", rw.op.server.codec.Name(), respMeta.codec))
 		return
 	}
 
@@ -735,7 +735,7 @@ func (rw *responseWriter) reportEnd(end *responseEnd) {
 	switch {
 	case rw.headersFlushed:
 		// write error to body or trailers
-		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate)
+		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
 		if len(trailers) > 0 {
 			hdrs := rw.Header()
 			for k, v := range trailers {
@@ -762,9 +762,11 @@ func (rw *responseWriter) flushHeaders() {
 		return // already flushed
 	}
 	allowedRequestCompression := intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
-	rw.op.client.protocol.addProtocolResponseHeaders(*rw.respMeta, rw.Header(), allowedRequestCompression)
+	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(*rw.respMeta, rw.Header(), allowedRequestCompression)
+	rw.delegate.WriteHeader(statusCode)
 	if rw.respMeta.end != nil {
 		// response is done
+		rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
 		rw.err = context.Canceled
 	}
 	rw.headersFlushed = true
@@ -821,11 +823,14 @@ func (tw *transformingWriter) Close() error {
 type errorWriter struct {
 	rw          *responseWriter
 	respMeta    *responseMeta
-	processBody func(io.Reader, *responseEnd)
+	processBody responseEndUnmarshaler
 	buffer      *bytes.Buffer
 }
 
 func (ew *errorWriter) Write(data []byte) (int, error) {
+	if ew.buffer == nil {
+		return 0, errors.New("writer already closed")
+	}
 	// TODO: limit on size of the error body and how much we'll buffer?
 	return ew.buffer.Write(data)
 }
@@ -834,8 +839,29 @@ func (ew *errorWriter) Close() error {
 	if ew.respMeta.end == nil {
 		ew.respMeta.end = &responseEnd{}
 	}
-	ew.processBody(ew.buffer, ew.respMeta.end)
+	bufferPool := ew.rw.op.bufferPool
+	defer bufferPool.Put(ew.buffer)
+	body := ew.buffer
+	if compressPool := ew.rw.op.respCompression; compressPool != nil {
+		uncompressed := bufferPool.Get()
+		defer bufferPool.Put(uncompressed)
+		if err := compressPool.decompress(uncompressed, body); err != nil {
+			// can't really just return an error; we have to encode the
+			// error into the RPC response, so we populate respMeta.end
+			if ew.respMeta.end.httpCode == 0 || ew.respMeta.end.httpCode == http.StatusOK {
+				ew.respMeta.end.httpCode = http.StatusInternalServerError
+			}
+			ew.respMeta.end.err = connect.NewError(connect.CodeInternal, fmt.Errorf("failed to decompress body: %w", err))
+			body = nil
+		} else {
+			body = uncompressed
+		}
+	}
+	if body != nil {
+		ew.processBody(ew.rw.op.server.codec, body, ew.respMeta.end)
+	}
 	ew.rw.flushHeaders()
+	ew.buffer = nil
 	return nil
 }
 
@@ -1000,6 +1026,15 @@ func (m *message) advanceToStage(op *operation, newStage messageStage) error {
 	}
 }
 
+// decompress will decompress data in m.compressed into m.data,
+// acquiring a new buffer from op's bufferPool if necessary.
+// If saveBuffer is true, m.compressed will be unmodified on
+// return; otherwise, the buffer will be released to op's
+// bufferPool and the field set to nil.
+//
+// This method should not be called directly as the message's
+// buffers could get out of sync with its stage. It should
+// only be called from m.advanceToStage.
 func (m *message) decompress(op *operation, saveBuffer bool) error {
 	var pool *compressionPool
 	if m.isRequest {
@@ -1007,8 +1042,7 @@ func (m *message) decompress(op *operation, saveBuffer bool) error {
 	} else {
 		pool = op.respCompression
 	}
-	decomp, release := pool.getDecompressor()
-	if decomp == nil {
+	if pool == nil {
 		// identity compression, so nothing to do
 		m.data = m.compressed
 		if !saveBuffer {
@@ -1016,7 +1050,6 @@ func (m *message) decompress(op *operation, saveBuffer bool) error {
 		}
 		return nil
 	}
-	defer release()
 
 	var src io.Reader
 	if saveBuffer {
@@ -1026,19 +1059,22 @@ func (m *message) decompress(op *operation, saveBuffer bool) error {
 		src = m.compressed
 	}
 	m.data = op.bufferPool.Get()
-	if err := decomp.Reset(src); err != nil {
-		return err
-	}
-	if _, err := m.data.ReadFrom(decomp); err != nil {
+	if err := pool.decompress(m.data, src); err != nil {
 		return err
 	}
 	if !saveBuffer {
 		op.bufferPool.Put(m.compressed)
 		m.compressed = nil
 	}
-	return decomp.Close()
+	return nil
 }
 
+// compress will compress data in m.data into m.compressed,
+// acquiring a new buffer from op's bufferPool if necessary.
+//
+// This method should not be called directly as the message's
+// buffers could get out of sync with its stage. It should
+// only be called from m.advanceToStage.
 func (m *message) compress(op *operation) error {
 	var pool *compressionPool
 	if m.isRequest {
@@ -1046,26 +1082,30 @@ func (m *message) compress(op *operation) error {
 	} else {
 		pool = op.respCompression
 	}
-	comp, release := pool.getCompressor()
-	if comp == nil {
+	if pool == nil {
 		// identity compression, so nothing to do
 		m.compressed = m.data
 		m.data = nil
 		return nil
 	}
-	defer release()
 
 	m.compressed = op.bufferPool.Get()
-	comp.Reset(m.compressed)
-	_, err := m.data.WriteTo(comp)
-	if err != nil {
+	if err := pool.compress(m.compressed, m.data); err != nil {
 		return err
 	}
 	op.bufferPool.Put(m.data)
 	m.data = nil
-	return comp.Close()
+	return nil
 }
 
+// decode will unmarshal data in m.data into m.msg. If
+// saveBuffer is true, m.data will be unmodified on return;
+// otherwise, the buffer will be released to op's bufferPool
+// and the field set to nil.
+//
+// This method should not be called directly as the message's
+// buffers could get out of sync with its stage. It should
+// only be called from m.advanceToStage.
 func (m *message) decode(op *operation, saveBuffer bool) error {
 	var codec Codec
 	if m.isRequest {
@@ -1084,6 +1124,11 @@ func (m *message) decode(op *operation, saveBuffer bool) error {
 	return nil
 }
 
+// encode will marshal data in m.msg into m.data.
+//
+// This method should not be called directly as the message's
+// buffers could get out of sync with its stage. It should
+// only be called from m.advanceToStage.
 func (m *message) encode(op *operation) error {
 	var codec Codec
 	if m.isRequest {
