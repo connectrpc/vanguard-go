@@ -694,7 +694,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 
 	rw.respMeta = &respMeta
 	var endMustBeInHeaders bool
-	if mustBe, ok := rw.op.server.protocol.(serverProtocolEndMustBeInHeaders); ok {
+	if mustBe, ok := rw.op.client.protocol.(clientProtocolEndMustBeInHeaders); ok {
 		endMustBeInHeaders = mustBe.endMustBeInHeaders()
 	}
 	if !endMustBeInHeaders {
