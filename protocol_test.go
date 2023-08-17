@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseMultiple(t *testing.T) {
+func TestParseMultiHeader(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
 		name      string
@@ -52,7 +52,7 @@ func TestParseMultiple(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			result := parseMultiple(testCase.input)
+			result := parseMultiHeader(testCase.input)
 			require.Equal(t, testCase.output, result)
 			if testCase.actualCap > 0 {
 				require.Equal(t, testCase.actualCap, cap(result))

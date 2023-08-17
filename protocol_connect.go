@@ -48,7 +48,7 @@ func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operati
 	query := op.queryValues()
 	reqMeta.codec = query.Get("encoding")
 	reqMeta.compression = query.Get("compression")
-	reqMeta.acceptCompression = parseMultiple(headers.Values("Accept-Encoding"))
+	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
 	return reqMeta, nil
 }
 
@@ -113,7 +113,7 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 	}
 	reqMeta.compression = headers.Get("Content-Encoding")
 	headers.Del("Content-Encoding")
-	reqMeta.acceptCompression = parseMultiple(headers.Values("Accept-Encoding"))
+	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
 	headers.Del("Accept-Encoding")
 	return reqMeta, nil
 }
@@ -222,7 +222,7 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), "application/connect+")
 	reqMeta.compression = headers.Get("Connect-Content-Encoding")
 	headers.Del("Connect-Content-Encoding")
-	reqMeta.acceptCompression = parseMultiple(headers.Values("Connect-Accept-Encoding"))
+	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Connect-Accept-Encoding"))
 	headers.Del("Connect-Accept-Encoding")
 	return reqMeta, nil
 }

@@ -350,7 +350,7 @@ type operation struct {
 }
 
 func (op *operation) queryValues() url.Values {
-	if op.queryVars == nil {
+	if op.queryVars == nil && op.request.URL.RawQuery != "" {
 		op.queryVars = op.request.URL.Query()
 	}
 	return op.queryVars

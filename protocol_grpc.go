@@ -243,7 +243,7 @@ func extractGRPCRequestMeta(contentTypePrefixShort, contentTypePrefixLong string
 	}
 	reqMeta.compression = headers.Get("Grpc-Encoding")
 	headers.Del("Grpc-Encoding")
-	reqMeta.acceptCompression = parseMultiple(headers.Values("Grpc-Accept-Encoding"))
+	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Grpc-Accept-Encoding"))
 	headers.Del("Grpc-Accept-Encoding")
 	return reqMeta, nil
 }

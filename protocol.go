@@ -296,7 +296,10 @@ type responseEnd struct {
 	httpCode int
 }
 
-func parseMultiple(vals []string) []string {
+// parseMultiHeader parses headers that allow multiple values. It
+// supports the values being supplied in a single header separated
+// by commas, multiple headers, or a combination thereof.
+func parseMultiHeader(vals []string) []string {
 	if len(vals) == 0 {
 		return nil
 	}

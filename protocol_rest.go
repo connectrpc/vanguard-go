@@ -37,7 +37,11 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	var reqMeta requestMeta
 	reqMeta.compression = headers.Get("Content-Encoding")
 	headers.Del("Content-Encoding")
-	reqMeta.acceptCompression = parseMultiple(headers.Values("Accept-Encoding"))
+	// TODO: A REST client could use "q" weights in the `Accept-Encoding` header, which
+	//       would currently cause the middleware to not recognize the compression.
+	//       We may want to address this. We'd need to sort the values by their weight
+	//       since other protocols don't allow weights with acceptable encodings.
+	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
 	headers.Del("Accept-Encoding")
 
 	reqMeta.codec = CodecJSON // if actually a custom content-type, handled by body preparer methods
