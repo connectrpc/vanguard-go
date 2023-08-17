@@ -52,8 +52,6 @@ func (o *testMsg) getOut() (*testMsgOut, error) {
 	}
 	return o.out, nil
 }
-
-//nolint:unused
 func (o *testMsg) get() any {
 	if o.in != nil {
 		return o.in
@@ -150,32 +148,7 @@ func (o *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) 
 		ctx context.Context,
 		spec connect.Spec,
 	) connect.StreamingClientConn {
-		conn := next(ctx, spec)
-		val := conn.RequestHeader().Get("test")
-		if val == "" {
-			return conn // is this right?
-		}
-		stream, ok := o.get(val)
-		if !ok {
-			return conn
-		}
-		stream.Log("TODO: implement WrapStreamingClient")
-		assert.Equal(stream.T, stream.reqHeader, conn.RequestHeader())
-
-		// for _, msg := range stream.msgs {
-		// 	switch msg := msg.get().(type) {
-		// 	case *testMsgIn:
-
-		// 	case *testMsgOut:
-		// 		if msg.err != nil {
-		// 			conn.S
-		// 	default:
-		// 		return conn
-		// 	}
-
-		// }
-
-		return nil
+		return next(ctx, spec)
 	})
 }
 func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
@@ -191,9 +164,38 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 		if !ok {
 			return fmt.Errorf("invalid testCase header: %s", val)
 		}
-		stream.Log("TODO: implement WrapStreamingHandler")
+		stream.Log("WrapStreamingHandler", val)
 		assert.Equal(stream.T, stream.reqHeader, conn.RequestHeader())
-		return fmt.Errorf("TODO: implement WrapStreamingHandler")
+
+		for key, vals := range stream.rspHeader {
+			conn.RequestHeader()[key] = vals
+		}
+		for _, msg := range stream.msgs {
+			switch msg := msg.get().(type) {
+			case *testMsgIn:
+				got := proto.Clone(msg.msg)
+				if err := conn.Receive(got); err != nil {
+					return err
+				}
+				diff := cmp.Diff(msg, msg.msg, protocmp.Transform())
+				if diff != "" {
+					return fmt.Errorf("message didn't match: %s", diff)
+				}
+			case *testMsgOut:
+				if msg.err != nil {
+					return msg.err
+				}
+				if err := conn.Send(msg.msg); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("expected message")
+			}
+		}
+		for key, vals := range stream.rspTrailer {
+			conn.ResponseTrailer()[key] = vals
+		}
+		return nil
 	})
 }
 
