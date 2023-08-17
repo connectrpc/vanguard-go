@@ -80,7 +80,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		http.Error(
 			writer,
 			fmt.Sprintf("stream type %s not supported with %s protocol", op.streamType, op.client.protocol),
-			http.StatusNotImplemented)
+			http.StatusUnsupportedMediaType)
 		return
 	}
 	if op.streamType == connect.StreamTypeBidi && request.ProtoMajor < 2 {
@@ -200,22 +200,28 @@ func (h *handler) findMethod(op *operation) (*methodConfig, *httpError) {
 		}
 		methodConf := h.mux.methods[uriPath[1:]]
 		if methodConf == nil {
+			// TODO: if the service is known, but the method is not, we should send to the client
+			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
 			return nil, &httpError{code: http.StatusNotFound}
 		}
-		_, allowGet := op.client.protocol.(clientProtocolAllowsGet)
-		if allowGet && op.request.Method != http.MethodPost && op.request.Method != http.MethodGet {
-			return nil, &httpError{
-				code: http.StatusMethodNotAllowed,
-				headers: func(hdrs http.Header) {
-					hdrs.Set("Allow", http.MethodGet+","+http.MethodPost)
-				},
+		if op.request.Method != http.MethodPost {
+			mayAllowGet, ok := op.client.protocol.(clientProtocolAllowsGet)
+			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
+			if !allowsGet {
+				return nil, &httpError{
+					code: http.StatusMethodNotAllowed,
+					headers: func(hdrs http.Header) {
+						hdrs.Set("Allow", http.MethodPost)
+					},
+				}
 			}
-		} else if !allowGet && op.request.Method != http.MethodPost {
-			return nil, &httpError{
-				code: http.StatusMethodNotAllowed,
-				headers: func(hdrs http.Header) {
-					hdrs.Set("Allow", http.MethodPost)
-				},
+			if allowsGet && op.request.Method != http.MethodGet {
+				return nil, &httpError{
+					code: http.StatusMethodNotAllowed,
+					headers: func(hdrs http.Header) {
+						hdrs.Set("Allow", http.MethodGet+","+http.MethodPost)
+					},
+				}
 			}
 		}
 		return methodConf, nil
@@ -237,7 +243,7 @@ type serverProtocolDetails struct {
 func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType string, values url.Values) {
 	contentTypes := req.Header["Content-Type"]
 
-	if len(contentTypes) == 0 {
+	if len(contentTypes) == 0 { //nolint:nestif
 		// Empty bodies should still have content types. So this should only
 		// happen for requests with NO body at all. That's only allowed for
 		// REST calls and Connect GET calls.
@@ -252,7 +258,10 @@ func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType st
 		}
 		vals := req.URL.Query()
 		if vals.Get("connect") == "v1" {
-			return connectUnaryGetClientProtocol{}, "", vals
+			if req.Method == http.MethodGet {
+				return connectUnaryGetClientProtocol{}, "", nil
+			}
+			return nil, "", nil
 		}
 		return restClientProtocol{}, "", vals
 	}
@@ -454,6 +463,7 @@ func (op *operation) handle() {
 // must be used instead.
 func (op *operation) earlyError(_ error) {
 	// TODO: determine status code from error
+	// TODO: if a *connect.Error, use protocol handler to write RPC response
 	http.Error(op.writer, http.StatusText(http.StatusBadGateway), http.StatusBadGateway)
 }
 

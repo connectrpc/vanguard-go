@@ -12,6 +12,7 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 const (
@@ -38,7 +39,10 @@ func (c connectUnaryGetClientProtocol) acceptsStreamType(streamType connect.Stre
 	return streamType == connect.StreamTypeUnary
 }
 
-func (c connectUnaryGetClientProtocol) allowsGetRequests() {}
+func (c connectUnaryGetClientProtocol) allowsGetRequests(conf *methodConfig) bool {
+	methodOpts, ok := conf.descriptor.Options().(*descriptorpb.MethodOptions)
+	return ok && methodOpts.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
+}
 
 func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
