@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -27,14 +28,10 @@ type handler struct {
 }
 
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	clientProtoHandler, originalContentType := classifyRequest(request)
+	// Identify the protocol.
+	clientProtoHandler, originalContentType, queryVars := classifyRequest(request)
 	if clientProtoHandler == nil {
 		http.Error(writer, "could not classify protocol", http.StatusUnsupportedMediaType)
-		return
-	}
-	reqMeta, err := clientProtoHandler.extractProtocolRequestHeaders(request.Header)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithCancel(request.Context())
@@ -45,28 +42,18 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writer:        writer,
 		request:       request,
 		contentType:   originalContentType,
-		reqMeta:       reqMeta,
 		cancel:        cancel,
 		bufferPool:    h.bufferPool,
 		canDecompress: h.canDecompress,
 	}
 	op.client.protocol = clientProtoHandler
-
-	var cannotDecompressRequest bool
-	if reqMeta.compression != "" {
-		var ok bool
-		op.client.reqCompression, ok = h.mux.compressionPools[reqMeta.compression]
-		if !ok {
-			// This might be okay, like if the transformation doesn't require decoding.
-			op.client.reqCompression = nil
-			cannotDecompressRequest = true
-		}
+	if queryVars != nil {
+		// memoize this, so we don't have to parse query string again later
+		op.queryVars = queryVars
 	}
+	originalHeaders := request.Header.Clone()
 
-	if newCodec := h.mux.codecImpls[reqMeta.codec]; newCodec == nil {
-		http.Error(writer, fmt.Sprintf("%q sub-format not supported", reqMeta.codec), http.StatusUnsupportedMediaType)
-		return
-	}
+	// Identify the method being invoked.
 	methodConf, httpErr := h.findMethod(&op)
 	if httpErr != nil {
 		if httpErr.headers != nil {
@@ -89,7 +76,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		op.streamType = connect.StreamTypeUnary
 	}
-	if op.client.protocol.acceptsStreamType(op.streamType) {
+	if !op.client.protocol.acceptsStreamType(op.streamType) {
 		http.Error(
 			writer,
 			fmt.Sprintf("stream type %s not supported with %s protocol", op.streamType, op.client.protocol),
@@ -101,6 +88,30 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Identify the request encoding and compression.
+	reqMeta, err := clientProtoHandler.extractProtocolRequestHeaders(&op, request.Header)
+	if err != nil {
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+		return
+	}
+	op.reqMeta = reqMeta
+	var cannotDecompressRequest bool
+	if reqMeta.compression == CompressionIdentity {
+		reqMeta.compression = "" // normalize to empty string
+	}
+	if reqMeta.compression != "" {
+		var ok bool
+		op.client.reqCompression, ok = h.mux.compressionPools[reqMeta.compression]
+		if !ok {
+			// This might be okay, like if the transformation doesn't require decoding.
+			op.client.reqCompression = nil
+			cannotDecompressRequest = true
+		}
+	}
+	if newCodec := h.mux.codecImpls[reqMeta.codec]; newCodec == nil {
+		http.Error(writer, fmt.Sprintf("%q sub-format not supported", reqMeta.codec), http.StatusUnsupportedMediaType)
+		return
+	}
 	op.client.codec = h.codecs[codecKey{res: methodConf.resolver, name: reqMeta.codec}]
 
 	// Now we can determine the destination protocol details
@@ -135,10 +146,13 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		} // else: no compression
 	}
 
+	// Now we know enough to handle the request.
 	if op.client.protocol.protocol() == op.server.protocol.protocol() &&
 		op.client.codec.Name() == op.server.codec.Name() &&
 		(cannotDecompressRequest || op.client.reqCompression.Name() == op.server.reqCompression.Name()) {
-		// No transformation needed.
+		// No transformation needed. But we do  need to restore the original headers first
+		// since extracting request metadata may have removed keys.
+		request.Header = originalHeaders
 		methodConf.handler.ServeHTTP(writer, request)
 		return
 	}
@@ -220,7 +234,7 @@ type serverProtocolDetails struct {
 	reqCompression *compressionPool
 }
 
-func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType string) {
+func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType string, values url.Values) {
 	contentTypes := req.Header["Content-Type"]
 
 	if len(contentTypes) == 0 {
@@ -228,39 +242,45 @@ func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType st
 		// happen for requests with NO body at all. That's only allowed for
 		// REST calls and Connect GET calls.
 		connectVersion := req.Header["Connect-Protocol-Version"]
+		// If this header is present, the intent is clear. But Connect GET
+		// requests should actually encode this via query string (see below).
 		if len(connectVersion) == 1 && connectVersion[0] == "1" {
 			if req.Method == http.MethodGet {
-				return connectUnaryGetClientProtocol{}, ""
+				return connectUnaryGetClientProtocol{}, "", nil
 			}
-			return nil, ""
+			return nil, "", nil
 		}
-		return restClientProtocol{}, ""
+		vals := req.URL.Query()
+		if vals.Get("connect") == "v1" {
+			return connectUnaryGetClientProtocol{}, "", vals
+		}
+		return restClientProtocol{}, "", vals
 	}
 
 	if len(contentTypes) > 1 {
-		return nil, "" // Ick. Don't allow this.
+		return nil, "", nil // Ick. Don't allow this.
 	}
 	contentType = contentTypes[0]
 	switch {
 	case strings.HasPrefix(contentType, "application/connect+"):
-		return connectStreamClientProtocol{}, contentType
+		return connectStreamClientProtocol{}, contentType, nil
 	case contentType == "application/grpc" || strings.HasPrefix(contentType, "application/grpc+"):
-		return grpcClientProtocol{}, contentType
+		return grpcClientProtocol{}, contentType, nil
 	case contentType == "application/grpc-web" || strings.HasPrefix(contentType, "application/grpc-web+"):
-		return grpcWebClientProtocol{}, contentType
+		return grpcWebClientProtocol{}, contentType, nil
 	case strings.HasPrefix(contentType, "application/"):
 		connectVersion := req.Header["Connect-Protocol-Version"]
 		if len(connectVersion) == 1 && connectVersion[0] == "1" {
 			if req.Method == http.MethodGet {
-				return connectUnaryGetClientProtocol{}, contentType
+				return connectUnaryGetClientProtocol{}, contentType, nil
 			}
-			return connectUnaryPostClientProtocol{}, contentType
+			return connectUnaryPostClientProtocol{}, contentType, nil
 		}
 		// REST usually uses application/json, but use of google.api.HttpBody means it could
 		// also use *any* content-type.
 		fallthrough
 	default:
-		return restClientProtocol{}, contentType
+		return restClientProtocol{}, contentType, nil
 	}
 }
 
@@ -293,6 +313,7 @@ type operation struct {
 	muxConfig     *Mux
 	writer        http.ResponseWriter
 	request       *http.Request
+	queryVars     url.Values
 	contentType   string // original content-type in incoming request headers
 	reqMeta       requestMeta
 	cancel        context.CancelFunc
@@ -326,6 +347,13 @@ type operation struct {
 	serverPreparer      serverBodyPreparer
 	serverReqNeedsPrep  bool
 	serverRespNeedsPrep bool
+}
+
+func (op *operation) queryValues() url.Values {
+	if op.queryVars == nil && op.request.URL.RawQuery != "" {
+		op.queryVars = op.request.URL.Query()
+	}
+	return op.queryVars
 }
 
 func (op *operation) handle() {
@@ -601,6 +629,9 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	if err != nil {
 		rw.reportError(err)
 		return
+	}
+	if rw.respMeta.compression == CompressionIdentity {
+		rw.respMeta.compression = "" // normalize to empty string
 	}
 	rw.respMeta = &respMeta
 	if respMeta.end != nil {

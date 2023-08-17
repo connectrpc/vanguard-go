@@ -166,7 +166,7 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		}
 	}
 	// empty is allowed here: non-nil but empty means do not send compressed data to handler
-	svcOpts.codecNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
+	svcOpts.compressorNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
 	for compressorName := range svcOpts.compressorNames {
 		if _, known := m.compressionPools[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use config.AddCompression to add known algorithms first", compressorName)
