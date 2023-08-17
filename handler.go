@@ -826,13 +826,16 @@ const (
 
 // message is a bytes buffer of compressed and encoded data.
 type message struct {
-	buf   *bytes.Buffer
-	comp  *compressionPool
-	codec Codec
+	buf   *bytes.Buffer    // nil if message is empty
+	comp  *compressionPool // nil if message isn't compressed
+	codec Codec            // nil if message isn't encoded
 }
 
 func (m *message) convert(buffers *bufferPool, comp *compressionPool, codec Codec, msg proto.Message) error {
-	src, buf := m.buf, (*bytes.Buffer)(nil)
+	if m.buf == nil {
+		m.buf = buffers.Get()
+	}
+	var buf *bytes.Buffer
 	defer func() {
 		if buf != nil {
 			buffers.Put(buf)
@@ -845,7 +848,7 @@ func (m *message) convert(buffers *bufferPool, comp *compressionPool, codec Code
 		decompressor, release := m.comp.getDecompressor()
 		defer release()
 
-		if err := decompressor.Reset(src); err != nil {
+		if err := decompressor.Reset(m.buf); err != nil {
 			return err
 		}
 		defer decompressor.Close()
@@ -854,23 +857,24 @@ func (m *message) convert(buffers *bufferPool, comp *compressionPool, codec Code
 		if _, err := buf.ReadFrom(decompressor); err != nil {
 			return err
 		}
-		src.Reset()
-		src, buf = buf, src
+		m.buf.Reset()
+		m.buf, buf = buf, m.buf
 		m.comp = nil
 	}
-	if needsRecoding {
+	if m.codec != nil && needsRecoding {
 		// Decode
-		if err := codec.Unmarshal(src.Bytes(), msg); err != nil {
+		if err := codec.Unmarshal(m.buf.Bytes(), msg); err != nil {
 			return err
 		}
-
+	}
+	if needsRecoding {
 		// Encode
-		bytes, err := codec.MarshalAppend(src.Bytes(), msg)
+		bytes, err := codec.MarshalAppend(m.buf.Bytes(), msg)
 		if err != nil {
 			return err
 		}
-		src.Reset()
-		src.Write(bytes)
+		m.buf.Reset()
+		m.buf.Write(bytes)
 	}
 	if comp != nil && needsRecompressing {
 		// Compress
@@ -883,15 +887,14 @@ func (m *message) convert(buffers *bufferPool, comp *compressionPool, codec Code
 
 		compressor.Reset(buf)
 		defer compressor.Close()
-		_, err := src.WriteTo(compressor)
+		_, err := m.buf.WriteTo(compressor)
 		if err != nil {
 			return err
 		}
-		src.Reset()
-		src, buf = buf, src
+		m.buf.Reset()
+		m.buf, buf = buf, m.buf
 		m.comp = comp
 	}
-	m.buf = src
 	return nil
 }
 
