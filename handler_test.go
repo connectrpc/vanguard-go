@@ -49,25 +49,10 @@ func TestHandler_Errors(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// We use a handful of servers w/ different config.
-	server := httptest.NewUnstartedServer(allMux.AsHandler())
-	server.EnableHTTP2 = true
-	server.StartTLS()
-	t.Cleanup(server.Close)
-	grpcServer := httptest.NewUnstartedServer(grpcMux.AsHandler())
-	grpcServer.EnableHTTP2 = true
-	grpcServer.StartTLS()
-	t.Cleanup(grpcServer.Close)
-	connectServer := httptest.NewUnstartedServer(connectMux.AsHandler())
-	connectServer.EnableHTTP2 = true
-	connectServer.StartTLS()
-	t.Cleanup(connectServer.Close)
-	http1Server := httptest.NewServer(allMux.AsHandler())
-	t.Cleanup(http1Server.Close)
-
 	testCases := []struct {
 		name                    string
-		server                  *httptest.Server // default to server if unspecified
+		mux                     *Mux // use allMux if nil
+		useHTTP1                bool
 		requestURL              string
 		requestMethod           string
 		requestHeaders          map[string][]string
@@ -259,7 +244,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown compression",
-			server:        grpcServer, // must target different protocol for the error
+			mux:           grpcMux, // must target different protocol for the error
 			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -281,7 +266,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, unknown compression",
-			server:        grpcServer,
+			mux:           grpcMux,
 			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -303,7 +288,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc, unknown compression",
-			server:        connectServer,
+			mux:           connectMux,
 			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -324,7 +309,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, unknown compression",
-			server:        connectServer,
+			mux:           connectMux,
 			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -335,7 +320,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, bidi and http 1.1",
-			server:        http1Server,
+			useHTTP1:      true,
 			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -345,7 +330,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc stream, bidi and http 1.1",
-			server:        http1Server,
+			useHTTP1:      true,
 			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -355,7 +340,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web stream, bidi and http 1.1",
-			server:        http1Server,
+			useHTTP1:      true,
 			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -396,20 +381,27 @@ func TestHandler_Errors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			targetServer := server
-			if testCase.server != nil {
-				targetServer = testCase.server
+			targetMux := allMux
+			if testCase.mux != nil {
+				targetMux = testCase.mux
 			}
-			req, err := http.NewRequestWithContext(context.Background(), testCase.requestMethod, targetServer.URL+testCase.requestURL, http.NoBody)
-			require.NoError(t, err)
+			req := httptest.NewRequest(testCase.requestMethod, testCase.requestURL, http.NoBody)
+			if testCase.useHTTP1 {
+				req.Proto = "HTTP/1.1"
+				req.ProtoMajor, req.ProtoMinor = 1, 1
+			} else {
+				req.Proto = "HTTP/2"
+				req.ProtoMajor, req.ProtoMinor = 2, 0
+			}
 			for k, vals := range testCase.requestHeaders {
 				for _, v := range vals {
 					req.Header.Add(k, v)
 				}
 			}
-			resp, err := targetServer.Client().Do(req)
-			require.NoError(t, err)
-			err = resp.Body.Close()
+			respWriter := httptest.NewRecorder()
+			targetMux.AsHandler().ServeHTTP(respWriter, req)
+			resp := respWriter.Result()
+			err := resp.Body.Close()
 			require.NoError(t, err)
 			require.Equal(t, testCase.expectedCode, resp.StatusCode)
 			for k, v := range testCase.expectedResponseHeaders {
