@@ -159,7 +159,7 @@ func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, 
 	panic("implement me")
 }
 
-func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -271,7 +271,7 @@ func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta,
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }

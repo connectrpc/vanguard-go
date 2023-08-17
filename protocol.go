@@ -159,11 +159,16 @@ type serverProtocolHandler interface {
 	// headers. If provided, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
 	addProtocolRequestHeaders(meta requestMeta, target http.Header, allowedCompression []string)
-	// Returns the response metadata from the headers; if the second
-	// arg is non-nil, the caller should supply the body to it along
-	// with the responseMeta.end to finish processing the end of the
-	// response.
-	extractProtocolResponseHeaders(int, http.Header) (responseMeta, func(io.Reader, *responseEnd), error)
+	// Returns the response metadata from the headers. If the response
+	// meta's end field is set (i.e. headers indicate RPC is over), but
+	// the protocol needs to read the response body to populate it, it
+	// should return a non-nil function as the second returned value.
+	// This function will receive the server's codec (optionally used
+	// to encode other messages and could be used to decode the error
+	// body), the body, and a pointer to the responseEnd which should
+	// be populated with the details. If the response body was compressed,
+	// it will be decompressed before it is provided to the given function.
+	extractProtocolResponseHeaders(int, http.Header) (responseMeta, responseEndUnmarshaler, error)
 	// Called at end of RPC if responseEnd has not been returned by
 	// extractProtocolResponseHeaders or from an enveloped message
 	// in the response body whose trailer bit is set.
@@ -172,6 +177,11 @@ type serverProtocolHandler interface {
 	// String returns a human-readable name/description of protocol.
 	String() string
 }
+
+// responseEndUnmarshaler populates the given responseEnd by unmarshalling
+// information from the given reader. If unmarshalling needs to know the
+// server's codec, it also provided as the first argument.
+type responseEndUnmarshaler func(Codec, io.Reader, *responseEnd)
 
 // serverProtocolEndMustBeInHeaders is an optional interface implemented
 // by serverProtocolHandler instances to indicate if the end of an RPC

@@ -109,7 +109,7 @@ func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	panic("implement me")
 }
 
-func (g grpcServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (g grpcServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -201,7 +201,7 @@ func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, heade
 	panic("implement me")
 }
 
-func (g grpcWebServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (g grpcWebServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }

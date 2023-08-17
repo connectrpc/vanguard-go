@@ -115,7 +115,7 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	panic("implement me")
 }
 
-func (r restServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, func(io.Reader, *responseEnd), error) {
+func (r restServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }
