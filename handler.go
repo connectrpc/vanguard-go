@@ -728,14 +728,14 @@ func (rw *responseWriter) reportError(err error) {
 		end.err = connect.NewError(connect.CodeInternal, err)
 		end.httpCode = http.StatusBadGateway
 	}
-	rw.reportEnd(&end, false)
+	rw.reportEnd(&end)
 }
 
-func (rw *responseWriter) reportEnd(end *responseEnd, inHeaders bool) {
+func (rw *responseWriter) reportEnd(end *responseEnd) {
 	switch {
 	case rw.headersFlushed:
 		// write error to body or trailers
-		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, inHeaders)
+		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
 		if len(trailers) > 0 {
 			hdrs := rw.Header()
 			for k, v := range trailers {
