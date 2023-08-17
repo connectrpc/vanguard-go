@@ -84,7 +84,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 			opts = append(opts, WithCompression(compression))
 		}
 		hdlr := protocolMiddelware(protocol, codec, compression, serveMux)
-		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec, compression)
+		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
 
 		mux := &Mux{}
 		for _, service := range services {
