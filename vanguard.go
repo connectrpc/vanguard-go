@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	CompressionGzip = "gzip"
+	CompressionGzip     = "gzip"
+	CompressionIdentity = "identity"
 	// TODO: Connect protocol spec also references "br" (Brotli) and "zstd". And gRPC
 	//       protocol spec references "deflate" and "snappy". Should we also support
 	//       those out of the box?
@@ -324,14 +325,14 @@ func WithCompression(names ...string) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
 		if len(names) == 0 {
 			// nil signals to use defaults
-			opts.codecNames = nil
+			opts.compressorNames = nil
 			return
 		}
-		if opts.codecNames == nil {
-			opts.codecNames = map[string]struct{}{}
+		if opts.compressorNames == nil {
+			opts.compressorNames = map[string]struct{}{}
 		}
 		for _, n := range names {
-			opts.codecNames[n] = struct{}{}
+			opts.compressorNames[n] = struct{}{}
 		}
 	})
 }

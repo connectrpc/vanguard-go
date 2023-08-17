@@ -1,0 +1,58 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// All rights reserved.
+
+syntax = "proto3";
+
+package buf.vanguard.test.v1;
+
+import "google/api/annotations.proto";
+import "google/api/httpbody.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+service ContentService {
+  // Index returns a html index page at the given path.
+  rpc Index(IndexRequest) returns (google.api.HttpBody) {
+    option (google.api.http) = {
+      get : "/index/{page=**}"
+    };
+  }
+  // Upload a file to the given path.
+  rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      post : "/raw/{filename=**}"
+      body : "file"
+    };
+  }
+  // Download a file from the given path.
+  rpc Download(DownloadRequest) returns (stream DownloadResponse) {
+    option (google.api.http) = {
+      get : "/raw/{filename=**}"
+      response_body : "file"
+    };
+  }
+}
+
+message IndexRequest {
+  // The path to the page to index.
+  string page = 1;
+}
+
+message UploadRequest {
+  // The path to the file to upload.
+  string filename = 1;
+  // The file contents to upload.
+  google.api.HttpBody file = 2;
+}
+
+message DownloadRequest {
+  // The path to the file to download.
+  string filename = 1;
+}
+
+message DownloadResponse {
+  // The file contents.
+  google.api.HttpBody file = 1;
+}
