@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 
@@ -51,6 +52,8 @@ func (o *testMsg) getOut() (*testMsgOut, error) {
 	}
 	return o.out, nil
 }
+
+//nolint:unused
 func (o *testMsg) get() any {
 	if o.in != nil {
 		return o.in
@@ -79,9 +82,11 @@ func (o *testInterceptor) get(testName string) (ttStream, bool) {
 	return stream, ok
 }
 func (o *testInterceptor) set(t *testing.T, stream testStream) {
+	t.Helper()
 	o.Store(t.Name(), ttStream{t, stream})
 }
 func (o *testInterceptor) del(t *testing.T) {
+	t.Helper()
 	o.Delete(t.Name())
 }
 
@@ -251,6 +256,7 @@ func (o *testInterceptor) restUnaryHandler(
 		// Write error, if any.
 		if out.err != nil {
 			httpWriteError(rsp, out.err)
+			//nolint:nilerr
 			return nil
 		}
 
@@ -326,4 +332,89 @@ func equalSlices(a, b []string) bool {
 		}
 	}
 	return true
+}
+func getCompressor(t *testing.T, name string) connect.Compressor {
+	t.Helper()
+	switch name {
+	case CompressionGzip:
+		return DefaultGzipCompressor()
+	case CompressionIdentity:
+		return nil
+	default:
+		t.Fatalf("unknown compression: %s", name)
+		return nil
+	}
+}
+func getDecompressor(t *testing.T, name string) connect.Decompressor {
+	t.Helper()
+	switch name {
+	case CompressionGzip:
+		return DefaultGzipDecompressor()
+	case CompressionIdentity:
+		return nil
+	default:
+		t.Fatalf("unknown compression: %s", name)
+		return nil
+	}
+}
+
+type testServer struct {
+	name string
+	svr  *httptest.Server
+}
+type testOpt struct {
+	name string
+	svr  *httptest.Server
+	opts []connect.ClientOption
+}
+
+func appendClientProtocolOptions(t *testing.T, opts []connect.ClientOption, protocol Protocol) []connect.ClientOption {
+	t.Helper()
+	switch protocol {
+	case ProtocolGRPC:
+		return append(opts, connect.WithGRPC())
+	default:
+		t.Fatalf("unknown protocol: %s", protocol)
+	}
+	return opts
+}
+
+func appendClientCodecOptions(t *testing.T, opts []connect.ClientOption, codec string) []connect.ClientOption {
+	t.Helper()
+	switch codec {
+	case CodecJSON:
+		return append(opts, connect.WithProtoJSON())
+	case CodecProto:
+		// default...
+	default:
+		t.Fatalf("unknown codec: %s", codec)
+	}
+	return opts
+}
+func appendClientCompressionOptions(t *testing.T, opts []connect.ClientOption, compression string) []connect.ClientOption {
+	t.Helper()
+	switch compression {
+	case CompressionIdentity:
+		return append(opts,
+			connect.WithAcceptCompression(
+				CompressionGzip, nil, nil,
+			),
+		)
+	case CompressionGzip:
+		return append(opts,
+			connect.WithAcceptCompression(
+				CompressionGzip,
+				func() connect.Decompressor {
+					return getDecompressor(t, CompressionGzip)
+				},
+				func() connect.Compressor {
+					return getCompressor(t, CompressionGzip)
+				},
+			),
+			connect.WithSendCompression(compression),
+		)
+	default:
+		t.Fatalf("unknown compression: %s", compression)
+	}
+	return opts
 }

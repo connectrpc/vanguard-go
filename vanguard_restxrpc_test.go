@@ -33,12 +33,12 @@ func TestMux_RESTxRPC(t *testing.T) {
 		"buf.vanguard.test.v1.LibraryService",
 	}
 	codecs := []string{
-		"json",
-		"proto",
+		CodecJSON,
+		CodecProto,
 	}
 	compressions := []string{
-		"gzip",
-		"identity",
+		CompressionGzip,
+		CompressionIdentity,
 	}
 	protocols := []Protocol{
 		ProtocolGRPC,
@@ -276,10 +276,10 @@ func TestMux_RESTxRPC(t *testing.T) {
 				var comp connect.Compressor
 				var decomp connect.Decompressor
 				switch compression {
-				case "gzip":
+				case CompressionGzip:
 					comp = DefaultGzipCompressor()
 					decomp = DefaultGzipDecompressor()
-				case "identity":
+				case CompressionIdentity:
 					// nil
 				default:
 					t.Fatalf("unknown compression %q", compression)

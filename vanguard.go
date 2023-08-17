@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	CompressionGzip = "gzip"
+	CompressionGzip     = "gzip"
+	CompressionIdentity = "identity"
 	// TODO: Connect protocol spec also references "br" (Brotli) and "zstd". And gRPC
 	//       protocol spec references "deflate" and "snappy". Should we also support
 	//       those out of the box?

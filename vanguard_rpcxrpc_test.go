@@ -75,33 +75,6 @@ func TestMux_RPCxRPC(t *testing.T) {
 		}
 	}
 
-	getCompressor := func(name string) connect.Compressor {
-		switch name {
-		case "gzip":
-			return DefaultGzipCompressor()
-		case "identity":
-			return nil
-		default:
-			t.Fatalf("unknown compression: %s", name)
-			return nil
-		}
-	}
-	getDecompressor := func(name string) connect.Decompressor {
-		switch name {
-		case "gzip":
-			return DefaultGzipDecompressor()
-		case "identity":
-			return nil
-		default:
-			t.Fatalf("unknown compression: %s", name)
-			return nil
-		}
-	}
-
-	type testServer struct {
-		name string
-		svr  *httptest.Server
-	}
 	makeServer := func(protocol Protocol, codec, compression string) testServer {
 		opts := []ServiceOption{
 			WithProtocols(protocol),
@@ -135,61 +108,21 @@ func TestMux_RPCxRPC(t *testing.T) {
 		}
 	}
 
-	type testOpt struct {
-		name string
-		svr  *httptest.Server
-		opts []connect.ClientOption
-	}
 	testOpts := []testOpt{}
 	for _, server := range servers {
 		opts := []connect.ClientOption{}
 		for _, protocol := range protocols {
-			opts := opts
-			switch protocol {
-			case ProtocolGRPC:
-				opts = append(opts, connect.WithGRPC())
-			default:
-				t.Fatalf("unknown protocol: %s", protocol)
-			}
+			opts := appendClientProtocolOptions(t, opts, protocol)
 			for _, codec := range codecs {
-				opts := opts
-				switch codec {
-				case "json":
-					opts = append(opts, connect.WithProtoJSON())
-				case "proto":
-					// default...
-				default:
-					t.Fatalf("unknown codec: %s", codec)
-				}
+				opts := appendClientCodecOptions(t, opts, codec)
 				for _, compression := range compressions {
-					opts := opts
-					switch compression {
-					case "identity":
-						opts = append(opts,
-							connect.WithAcceptCompression(
-								"gzip", nil, nil,
-							),
-						)
-					case "gzip":
-						opts = append(opts,
-							connect.WithAcceptCompression(
-								"gzip",
-								func() connect.Decompressor {
-									return getDecompressor("gzip")
-								},
-								func() connect.Compressor {
-									return getCompressor("gzip")
-								},
-							),
-							connect.WithSendCompression(compression),
-						)
-					default:
-						t.Fatalf("unknown compression: %s", compression)
-					}
+					opts := appendClientCompressionOptions(t, opts, compression)
+					copyOpts := make([]connect.ClientOption, len(opts))
+					copy(copyOpts, opts)
 					testOpts = append(testOpts, testOpt{
 						name: fmt.Sprintf("%s_%s_%s/%s", protocol, codec, compression, server.name),
 						svr:  server.svr,
-						opts: opts,
+						opts: copyOpts,
 					})
 				}
 			}
@@ -216,8 +149,9 @@ func TestMux_RPCxRPC(t *testing.T) {
 		testRequests = append(testRequests, []testRequest{{
 			name: "GetBook_" + opts.name,
 			input: func(t *testing.T) (http.Header, []proto.Message, http.Header) {
+				t.Helper()
 				req := connect.NewRequest(&testv1.GetBookRequest{Name: "shelves/1/books/1"})
-				req.Header().Set("test", t.Name())
+				req.Header().Set("Test", t.Name()) // test header
 				req.Header().Set("Message", "hello")
 				rsp, err := libClient.GetBook(context.Background(), req)
 				if err != nil {
