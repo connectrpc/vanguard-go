@@ -54,22 +54,22 @@ func TestMux_RPCxRPC(t *testing.T) {
 		next http.Handler,
 	) http.HandlerFunc {
 		return func(rsp http.ResponseWriter, req *http.Request) {
-			var wantHdr http.Header
+			var wantHdr map[string]string
 			switch protocol {
 			case ProtocolGRPC:
-				wantHdr = http.Header{
-					"Content-Type": []string{
-						fmt.Sprintf("application/grpc+%s", codec),
-					},
-					"Grpc-Encoding": []string{compression},
+				wantHdr = map[string]string{
+					"Content-Type":  fmt.Sprintf("application/grpc+%s", codec),
+					"Grpc-Encoding": compression,
 				}
 			default:
 				http.Error(rsp, "unknown protocol", http.StatusInternalServerError)
 				return
 			}
-			if err := equalHeaders(wantHdr, req.Header); err != nil {
-				http.Error(rsp, err.Error(), http.StatusInternalServerError)
-				return
+			for key, val := range wantHdr {
+				if req.Header.Get(key) != val {
+					http.Error(rsp, fmt.Sprintf("missing header %s: %s", key, val), http.StatusInternalServerError)
+					return
+				}
 			}
 			next.ServeHTTP(rsp, req)
 		}
@@ -195,8 +195,8 @@ func TestMux_RPCxRPC(t *testing.T) {
 			defer interceptor.del(t)
 
 			header, messages, trailer := testCase.input(t)
-			assert.NoError(t, equalHeaders(testCase.output.header, header))
-			assert.NoError(t, equalHeaders(testCase.output.trailer, trailer))
+			assert.Subset(t, testCase.output.header, header)
+			assert.Subset(t, testCase.output.trailer, trailer)
 			require.Len(t, messages, len(testCase.output.messages))
 			for i, msg := range messages {
 				want := testCase.output.messages[i]

@@ -163,8 +163,8 @@ func TestMux_RPCxREST(t *testing.T) {
 			defer interceptor.del(t)
 
 			header, messages, trailer := testCase.input(t)
-			assert.NoError(t, equalHeaders(testCase.output.header, header))
-			assert.NoError(t, equalHeaders(testCase.output.trailer, trailer))
+			assert.Subset(t, testCase.output.header, header)
+			assert.Subset(t, testCase.output.trailer, trailer)
 			require.Len(t, messages, len(testCase.output.messages))
 			for i, msg := range messages {
 				want := testCase.output.messages[i]

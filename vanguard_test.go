@@ -101,9 +101,7 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if !ok {
 			return nil, fmt.Errorf("invalid testCase header: %s", val)
 		}
-		if err := equalHeaders(stream.reqHeader, req.Header()); err != nil {
-			return nil, err
-		}
+		assert.Subset(stream.T, stream.reqHeader, req.Header())
 		if len(stream.msgs) != 2 {
 			err := fmt.Errorf("expected 2 messages, got %d", len(stream.msgs))
 			return nil, err
@@ -144,12 +142,7 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	})
 }
 func (o *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return connect.StreamingClientFunc(func(
-		ctx context.Context,
-		spec connect.Spec,
-	) connect.StreamingClientConn {
-		return next(ctx, spec)
-	})
+	return next
 }
 func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return connect.StreamingHandlerFunc(func(
@@ -218,8 +211,7 @@ func (o *testInterceptor) restUnaryHandler(
 			return err
 		}
 		assert.Equal(stream.T, req.URL.String(), inn.method, "URL didn't match")
-
-		assert.NoError(stream.T, equalHeaders(stream.reqHeader, req.Header), "headers didn't match")
+		assert.Subset(stream.T, stream.reqHeader, req.Header, "headers didn't match")
 		contentType := req.Header.Get("Content-Type")
 		encoding := req.Header.Get("Content-Encoding")
 		acceptEncoding := req.Header.Get("Accept-Encoding")
@@ -314,27 +306,6 @@ type AnyResponse struct {
 
 func (a *AnyResponse) Any() any { return a.msg }
 
-func equalHeaders(a, b http.Header) error {
-	for key, values := range a {
-		if !equalSlices(values, b[key]) {
-			return fmt.Errorf(
-				"header %s: want %v got %v", key, a[key], b[key],
-			)
-		}
-	}
-	return nil
-}
-func equalSlices(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for index, values := range a {
-		if values != b[index] {
-			return false
-		}
-	}
-	return true
-}
 func getCompressor(t *testing.T, name string) connect.Compressor {
 	t.Helper()
 	switch name {
