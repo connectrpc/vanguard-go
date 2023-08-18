@@ -3,8 +3,6 @@ module github.com/bufbuild/vanguard
 go 1.19
 
 require (
-	buf.build/gen/go/connectrpc/eliza/connectrpc/go v1.11.0-20230727062025-d8fbf2620c60.1
-	buf.build/gen/go/connectrpc/eliza/protocolbuffers/go v1.31.0-20230727062025-d8fbf2620c60.1
 	connectrpc.com/connect v1.11.0
 	github.com/google/go-cmp v0.5.9
 	github.com/stretchr/testify v1.8.4
