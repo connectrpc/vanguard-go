@@ -136,7 +136,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target, vars := trie.match(testCase.path, method)
+					target, vars, _ := trie.match(testCase.path, method)
 					require.NotNil(t, target)
 					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.config.descriptor.Name())
 					require.Equal(t, len(testCase.expectedVars), len(vars))
@@ -156,7 +156,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target, _ := trie.match(testCase.path, method)
+					target, _, _ := trie.match(testCase.path, method)
 					require.Nil(t, target)
 				})
 			}
@@ -178,7 +178,7 @@ func BenchmarkTrieMatch(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		method, vars = trie.match(path, http.MethodPost)
+		method, vars, _ = trie.match(path, http.MethodPost)
 		if method == nil {
 			b.Fatal("method not found")
 		}
@@ -212,11 +212,12 @@ func initTrie(tb testing.TB) *routeTrie {
 		require.NoError(tb, err)
 
 		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			target, err := makeTarget(&methodConfig{
+			config := &methodConfig{
 				descriptor: &fakeMethodDescriptor{
 					name: fmt.Sprintf("%s %s", method, route),
 				},
-			}, "*", "*", variables)
+			}
+			target, err := makeTarget(config, "POST", "*", "*", segments, variables)
 			require.NoError(tb, err)
 			err = trie.insert(method, target, segments)
 			require.NoError(tb, err)
@@ -308,4 +309,7 @@ func (f *fakeFieldDescriptor) Message() protoreflect.MessageDescriptor {
 		f.msg = &fakeMessageDescriptor{}
 	}
 	return f.msg
+}
+func (f *fakeFieldDescriptor) IsList() bool {
+	return false
 }

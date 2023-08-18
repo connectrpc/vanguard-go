@@ -22,13 +22,19 @@ linters-settings:
       - T any
       - i int
       - wg sync.WaitGroup
+      - sb strings.Builder
       - sb *strings.Builder
       - ok bool
+      - op operation
+      - op *operation
+      - t ttStream
 linters:
   enable-all: true
   disable:
     - cyclop            # covered by gocyclo
     - deadcode          # abandoned
+    - depguard          # may enable later but needs configuration
+    - exhaustive        # noisy in practice: many switches have default, so they don't need to be exhaustive
     - exhaustivestruct  # replaced by exhaustruct
     - exhaustruct       # opt-in on a type-by-type basis (no useful for now)
     - funlen            # rely on code review to limit function length

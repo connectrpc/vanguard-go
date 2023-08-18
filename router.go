@@ -57,7 +57,7 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if err != nil {
 		return err
 	}
-	target, err := makeTarget(config, rule.Body, rule.ResponseBody, variables)
+	target, err := makeTarget(config, method, rule.Body, rule.ResponseBody, segments, variables)
 	if err != nil {
 		return err
 	}
@@ -105,41 +105,53 @@ func (trie *routeTrie) insert(method string, target *routeTarget, segments pathS
 
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
-func (trie *routeTrie) match(path string, method string) (*routeTarget, []routeTargetVarMatch) {
-	if !strings.HasPrefix(path, "/") || strings.HasSuffix(path, ":") {
-		return nil, nil
+func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
+	// TODO: Not checking if path ends with "/" means we accept missing final segment
+	//       for both * and **. Is that right? Makes sense for **, but maybe not for *.
+	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == ':' {
+		// TODO: is this how grpc-gateway works? Is it lenient and forgives trailing slash
+		//       or absence of leading slash?
+		// if it doesn't start with "/" or if it ends with "/" it won't match
+		return nil, nil, nil
 	}
-	segments := strings.Split(path[1:], "/")
+	uriPath = uriPath[1:] // skip the leading slash
+
+	// TODO: we may want a custom Split so that we can pool the resulting slices
+	//       and reduce allocations here; in fact, we could even skip the Split
+	//       and just pass the uriPath string to findTarget, which must find
+	//       the next slash and split into car/cdr (no allocation required).
+	path := strings.Split(uriPath, "/")
 	var verb string
 	if len(path) > 0 {
-		lastElement := segments[len(segments)-1]
+		lastElement := path[len(path)-1]
 		if pos := strings.IndexRune(lastElement, ':'); pos >= 0 {
-			segments[len(segments)-1] = lastElement[:pos]
+			path[len(path)-1] = lastElement[:pos]
 			verb = lastElement[pos+1:]
 		}
 	}
-	target, _ := trie.findTarget(segments, verb, method)
+	target, methods := trie.findTarget(path, verb, httpMethod)
 	if target == nil {
-		return nil, nil
+		return nil, nil, methods
 	}
-	return target, computeVarValues(segments, target)
+	// TODO: instead of []routeTargetMatch, we may want a different data structure
+	//       that doesn't need to allocate slices but instead retrieves substrings
+	//       of uriPath on demand.
+	return target, computeVarValues(path, target), nil
 }
 
+// findTarget finds the target for the given path components, verb, and method.
+// The method either returns a target OR the set of methods for the given path
+// and verb. If the target is non-nil, the request was matched. If the target
+// is nil but methods are non-nil, the path and verb matched a route, but not
+// the method. This can be used to send back a well-formed "Allow" response
+// header. If both are nil, the path and verb did not match.
 func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
 	if trie == nil {
 		return nil, nil
 	}
 	if len(path) == 0 {
-		methods := trie.verbs[verb]
-		if target := methods[method]; target != nil {
-			return target, methods
-		}
-		if target := methods["*"]; target != nil {
-			return target, methods
-		}
-		return nil, nil
+		return trie.getTarget(verb, method)
 	}
-
 	current := path[0]
 	path = path[1:]
 
@@ -154,32 +166,51 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 	return trie.children["**"].findTarget(nil, verb, method)
 }
 
+// getTarget gets the target for the given verb and method from the
+// node trie. It is like findTarget, except that it does not use a
+// path to first descend into a sub-trie.
+func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) {
+	methods := trie.verbs[verb]
+	if target := methods[method]; target != nil {
+		return target, methods
+	}
+	// Check if a wildcard method was used
+	if target := methods["*"]; target != nil {
+		return target, methods
+	}
+	// TODO: If final segment is ** and nothing is provided that matches, the request path should
+	//       have trailing slash. For example, if the pattern is "foo/bar/**", an empty match
+	//       should look like "foo/bar/". However, *should* it support having no trailing slash?
+	//       For example, should pattern "foo/bar/**" allow "foo/bar"? If so, we'd need to do a
+	//       little more work here, to see if trie has a ** child that has a matching method.
+	return nil, nil
+}
+
 type routeMethods map[string]*routeTarget
 
 type routeTarget struct {
-	config           *methodConfig
-	requestBodyPath  []protoreflect.FieldDescriptor
-	responseBodyPath []protoreflect.FieldDescriptor
-	vars             []routeTargetVar
+	config                *methodConfig
+	method                string // HTTP method
+	path                  []string
+	verb                  string
+	requestBodyFieldPath  string
+	requestBodyFields     []protoreflect.FieldDescriptor
+	responseBodyFieldPath string
+	responseBodyFields    []protoreflect.FieldDescriptor
+	vars                  []routeTargetVar
 }
 
-type routeTargetVar struct {
-	pathVariable
-
-	fields []protoreflect.FieldDescriptor
-}
-
-type routeTargetVarMatch struct {
-	fields []protoreflect.FieldDescriptor
-	value  string
-}
-
-func makeTarget(config *methodConfig, requestBody, responseBody string, variables []pathVariable) (*routeTarget, error) {
-	requestBodyPath, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
+func makeTarget(
+	config *methodConfig,
+	method, requestBody, responseBody string,
+	segments pathSegments,
+	variables []pathVariable,
+) (*routeTarget, error) {
+	requestBodyFields, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
 	if err != nil {
 		return nil, err
 	}
-	responseBodyPath, err := resolvePathToDescriptors(config.descriptor.Output(), responseBody)
+	responseBodyFields, err := resolvePathToDescriptors(config.descriptor.Output(), responseBody)
 	if err != nil {
 		return nil, err
 	}
@@ -189,17 +220,57 @@ func makeTarget(config *methodConfig, requestBody, responseBody string, variable
 		if err != nil {
 			return nil, err
 		}
+		if last := fields[len(fields)-1]; last.IsList() {
+			return nil, fmt.Errorf(
+				"unexpected path variable %q: cannot be a repeated field",
+				variable.fieldPath,
+			)
+		}
 		routeTargetVars[i] = routeTargetVar{
 			pathVariable: variable,
 			fields:       fields,
 		}
 	}
 	return &routeTarget{
-		config:           config,
-		requestBodyPath:  requestBodyPath,
-		responseBodyPath: responseBodyPath,
-		vars:             routeTargetVars,
+		config:                config,
+		method:                method,
+		path:                  segments.path,
+		verb:                  segments.verb,
+		requestBodyFieldPath:  requestBody,
+		requestBodyFields:     requestBodyFields,
+		responseBodyFieldPath: responseBody,
+		responseBodyFields:    responseBodyFields,
+		vars:                  routeTargetVars,
 	}, nil
+}
+
+type routeTargetVar struct {
+	pathVariable
+
+	fields []protoreflect.FieldDescriptor
+}
+
+func (v routeTargetVar) size() int {
+	if v.end == -1 {
+		return -1
+	}
+	return v.end - v.start
+}
+func (v routeTargetVar) capture(segments []string) string {
+	start, end := v.start, v.end
+	if v.end == -1 {
+		if start >= len(segments) {
+			return ""
+		}
+		end = len(segments)
+	}
+	// TODO: values should be pathUnescape'd
+	return strings.Join(segments[start:end], "/")
+}
+
+type routeTargetVarMatch struct {
+	fields []protoreflect.FieldDescriptor
+	value  string
 }
 
 func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch {
@@ -209,18 +280,7 @@ func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch 
 	vars := make([]routeTargetVarMatch, len(target.vars))
 	for i, varDef := range target.vars {
 		vars[i].fields = varDef.fields
-		var pathElements []string
-		if varDef.end == -1 {
-			if varDef.start < len(path) {
-				pathElements = path[varDef.start:]
-			} else {
-				// leave value blank; it was double-asterisk that matched zero path elements
-				continue
-			}
-		} else {
-			pathElements = path[varDef.start:varDef.end]
-		}
-		vars[i].value = strings.Join(pathElements, "/")
+		vars[i].value = varDef.capture(path)
 	}
 	return vars
 }

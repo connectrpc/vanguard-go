@@ -6,9 +6,9 @@ managed:
     except:
       - buf.build/googleapis/googleapis
 plugins:
-  - name: go
+  - plugin: buf.build/protocolbuffers/go:v1.31.0
     out: internal/gen
     opt: paths=source_relative
-  - name: connect-go
+  - plugin: buf.build/connectrpc/go:v1.11.0
     out: internal/gen
     opt: paths=source_relative
