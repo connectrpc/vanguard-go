@@ -436,6 +436,7 @@ func outputFromUnary[Req, Resp any](
 		return headers, nil, nil, err
 	}
 	msg := any(resp.Msg)
+	//nolint:forcetypeassert
 	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
 }
 
@@ -460,6 +461,7 @@ func outputFromServerStream[Req, Resp any](
 	var msgs []proto.Message
 	for str.Receive() {
 		msg := any(str.Msg())
+		//nolint:forcetypeassert
 		msgs = append(msgs, msg.(proto.Message))
 	}
 	return str.ResponseHeader(), msgs, str.ResponseTrailer(), str.Err()
@@ -476,6 +478,7 @@ func outputFromClientStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
+		//nolint:forcetypeassert
 		if str.Send(any(msg).(*Req)) != nil {
 			// we don't need this error; we'll get the error below
 			// since str.CloseAndReceive returns the actual RPC errors
@@ -491,6 +494,7 @@ func outputFromClientStream[Req, Resp any](
 		return headers, nil, nil, err
 	}
 	msg := any(resp.Msg)
+	//nolint:forcetypeassert
 	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
 }
 
@@ -519,6 +523,7 @@ func outputFromBidiStream[Req, Resp any](
 				return
 			}
 			msg := any(resp)
+			//nolint:forcetypeassert
 			msgs = append(msgs, msg.(proto.Message))
 		}
 	}()
@@ -527,6 +532,7 @@ func outputFromBidiStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
+		//nolint:forcetypeassert
 		if str.Send(any(msg).(*Req)) != nil {
 			// we don't need this error; we'll get the error from above
 			// goroutine since str.Receive returns the actual RPC errors

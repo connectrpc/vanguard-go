@@ -6,12 +6,12 @@
 package vanguard
 
 import (
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"io"
 	"net/http"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type restClientProtocol struct{}
@@ -30,10 +30,10 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 	case connect.StreamTypeUnary:
 		return true
 	case connect.StreamTypeClient:
-		return requestIsSpecialHttpBody(op)
+		return requestIsSpecialHTTPBody(op)
 	case connect.StreamTypeServer:
 		// TODO: support server streams even when body is not google.api.HttpBody
-		return responseIsSpecialHttpBody(op)
+		return responseIsSpecialHTTPBody(op)
 	default:
 		return false
 	}
@@ -55,7 +55,7 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	if contentType != "" &&
 		contentType != "application/json" &&
 		contentType != "application/json; charset=utf-8" &&
-		!requestIsSpecialHttpBody(op) {
+		!requestIsSpecialHTTPBody(op) {
 		// invalid content-type
 		reqMeta.codec = contentType + "?"
 	}
@@ -165,15 +165,15 @@ func (r restServerProtocol) String() string {
 	return protocolNameREST
 }
 
-func requestIsSpecialHttpBody(op *operation) bool {
-	return isSpecialHttpBody(op.method.Input(), op.restTarget.requestBodyFields)
+func requestIsSpecialHTTPBody(op *operation) bool {
+	return isSpecialHTTPBody(op.method.Input(), op.restTarget.requestBodyFields)
 }
 
-func responseIsSpecialHttpBody(op *operation) bool {
-	return isSpecialHttpBody(op.method.Output(), op.restTarget.responseBodyFields)
+func responseIsSpecialHTTPBody(op *operation) bool {
+	return isSpecialHTTPBody(op.method.Output(), op.restTarget.responseBodyFields)
 }
 
-func isSpecialHttpBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
+func isSpecialHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
 	if len(bodyPath) > 0 {
 		field := bodyPath[len(bodyPath)-1]
 		msg = field.Message()
