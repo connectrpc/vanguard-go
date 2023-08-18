@@ -23,7 +23,7 @@ import (
 // generated with a version of connect newer than the one compiled into your binary. You can fix the
 // problem by either regenerating this code with an older version of connect or updating the connect
 // version compiled into your binary.
-const _ = connect.IsAtLeastVersion0_1_0
+const _ = connect.IsAtLeastVersion1_7_0
 
 const (
 	// LibraryServiceName is the fully-qualified name of the LibraryService service.
@@ -91,7 +91,8 @@ func NewLibraryServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 		getBook: connect.NewClient[v1.GetBookRequest, v1.Book](
 			httpClient,
 			baseURL+LibraryServiceGetBookProcedure,
-			opts...,
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
 		),
 		createBook: connect.NewClient[v1.CreateBookRequest, v1.Book](
 			httpClient,
@@ -121,7 +122,8 @@ func NewLibraryServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 		searchBooks: connect.NewClient[v1.SearchBooksRequest, v1.SearchBooksResponse](
 			httpClient,
 			baseURL+LibraryServiceSearchBooksProcedure,
-			opts...,
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
 		),
 	}
 }
@@ -199,7 +201,8 @@ func NewLibraryServiceHandler(svc LibraryServiceHandler, opts ...connect.Handler
 	libraryServiceGetBookHandler := connect.NewUnaryHandler(
 		LibraryServiceGetBookProcedure,
 		svc.GetBook,
-		opts...,
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceCreateBookHandler := connect.NewUnaryHandler(
 		LibraryServiceCreateBookProcedure,
@@ -229,7 +232,8 @@ func NewLibraryServiceHandler(svc LibraryServiceHandler, opts ...connect.Handler
 	libraryServiceSearchBooksHandler := connect.NewUnaryHandler(
 		LibraryServiceSearchBooksProcedure,
 		svc.SearchBooks,
-		opts...,
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
 	)
 	return "/buf.vanguard.test.v1.LibraryService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

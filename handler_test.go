@@ -11,19 +11,19 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
-	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 
-	"buf.build/gen/go/connectrpc/eliza/connectrpc/go/connectrpc/eliza/v1/elizav1connect"
-	"buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
 	"connectrpc.com/connect"
+	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
+	"github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1/testv1connect"
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -45,8 +45,8 @@ func TestHandler_Errors(t *testing.T) {
 	connectMux := &Mux{Protocols: []Protocol{ProtocolConnect}}
 	allMux := &Mux{} // supports all three
 	for _, mux := range []*Mux{grpcMux, connectMux, allMux} {
-		err := mux.RegisterServiceByName(handler, elizav1connect.ElizaServiceName)
-		require.NoError(t, err)
+		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.LibraryServiceName))
+		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.ContentServiceName))
 	}
 
 	testCases := []struct {
@@ -137,7 +137,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect get, method not idempotent",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say?connect=v1",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/CreateBook?connect=v1",
 			requestMethod: "GET",
 			expectedCode:  http.StatusMethodNotAllowed,
 			expectedResponseHeaders: map[string]string{
@@ -145,8 +145,8 @@ func TestHandler_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:          "connect post, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			name:          "connect unary, bad HTTP method",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "DELETE",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -159,7 +159,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "GET",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
@@ -171,7 +171,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "PUT",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+proto"},
@@ -183,7 +183,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, bad HTTP method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "PATCH",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+proto"},
@@ -194,8 +194,17 @@ func TestHandler_Errors(t *testing.T) {
 			},
 		},
 		{
+			name:          "rest, unknown codec",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/foo"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "connect stream, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+text"},
@@ -204,7 +213,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -213,8 +222,14 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
+			name:          "connect get, unknown codec",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=text",
+			requestMethod: "GET",
+			expectedCode:  http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "grpc, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+text"},
@@ -223,7 +238,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, unknown codec",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+text"},
@@ -232,7 +247,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":             {"application/connect+proto"},
@@ -243,9 +258,19 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusTeapot,
 		},
 		{
+			name:          "rest, unknown compression",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type":     {"application/json"},
+				"Content-Encoding": {"blah"},
+			},
+			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "connect stream, unknown compression",
 			mux:           grpcMux, // must target different protocol for the error
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":             {"application/connect+proto"},
@@ -255,7 +280,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -267,7 +292,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "connect post, unknown compression",
 			mux:           grpcMux,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -277,8 +302,21 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
+			name:          "connect get, unknown compression, pass-through",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
+			requestMethod: "GET",
+			expectedCode:  http.StatusTeapot,
+		},
+		{
+			name:          "connect get, unknown compression",
+			mux:           grpcMux,
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
+			requestMethod: "GET",
+			expectedCode:  http.StatusUnsupportedMediaType,
+		},
+		{
 			name:          "grpc, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc+proto"},
@@ -289,7 +327,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "grpc, unknown compression",
 			mux:           connectMux,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc+proto"},
@@ -299,7 +337,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, unknown compression, pass-through",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc-web+proto"},
@@ -310,7 +348,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "grpc-web, unknown compression",
 			mux:           connectMux,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc-web+proto"},
@@ -321,7 +359,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "connect stream, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
@@ -329,9 +367,9 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusHTTPVersionNotSupported,
 		},
 		{
-			name:          "grpc stream, bidi and http 1.1",
+			name:          "grpc, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+proto"},
@@ -339,9 +377,9 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusHTTPVersionNotSupported,
 		},
 		{
-			name:          "grpc-web stream, bidi and http 1.1",
+			name:          "grpc-web, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+proto"},
@@ -350,7 +388,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, stream method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Converse",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -360,20 +398,13 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unary method",
-			requestURL:    "/connectrpc.eliza.v1.ElizaService/Say",
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
 			},
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
-		// TODO: add more tests around connect GET when we have a test
-		//       proto to use other than eliza and a method that can
-		//       actually support GET.
-		// TODO: add more tests around REST when we have a test proto
-		//       to use other than eliza and methods with http
-		//       annotations.
-
 	}
 
 	for _, testCase := range testCases {
@@ -416,51 +447,46 @@ func TestHandler_PassThrough(t *testing.T) {
 	// These cases don't do any transformation and just pass through to the
 	// underlying handler.
 
-	// TODO: Use library service that combinatorial tests will use? Maybe use upcoming
-	//       test interceptor to set up the scenarios instead of handler impl?
-	_, impl := elizav1connect.NewElizaServiceHandler(&elizaHandler{})
+	var interceptor testInterceptor
+	checkPassThrough := func(handler http.Handler) http.Handler {
+		return http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
+			// Get a *testing.T for this request so we can attribute error to correct case.
+			testName := request.Header.Get("Test")
+			if testName == "" {
+				http.Error(respWriter, "request did not include test case ID", http.StatusBadRequest)
+				return
+			}
+			t, ok := interceptor.get(testName)
+			if !ok {
+				http.Error(respWriter, fmt.Sprintf("test case name %q not found", testName), http.StatusBadRequest)
+				return
+			}
 
-	const testCaseIDKey = "Test-Case-Id"
-	var testCaseID atomic.Int32
-	var testCaseMap sync.Map
-	checkPassThrough := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
-		// Get a *testing.T for this request so we can attribute error to correct case.
-		testID := request.Header.Get(testCaseIDKey)
-		if testID == "" {
-			http.Error(respWriter, "request did not include test case ID", http.StatusBadRequest)
-			return
-		}
-		val, ok := testCaseMap.Load(testID)
-		if !ok {
-			http.Error(respWriter, fmt.Sprintf("test case ID %q not found", testID), http.StatusBadRequest)
-			return
-		}
-		t, ok := val.(*testing.T)
-		if !ok {
-			http.Error(respWriter, fmt.Sprintf("test case ID %q has unexpected type: %T", testID, val), http.StatusBadRequest)
-			return
-		}
+			_, isWrapped := respWriter.(*responseWriter)
+			require.False(t, isWrapped)
+			_, isWrapped = request.Body.(*envelopingReader)
+			require.False(t, isWrapped)
+			_, isWrapped = request.Body.(*transformingReader)
+			require.False(t, isWrapped)
 
-		_, isWrapped := respWriter.(*responseWriter)
-		require.False(t, isWrapped)
-		_, isWrapped = request.Body.(*envelopingReader)
-		require.False(t, isWrapped)
-		_, isWrapped = request.Body.(*transformingReader)
-		require.False(t, isWrapped)
-
-		// carry on...
-		impl.ServeHTTP(respWriter, request)
-	})
-
+			// carry on...
+			handler.ServeHTTP(respWriter, request)
+		})
+	}
+	_, contentHandler := testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	)
 	var mux Mux
-	err := mux.RegisterServiceByName(checkPassThrough, elizav1connect.ElizaServiceName)
-	require.NoError(t, err)
+	require.NoError(t, mux.RegisterServiceByName(checkPassThrough(contentHandler), testv1connect.ContentServiceName))
 
 	// Use HTTP/2 so we can test a bidi stream.
 	server := httptest.NewUnstartedServer(mux.AsHandler())
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	t.Cleanup(server.Close)
+
+	ctx := context.Background()
 
 	type connectClientCase struct {
 		name string
@@ -478,10 +504,12 @@ func TestHandler_PassThrough(t *testing.T) {
 	encodingOptions := []connectClientCase{
 		{
 			name: "proto",
-			opts: []connect.ClientOption{connect.WithCodec(protoConnectCodec{})},
 		},
 		{
 			name: "json",
+			// NB: connect has a JSON codec implementation, but it is not exposed or
+			//     selectable from the client; it is only available for handlers when
+			//     handling requests that use this format ¯\_(ツ)_/¯
 			opts: []connect.ClientOption{connect.WithCodec(jsonConnectCodec{})},
 		},
 	}
@@ -498,6 +526,229 @@ func TestHandler_PassThrough(t *testing.T) {
 			opts: []connect.ClientOption{connect.WithGRPCWeb()},
 		},
 	}
+	testRequests := []struct {
+		name   string
+		invoke func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error)
+		stream testStream
+	}{
+		{
+			name: "unary success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceIndexProcedure,
+						msg:    &testv1.IndexRequest{Page: "abcdef"},
+					}},
+					{out: &testMsgOut{
+						msg: &httpbody.HttpBody{
+							ContentType: "text/html",
+							Data:        ([]byte)(`<html><title>Foo</title><body><h1>Foo</h1></html>`),
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "unary fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceIndexProcedure,
+						msg:    &testv1.IndexRequest{Page: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "client stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &emptypb.Empty{},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "client stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "server stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "server stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "bidi stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceSubscribeProcedure,
+						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{
+							FilenameChanged: "xyz1.foo",
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{
+							FilenameChanged: "xyz2.foo",
+						},
+					}},
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceSubscribeProcedure,
+						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{
+							FilenameChanged: "test.test",
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "bidi stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.ContentServiceSubscribeProcedure,
+						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{
+							FilenameChanged: "xyz1.foo",
+						},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+	}
 
 	for _, protocolCase := range protocolOptions {
 		protocolCase := protocolCase
@@ -511,66 +762,57 @@ func TestHandler_PassThrough(t *testing.T) {
 						compressionCase := compressionCase
 						t.Run(compressionCase.name, func(t *testing.T) {
 							t.Parallel()
+							for _, testReq := range testRequests {
+								testReq := testReq
+								t.Run(testReq.name, func(t *testing.T) {
+									t.Parallel()
 
-							testID := strconv.Itoa(int(testCaseID.Add(1)))
-							testCaseMap.Store(testID, t)
+									clientOptions := make([]connect.ClientOption, 0, 4)
+									clientOptions = append(clientOptions, protocolCase.opts...)
+									clientOptions = append(clientOptions, encodingCase.opts...)
+									clientOptions = append(clientOptions, compressionCase.opts...)
+									client := testv1connect.NewContentServiceClient(server.Client(), server.URL, clientOptions...)
 
-							clientOptions := make([]connect.ClientOption, 0, 4)
-							clientOptions = append(clientOptions, protocolCase.opts...)
-							clientOptions = append(clientOptions, encodingCase.opts...)
-							clientOptions = append(clientOptions, compressionCase.opts...)
-							clientOptions = append(clientOptions, connect.WithInterceptors(
-								addHeaderClientInterceptor{name: testCaseIDKey, value: testID},
-							))
-							client := elizav1connect.NewElizaServiceClient(server.Client(), server.URL, clientOptions...)
-
-							// Unary cases
-							resp, err := client.Say(context.Background(), connect.NewRequest(&elizav1.SayRequest{
-								Sentence: "I feel happy today",
-							}))
-							require.NoError(t, err)
-							require.NotEmpty(t, resp.Msg.Sentence)
-
-							_, err = client.Say(context.Background(), connect.NewRequest(&elizav1.SayRequest{
-								Sentence: "error:the vibe is in shambles:resource_exhausted",
-							}))
-							require.ErrorContains(t, err, "the vibe is in shambles")
-							require.Equal(t, connect.CodeResourceExhausted, connect.CodeOf(err))
-
-							// Stream
-							str, err := client.Introduce(context.Background(), connect.NewRequest(&elizav1.IntroduceRequest{
-								Name: "Bob Loblaw",
-							}))
-							require.NoError(t, err)
-							var count int
-							for str.Receive() {
-								count++
-								require.NotEmpty(t, str.Msg().Sentence)
-							}
-							require.NoError(t, str.Err())
-							require.Equal(t, 3, count)
-
-							// Bidi stream
-							bidi := client.Converse(context.Background())
-							defer func() {
-								err := bidi.CloseResponse()
-								require.NoError(t, err)
-							}()
-							bidi.RequestHeader().Set(testCaseIDKey, testID)
-							for i := 0; i < 10; i++ {
-								sentence := strings.Repeat("foo,", i)
-								err := bidi.Send(&elizav1.ConverseRequest{
-									Sentence: sentence,
+									interceptor.set(t, testReq.stream)
+									reqHeaders := http.Header{}
+									reqHeaders.Set("Test", t.Name()) // test header
+									for k, v := range testReq.stream.reqHeader {
+										reqHeaders[k] = v
+									}
+									var reqMsgs []proto.Message
+									for _, streamMsg := range testReq.stream.msgs {
+										if streamMsg.in != nil {
+											reqMsgs = append(reqMsgs, streamMsg.in.msg)
+										}
+									}
+									headers, responses, trailers, err := testReq.invoke(client, reqHeaders, reqMsgs)
+									var expectedErr *connect.Error
+									for _, streamMsg := range testReq.stream.msgs {
+										if streamMsg.out != nil && streamMsg.out.err != nil {
+											expectedErr = streamMsg.out.err
+											break
+										}
+									}
+									if expectedErr == nil {
+										assert.NoError(t, err)
+									} else {
+										assert.Equal(t, expectedErr.Code(), connect.CodeOf(err))
+									}
+									assert.Subset(t, headers, testReq.stream.rspHeader)
+									assert.Subset(t, trailers, testReq.stream.rspTrailer)
+									var expectedResponses []proto.Message
+									for _, streamMsg := range testReq.stream.msgs {
+										if streamMsg.out != nil && streamMsg.out.msg != nil {
+											expectedResponses = append(expectedResponses, streamMsg.out.msg)
+										}
+									}
+									require.Len(t, responses, len(expectedResponses))
+									for i, msg := range responses {
+										want := expectedResponses[i]
+										assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
+									}
 								})
-								require.NoError(t, err)
-								resp, err := bidi.Receive()
-								require.NoError(t, err)
-								require.Contains(t, resp.Sentence, sentence)
 							}
-							err = bidi.CloseRequest()
-							require.NoError(t, err)
-							_, err = bidi.Receive()
-							require.ErrorIs(t, err, io.EOF)
 						})
 					}
 				})
@@ -1015,98 +1257,6 @@ func rot13(data []byte) {
 	}
 }
 
-type elizaHandler struct {
-	elizav1connect.UnimplementedElizaServiceHandler
-}
-
-func (elizaHandler) Say(_ context.Context, req *connect.Request[elizav1.SayRequest]) (*connect.Response[elizav1.SayResponse], error) {
-	if err := shouldFail(req.Msg.Sentence); err != nil {
-		return nil, err
-	}
-	return connect.NewResponse(&elizav1.SayResponse{
-		Sentence: "Oh really? Are you sure " + req.Msg.Sentence + "?",
-	}), nil
-}
-
-func (elizaHandler) Converse(_ context.Context, str *connect.BidiStream[elizav1.ConverseRequest, elizav1.ConverseResponse]) error {
-	for {
-		req, err := str.Receive()
-		if errors.Is(err, io.EOF) {
-			return nil
-		} else if err != nil {
-			return err
-		}
-		if err := shouldFail(req.Sentence); err != nil {
-			return err
-		}
-		err = str.Send(&elizav1.ConverseResponse{
-			Sentence: "Oh really? Are you sure " + req.Sentence + "?",
-		})
-		if err != nil {
-			return err
-		}
-	}
-}
-
-func (elizaHandler) Introduce(_ context.Context, req *connect.Request[elizav1.IntroduceRequest], str *connect.ServerStream[elizav1.IntroduceResponse]) error {
-	err := str.Send(&elizav1.IntroduceResponse{
-		Sentence: "Hi, " + req.Msg.Name + ".",
-	})
-	if err != nil {
-		return err
-	}
-	err = str.Send(&elizav1.IntroduceResponse{
-		Sentence: "I'm Eliza.",
-	})
-	if err != nil {
-		return err
-	}
-	return str.Send(&elizav1.IntroduceResponse{
-		Sentence: "Have a nice day!",
-	})
-}
-
-func shouldFail(str string) error {
-	if !strings.HasPrefix(str, "error:") {
-		return nil
-	}
-	parts := strings.SplitN(str, ":", 3)
-	msg := parts[1]
-	code := connect.CodeUnknown
-	if len(parts) == 3 {
-		codeStr := parts[2]
-		for c := connect.CodeCanceled; c <= connect.CodeUnauthenticated; c++ {
-			if c.String() == codeStr {
-				code = c
-				break
-			}
-		}
-	}
-	return connect.NewError(code, errors.New(msg))
-}
-
-type protoConnectCodec struct{}
-
-func (p protoConnectCodec) Name() string {
-	return CodecProto
-}
-
-func (p protoConnectCodec) Marshal(a any) ([]byte, error) {
-	msg, ok := a.(proto.Message)
-	if !ok {
-		return nil, errors.New("not a message")
-	}
-	return proto.Marshal(msg)
-}
-
-func (p protoConnectCodec) Unmarshal(bytes []byte, a any) error {
-	msg, ok := a.(proto.Message)
-	if !ok {
-		return errors.New("not a message")
-	}
-	return proto.Unmarshal(bytes, msg)
-}
-
 type jsonConnectCodec struct{}
 
 func (j jsonConnectCodec) Name() string {
@@ -1127,27 +1277,4 @@ func (j jsonConnectCodec) Unmarshal(bytes []byte, a any) error {
 		return errors.New("not a message")
 	}
 	return protojson.Unmarshal(bytes, msg)
-}
-
-type addHeaderClientInterceptor struct {
-	name, value string
-}
-
-func (i addHeaderClientInterceptor) WrapUnary(f connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		req.Header().Set(i.name, i.value)
-		return f(ctx, req)
-	}
-}
-
-func (i addHeaderClientInterceptor) WrapStreamingClient(h connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return func(ctx context.Context, spec connect.Spec) connect.StreamingClientConn {
-		str := h(ctx, spec)
-		str.RequestHeader().Set(i.name, i.value)
-		return str
-	}
-}
-
-func (i addHeaderClientInterceptor) WrapStreamingHandler(h connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return h
 }

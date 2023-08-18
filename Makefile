@@ -35,7 +35,8 @@ build: generate ## Build all packages
 	$(GO) build ./...
 
 .PHONY: generate
-generate: $(BIN)/license-header ## Regenerate code and licenses
+generate: $(BIN)/buf $(BIN)/license-header ## Regenerate code and licenses
+	$(BIN)/buf generate
 	@# We want to operate on a list of modified and new files, excluding
 	@# deleted and ignored files. git-ls-files can't do this alone. comm -23 takes
 	@# two files and prints the union, dropping lines common to both (-3) and
@@ -73,11 +74,16 @@ checkgenerate:
 	@# Used in CI to verify that `make generate` doesn't produce a diff.
 	test -z "$$(git status --porcelain | tee /dev/stderr)"
 
+$(BIN)/buf: Makefile
+	@mkdir -p $(@D)
+	GOBIN=$(abspath $(@D)) $(GO) install \
+		  github.com/bufbuild/buf/cmd/buf@v1.26.0
+
 $(BIN)/license-header: Makefile
 	@mkdir -p $(@D)
 	GOBIN=$(abspath $(@D)) $(GO) install \
-		  github.com/bufbuild/buf/private/pkg/licenseheader/cmd/license-header@v1.12.0
+		  github.com/bufbuild/buf/private/pkg/licenseheader/cmd/license-header@v1.26.0
 
 $(BIN)/golangci-lint: Makefile
 	@mkdir -p $(@D)
-	GOBIN=$(abspath $(@D)) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.52.0
+	GOBIN=$(abspath $(@D)) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.53.0

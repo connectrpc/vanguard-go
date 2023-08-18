@@ -6,6 +6,7 @@ package vanguard
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -101,7 +102,7 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if !ok {
 			return nil, fmt.Errorf("invalid testCase header: %s", val)
 		}
-		assert.Subset(stream.T, stream.reqHeader, req.Header())
+		assert.Subset(stream.T, req.Header(), stream.reqHeader)
 		if len(stream.msgs) != 2 {
 			err := fmt.Errorf("expected 2 messages, got %d", len(stream.msgs))
 			return nil, err
@@ -127,7 +128,18 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 			return nil, fmt.Errorf("message didn't match: %s", diff)
 		}
 		if out.err != nil {
-			return nil, out.err
+			err := out.err
+			if len(stream.rspHeader) > 0 {
+				// make a copy of the error and add response headers to it
+				err = connect.NewError(out.err.Code(), out.err.Unwrap())
+				for _, detail := range out.err.Details() {
+					err.AddDetail(detail)
+				}
+				for key, values := range stream.rspHeader {
+					err.Meta()[key] = values
+				}
+			}
+			return nil, err
 		}
 
 		// Build response with headers.
@@ -158,10 +170,10 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 			return fmt.Errorf("invalid testCase header: %s", val)
 		}
 		stream.Log("WrapStreamingHandler", val)
-		assert.Equal(stream.T, stream.reqHeader, conn.RequestHeader())
+		assert.Subset(stream.T, conn.RequestHeader(), stream.reqHeader)
 
 		for key, vals := range stream.rspHeader {
-			conn.RequestHeader()[key] = vals
+			conn.ResponseHeader()[key] = vals
 		}
 		for _, msg := range stream.msgs {
 			switch msg := msg.get().(type) {
@@ -170,7 +182,7 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 				if err := conn.Receive(got); err != nil {
 					return err
 				}
-				diff := cmp.Diff(msg, msg.msg, protocmp.Transform())
+				diff := cmp.Diff(got, msg.msg, protocmp.Transform())
 				if diff != "" {
 					return fmt.Errorf("message didn't match: %s", diff)
 				}
@@ -390,4 +402,143 @@ func appendClientCompressionOptions(t *testing.T, opts []connect.ClientOption, c
 		t.Fatalf("unknown compression: %s", compression)
 	}
 	return opts
+}
+
+func makeRequest[T any](headers http.Header, msg *T) *connect.Request[T] {
+	req := connect.NewRequest(msg)
+	for k, v := range headers {
+		req.Header()[k] = v
+	}
+	return req
+}
+
+type unaryMethod[Req, Resp any] func(context.Context, *connect.Request[Req]) (*connect.Response[Resp], error)
+type serverStreamMethod[Req, Resp any] func(context.Context, *connect.Request[Req]) (*connect.ServerStreamForClient[Resp], error)
+type clientStreamMethod[Req, Resp any] func(context.Context) *connect.ClientStreamForClient[Req, Resp]
+type bidiStreamMethod[Req, Resp any] func(context.Context) *connect.BidiStreamForClient[Req, Resp]
+
+func outputFromUnary[Req, Resp any](
+	ctx context.Context,
+	method unaryMethod[Req, Resp],
+	headers http.Header,
+	reqs []proto.Message,
+) (http.Header, []proto.Message, http.Header, error) {
+	if len(reqs) != 1 {
+		return nil, nil, nil, fmt.Errorf("unary method takes exactly 1 request but got %d", len(reqs))
+	}
+	req := any(reqs[0])
+	resp, err := method(ctx, makeRequest(headers, req.(*Req)))
+	if err != nil {
+		var headers http.Header
+		if connErr := new(connect.Error); errors.As(err, &connErr) {
+			headers = connErr.Meta()
+		}
+		return headers, nil, nil, err
+	}
+	msg := any(resp.Msg)
+	//nolint:forcetypeassert
+	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
+}
+
+func outputFromServerStream[Req, Resp any](
+	ctx context.Context,
+	method serverStreamMethod[Req, Resp],
+	headers http.Header,
+	reqs []proto.Message,
+) (http.Header, []proto.Message, http.Header, error) {
+	if len(reqs) != 1 {
+		return nil, nil, nil, fmt.Errorf("unary method takes exactly 1 request but got %d", len(reqs))
+	}
+	req := any(reqs[0])
+	str, err := method(ctx, makeRequest(headers, req.(*Req)))
+	if err != nil {
+		var headers http.Header
+		if connErr := new(connect.Error); errors.As(err, &connErr) {
+			headers = connErr.Meta()
+		}
+		return headers, nil, nil, err
+	}
+	var msgs []proto.Message
+	for str.Receive() {
+		msg := any(str.Msg())
+		//nolint:forcetypeassert
+		msgs = append(msgs, msg.(proto.Message))
+	}
+	return str.ResponseHeader(), msgs, str.ResponseTrailer(), str.Err()
+}
+
+func outputFromClientStream[Req, Resp any](
+	ctx context.Context,
+	method clientStreamMethod[Req, Resp],
+	headers http.Header,
+	reqs []proto.Message,
+) (http.Header, []proto.Message, http.Header, error) {
+	str := method(ctx)
+	for k, v := range headers {
+		str.RequestHeader()[k] = v
+	}
+	for _, msg := range reqs {
+		//nolint:forcetypeassert
+		if str.Send(any(msg).(*Req)) != nil {
+			// we don't need this error; we'll get the error below
+			// since str.CloseAndReceive returns the actual RPC errors
+			break
+		}
+	}
+	resp, err := str.CloseAndReceive()
+	if err != nil {
+		var headers http.Header
+		if connErr := new(connect.Error); errors.As(err, &connErr) {
+			headers = connErr.Meta()
+		}
+		return headers, nil, nil, err
+	}
+	msg := any(resp.Msg)
+	//nolint:forcetypeassert
+	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
+}
+
+func outputFromBidiStream[Req, Resp any](
+	ctx context.Context,
+	method bidiStreamMethod[Req, Resp],
+	headers http.Header,
+	reqs []proto.Message,
+) (http.Header, []proto.Message, http.Header, error) {
+	str := method(ctx)
+	defer func() {
+		_ = str.CloseResponse()
+	}()
+	var msgs []proto.Message
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			var resp *Resp
+			resp, err = str.Receive()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					err = nil
+				}
+				return
+			}
+			msg := any(resp)
+			//nolint:forcetypeassert
+			msgs = append(msgs, msg.(proto.Message))
+		}
+	}()
+
+	for k, v := range headers {
+		str.RequestHeader()[k] = v
+	}
+	for _, msg := range reqs {
+		//nolint:forcetypeassert
+		if str.Send(any(msg).(*Req)) != nil {
+			// we don't need this error; we'll get the error from above
+			// goroutine since str.Receive returns the actual RPC errors
+			break
+		}
+	}
+	<-done
+	return str.ResponseHeader(), msgs, str.ResponseTrailer(), err
 }

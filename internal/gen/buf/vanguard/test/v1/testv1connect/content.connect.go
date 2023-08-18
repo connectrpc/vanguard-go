@@ -45,6 +45,9 @@ const (
 	ContentServiceUploadProcedure = "/buf.vanguard.test.v1.ContentService/Upload"
 	// ContentServiceDownloadProcedure is the fully-qualified name of the ContentService's Download RPC.
 	ContentServiceDownloadProcedure = "/buf.vanguard.test.v1.ContentService/Download"
+	// ContentServiceSubscribeProcedure is the fully-qualified name of the ContentService's Subscribe
+	// RPC.
+	ContentServiceSubscribeProcedure = "/buf.vanguard.test.v1.ContentService/Subscribe"
 )
 
 // ContentServiceClient is a client for the buf.vanguard.test.v1.ContentService service.
@@ -55,6 +58,8 @@ type ContentServiceClient interface {
 	Upload(context.Context) *connect.ClientStreamForClient[v1.UploadRequest, emptypb.Empty]
 	// Download a file from the given path.
 	Download(context.Context, *connect.Request[v1.DownloadRequest]) (*connect.ServerStreamForClient[v1.DownloadResponse], error)
+	// Subscribe to updates for changes to content.
+	Subscribe(context.Context) *connect.BidiStreamForClient[v1.SubscribeRequest, v1.SubscribeResponse]
 }
 
 // NewContentServiceClient constructs a client for the buf.vanguard.test.v1.ContentService service.
@@ -82,14 +87,20 @@ func NewContentServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			baseURL+ContentServiceDownloadProcedure,
 			opts...,
 		),
+		subscribe: connect.NewClient[v1.SubscribeRequest, v1.SubscribeResponse](
+			httpClient,
+			baseURL+ContentServiceSubscribeProcedure,
+			opts...,
+		),
 	}
 }
 
 // contentServiceClient implements ContentServiceClient.
 type contentServiceClient struct {
-	index    *connect.Client[v1.IndexRequest, httpbody.HttpBody]
-	upload   *connect.Client[v1.UploadRequest, emptypb.Empty]
-	download *connect.Client[v1.DownloadRequest, v1.DownloadResponse]
+	index     *connect.Client[v1.IndexRequest, httpbody.HttpBody]
+	upload    *connect.Client[v1.UploadRequest, emptypb.Empty]
+	download  *connect.Client[v1.DownloadRequest, v1.DownloadResponse]
+	subscribe *connect.Client[v1.SubscribeRequest, v1.SubscribeResponse]
 }
 
 // Index calls buf.vanguard.test.v1.ContentService.Index.
@@ -107,6 +118,11 @@ func (c *contentServiceClient) Download(ctx context.Context, req *connect.Reques
 	return c.download.CallServerStream(ctx, req)
 }
 
+// Subscribe calls buf.vanguard.test.v1.ContentService.Subscribe.
+func (c *contentServiceClient) Subscribe(ctx context.Context) *connect.BidiStreamForClient[v1.SubscribeRequest, v1.SubscribeResponse] {
+	return c.subscribe.CallBidiStream(ctx)
+}
+
 // ContentServiceHandler is an implementation of the buf.vanguard.test.v1.ContentService service.
 type ContentServiceHandler interface {
 	// Index returns a html index page at the given path.
@@ -115,6 +131,8 @@ type ContentServiceHandler interface {
 	Upload(context.Context, *connect.ClientStream[v1.UploadRequest]) (*connect.Response[emptypb.Empty], error)
 	// Download a file from the given path.
 	Download(context.Context, *connect.Request[v1.DownloadRequest], *connect.ServerStream[v1.DownloadResponse]) error
+	// Subscribe to updates for changes to content.
+	Subscribe(context.Context, *connect.BidiStream[v1.SubscribeRequest, v1.SubscribeResponse]) error
 }
 
 // NewContentServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -138,6 +156,11 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 		svc.Download,
 		opts...,
 	)
+	contentServiceSubscribeHandler := connect.NewBidiStreamHandler(
+		ContentServiceSubscribeProcedure,
+		svc.Subscribe,
+		opts...,
+	)
 	return "/buf.vanguard.test.v1.ContentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ContentServiceIndexProcedure:
@@ -146,6 +169,8 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 			contentServiceUploadHandler.ServeHTTP(w, r)
 		case ContentServiceDownloadProcedure:
 			contentServiceDownloadHandler.ServeHTTP(w, r)
+		case ContentServiceSubscribeProcedure:
+			contentServiceSubscribeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -165,4 +190,8 @@ func (UnimplementedContentServiceHandler) Upload(context.Context, *connect.Clien
 
 func (UnimplementedContentServiceHandler) Download(context.Context, *connect.Request[v1.DownloadRequest], *connect.ServerStream[v1.DownloadResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.Download is not implemented"))
+}
+
+func (UnimplementedContentServiceHandler) Subscribe(context.Context, *connect.BidiStream[v1.SubscribeRequest, v1.SubscribeResponse]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.ContentService.Subscribe is not implemented"))
 }

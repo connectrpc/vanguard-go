@@ -36,7 +36,7 @@ func (c connectUnaryGetClientProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectUnaryGetClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
+func (c connectUnaryGetClientProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
 	return streamType == connect.StreamTypeUnary
 }
 
@@ -107,7 +107,7 @@ func (c connectUnaryPostClientProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectUnaryPostClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
+func (c connectUnaryPostClientProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
 	return streamType == connect.StreamTypeUnary
 }
 
@@ -219,7 +219,7 @@ func (c connectStreamClientProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectStreamClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
+func (c connectStreamClientProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
 	return streamType != connect.StreamTypeUnary
 }
 

@@ -17,6 +17,7 @@ service LibraryService {
     option (google.api.http) = {
       get : "/v1/{name=shelves/*/books/*}"
     };
+    option idempotency_level = NO_SIDE_EFFECTS;
   };
   // Creates a book, and returns the new Book.
   rpc CreateBook(CreateBookRequest) returns (Book) {
@@ -68,6 +69,7 @@ service LibraryService {
     option (google.api.http) = {
       get : "/v2/{parent=shelves/*}/books:search"
     };
+    option idempotency_level = NO_SIDE_EFFECTS;
   }
 }
 

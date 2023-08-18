@@ -33,6 +33,8 @@ service ContentService {
       response_body : "file"
     };
   }
+  // Subscribe to updates for changes to content.
+  rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeResponse);
 }
 
 message IndexRequest {
@@ -55,4 +57,14 @@ message DownloadRequest {
 message DownloadResponse {
   // The file contents.
   google.api.HttpBody file = 1;
+}
+
+message SubscribeRequest {
+  repeated string filename_patterns = 1;
+}
+
+message SubscribeResponse {
+  string filename_changed = 1;
+  google.protobuf.Timestamp update_time = 2;
+  bool deleted = 3;
 }

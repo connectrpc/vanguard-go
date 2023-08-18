@@ -102,7 +102,7 @@ func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
 // and to send valid responses to the client.
 type clientProtocolHandler interface {
 	protocol() Protocol
-	acceptsStreamType(connect.StreamType) bool
+	acceptsStreamType(*operation, connect.StreamType) bool
 
 	// Extracts relevant request metadata from the given headers to
 	// determine the codec (aka sub-format), compression (aka encoding),
