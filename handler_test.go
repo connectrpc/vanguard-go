@@ -204,7 +204,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown codec",
-			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+text"},
@@ -247,7 +247,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown compression, pass-through",
-			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":             {"application/connect+proto"},
@@ -270,7 +270,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "connect stream, unknown compression",
 			mux:           grpcMux, // must target different protocol for the error
-			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":             {"application/connect+proto"},
@@ -388,7 +388,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, stream method",
-			requestURL:    "/buf.vanguard.test.v1.ContentService/DownloadChunks",
+			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -576,19 +576,19 @@ func TestHandler_PassThrough(t *testing.T) {
 		{
 			name: "client stream success",
 			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
-				return outputFromClientStream(ctx, client.UploadChunks, headers, msgs)
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
 			},
 			stream: testStream{
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadChunksProcedure,
-						msg:    &testv1.UploadChunkRequest{Filename: "xyz"},
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadChunksProcedure,
-						msg:    &testv1.UploadChunkRequest{Filename: "xyz"},
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &emptypb.Empty{},
@@ -600,19 +600,19 @@ func TestHandler_PassThrough(t *testing.T) {
 		{
 			name: "client stream fail",
 			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
-				return outputFromClientStream(ctx, client.UploadChunks, headers, msgs)
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
 			},
 			stream: testStream{
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadChunksProcedure,
-						msg:    &testv1.UploadChunkRequest{Filename: "xyz"},
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadChunksProcedure,
-						msg:    &testv1.UploadChunkRequest{Filename: "xyz"},
+						method: testv1connect.ContentServiceUploadProcedure,
+						msg:    &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
@@ -623,32 +623,38 @@ func TestHandler_PassThrough(t *testing.T) {
 		{
 			name: "server stream success",
 			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
-				return outputFromServerStream(ctx, client.DownloadChunks, headers, msgs)
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
 			},
 			stream: testStream{
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadChunksProcedure,
-						msg:    &testv1.DownloadChunkRequest{Filename: "xyz"},
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msg:    &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.DownloadChunkResponse{
-							ContentType: "application/octet-stream",
-							ChunkData:   ([]byte)("abcdef"),
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
 						},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.DownloadChunkResponse{
-							ContentType: "application/octet-stream",
-							ChunkData:   ([]byte)("abcdef"),
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
 						},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.DownloadChunkResponse{
-							ContentType: "application/octet-stream",
-							ChunkData:   ([]byte)("abcdef"),
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
 						},
 					}},
 				},
@@ -658,20 +664,22 @@ func TestHandler_PassThrough(t *testing.T) {
 		{
 			name: "server stream fail",
 			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
-				return outputFromServerStream(ctx, client.DownloadChunks, headers, msgs)
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
 			},
 			stream: testStream{
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadChunksProcedure,
-						msg:    &testv1.DownloadChunkRequest{Filename: "xyz"},
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msg:    &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.DownloadChunkResponse{
-							ContentType: "application/octet-stream",
-							ChunkData:   ([]byte)("abcdef"),
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
 						},
 					}},
 					{out: &testMsgOut{

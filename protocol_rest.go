@@ -6,12 +6,12 @@
 package vanguard
 
 import (
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"io"
 	"net/http"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type restClientProtocol struct{}
@@ -25,9 +25,18 @@ func (r restClientProtocol) protocol() Protocol {
 	return ProtocolREST
 }
 
-func (r restClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
-	// TODO: support connect.StreamTypeServer, too
-	return streamType == connect.StreamTypeUnary
+func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.StreamType) bool {
+	switch streamType {
+	case connect.StreamTypeUnary:
+		return true
+	case connect.StreamTypeClient:
+		return requestIsSpecialHttpBody(op)
+	case connect.StreamTypeServer:
+		// TODO: support server streams even when body is not google.api.HttpBody
+		return responseIsSpecialHttpBody(op)
+	default:
+		return false
+	}
 }
 
 func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
@@ -43,18 +52,12 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 
 	reqMeta.codec = CodecJSON // if actually a custom content-type, handled by body preparer methods
 	contentType := headers.Get("Content-Type")
-	if contentType != "" && contentType != "application/json" && contentType != "application/json; charset=utf-8" {
-		// only allowed if body is google.api.HttpBody
-		msg := op.method.Input()
-		if len(op.restTarget.requestBodyFields) > 0 {
-			field := op.restTarget.requestBodyFields[len(op.restTarget.requestBodyFields)-1]
-			msg = field.Message()
-			if field.Kind() != protoreflect.MessageKind || field.Message().FullName() != "google.api.HttpBody" {
-			}
-		}
-		if msg == nil || msg.FullName() != "google.api.HttpBody" {
-			reqMeta.codec = contentType + "?"
-		}
+	if contentType != "" &&
+		contentType != "application/json" &&
+		contentType != "application/json; charset=utf-8" &&
+		!requestIsSpecialHttpBody(op) {
+		// invalid content-type
+		reqMeta.codec = contentType + "?"
 	}
 
 	return reqMeta, nil
@@ -160,4 +163,20 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 
 func (r restServerProtocol) String() string {
 	return protocolNameREST
+}
+
+func requestIsSpecialHttpBody(op *operation) bool {
+	return isSpecialHttpBody(op.method.Input(), op.restTarget.requestBodyFields)
+}
+
+func responseIsSpecialHttpBody(op *operation) bool {
+	return isSpecialHttpBody(op.method.Output(), op.restTarget.responseBodyFields)
+}
+
+func isSpecialHttpBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
+	if len(bodyPath) > 0 {
+		field := bodyPath[len(bodyPath)-1]
+		msg = field.Message()
+	}
+	return msg != nil && msg.FullName() == "google.api.HttpBody"
 }

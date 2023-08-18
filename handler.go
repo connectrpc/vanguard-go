@@ -76,7 +76,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		op.streamType = connect.StreamTypeUnary
 	}
-	if !op.client.protocol.acceptsStreamType(op.streamType) {
+	if !op.client.protocol.acceptsStreamType(&op, op.streamType) {
 		http.Error(
 			writer,
 			fmt.Sprintf("stream type %s not supported with %s protocol", op.streamType, op.client.protocol),

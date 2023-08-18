@@ -61,11 +61,11 @@ func (g grpcClientProtocol) protocol() Protocol {
 	return ProtocolGRPC
 }
 
-func (g grpcClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
+func (g grpcClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType) bool {
 	return true
 }
 
-func (g grpcClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
+func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
 	return extractGRPCRequestMeta("application/grpc", "application/grpc+", headers)
 }
 
@@ -151,11 +151,11 @@ func (g grpcWebClientProtocol) protocol() Protocol {
 	return ProtocolGRPCWeb
 }
 
-func (g grpcWebClientProtocol) acceptsStreamType(streamType connect.StreamType) bool {
+func (g grpcWebClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType) bool {
 	return true
 }
 
-func (g grpcWebClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
+func (g grpcWebClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
 	return extractGRPCRequestMeta("application/grpc-web", "application/grpc-web+", headers)
 }
 
