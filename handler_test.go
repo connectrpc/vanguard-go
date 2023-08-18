@@ -990,6 +990,19 @@ func TestMessageConvert(t *testing.T) {
 		msg:               &wrapperspb.StringValue{Value: "from msg"},
 		wantMarshalCalls:  1,
 		wantCompressCalls: 1,
+	}, {
+		name:     "RecompressAndRecode",
+		src:      encode(t, codecJSON, compGzip, &wrapperspb.StringValue{Value: "hello"}),
+		dst:      encode(t, codecProto, compGzip, &wrapperspb.StringValue{Value: "hello"}),
+		srcCodec: codecJSON, dstCodec: codecProto,
+		srcComp: compGzip, dstComp: compGzip,
+		mustDecode:          true,
+		msg:                 &wrapperspb.StringValue{},
+		wantMsg:             &wrapperspb.StringValue{Value: "hello"},
+		wantUnmarshalCalls:  1,
+		wantDecompressCalls: 1,
+		wantMarshalCalls:    1,
+		wantCompressCalls:   1,
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase
