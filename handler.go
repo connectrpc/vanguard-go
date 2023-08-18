@@ -863,7 +863,7 @@ func (ew *errorWriter) Close() error {
 	return nil
 }
 
-// message is a bytes buffer of compressed and encoded data.
+// message is a buffered message of compressed and encoded data.
 type message struct {
 	buf   *bytes.Buffer // nil if message is empty
 	comp  compressor    // nil if message isn't compressed
@@ -891,13 +891,16 @@ func (m *message) reset(buffers *bufferPool) *bytes.Buffer {
 	return m.buf
 }
 
-func getName(thing interface{ Name() string }) string {
-	if thing == nil {
-		return ""
-	}
-	return thing.Name()
+// encode the message into the buffer, compressing and encoding as needed.
+func (m *message) encode(buffers *bufferPool, comp compressor, codec Codec, msg proto.Message) error {
+	m.codec = nil
+	m.comp = nil
+	return m.convert(buffers, comp, codec, msg, false)
 }
 
+// convert the message in the buffer to the new compression and encoding.
+// If mustDecode is true the buffer will be unmarshalled into the message,
+// otherwise it will only be used if required to convert the encoding.
 func (m *message) convert(buffers *bufferPool, comp compressor, codec Codec, msg proto.Message, mustDecode bool) error {
 	if m.buf == nil {
 		m.buf = buffers.Get()
@@ -976,4 +979,11 @@ func intersect(setA, setB []string) []string {
 		}
 	}
 	return result
+}
+
+func getName(thing interface{ Name() string }) string {
+	if thing == nil {
+		return ""
+	}
+	return thing.Name()
 }
