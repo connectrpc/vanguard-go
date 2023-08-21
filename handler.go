@@ -520,10 +520,10 @@ func (op *operation) readAndDecodeRequestMessage(r io.Reader, msg *message) erro
 		if err := op.clientPreparer.prepareUnmarshalledRequest(op, buf.Bytes(), op.requestMessage); err != nil {
 			return err
 		}
-		msg.codec = nil // Force re-encoding
+		return msg.encode(op.buffers, op.server.reqCompression, op.server.codec, op.requestMessage)
 	}
 	// Convert the message to the server's encoding.
-	return msg.convert(op.buffers, op.server.reqCompression, op.server.codec, op.requestMessage, false)
+	return msg.convert(op.buffers, op.server.reqCompression, op.server.codec, op.requestMessage, true)
 }
 
 func (op *operation) serverBody(msg *message) io.ReadCloser {
@@ -577,8 +577,6 @@ type transformingReader struct {
 	op  *operation
 	msg *message
 	r   io.ReadCloser
-
-	buf *bytes.Buffer // buffer for writing transformed data
 }
 
 func (tr *transformingReader) Read(data []byte) (n int, err error) {
@@ -893,9 +891,19 @@ func (m *message) reset(buffers *bufferPool) *bytes.Buffer {
 
 // encode the message into the buffer, compressing and encoding as needed.
 func (m *message) encode(buffers *bufferPool, comp compressor, codec Codec, msg proto.Message) error {
-	m.codec = nil
-	m.comp = nil
+	m.codec = nil // Force re-encoding.
+	m.comp = nil  // Force re-compression, if needed.
 	return m.convert(buffers, comp, codec, msg, false)
+}
+
+// decode the message from the buffer, decompressing and unmarshalling as needed.
+func (m *message) decode(buffers *bufferPool, msg proto.Message) error {
+	m.comp = nil // Uncompress if needed.
+	if err := m.convert(buffers, nil, nil, msg, true); err != nil {
+		return err
+	}
+	m.codec = nil // Force the next convert to encode.
+	return nil
 }
 
 // convert the message in the buffer to the new compression and encoding.
