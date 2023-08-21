@@ -54,7 +54,7 @@ func (p *compressionPool) Name() string {
 	return p.name
 }
 
-func (p *compressionPool) compress(dest io.Writer, src *bytes.Buffer) error {
+func (p *compressionPool) compress(dest, src *bytes.Buffer) error {
 	if p == nil {
 		_, err := io.Copy(dest, src)
 		return err
@@ -70,7 +70,7 @@ func (p *compressionPool) compress(dest io.Writer, src *bytes.Buffer) error {
 	return comp.Close()
 }
 
-func (p *compressionPool) decompress(dest *bytes.Buffer, src io.Reader) error {
+func (p *compressionPool) decompress(dest, src *bytes.Buffer) error {
 	if p == nil {
 		_, err := io.Copy(dest, src)
 		return err

@@ -79,12 +79,12 @@ func (g grpcClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.W
 	panic("implement me")
 }
 
-func (g grpcClientProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+func (g grpcClientProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (g grpcClientProtocol) encodeEnvelope(e envelope) [5]byte {
+func (g grpcClientProtocol) encodeEnvelope(e envelope) envelopeBytes {
 	//TODO implement me
 	panic("implement me")
 }
@@ -119,12 +119,12 @@ func (g grpcServerProtocol) extractEndFromTrailers(o *operation, headers http.He
 	panic("implement me")
 }
 
-func (g grpcServerProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+func (g grpcServerProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (g grpcServerProtocol) encodeEnvelope(e envelope) [5]byte {
+func (g grpcServerProtocol) encodeEnvelope(e envelope) envelopeBytes {
 	//TODO implement me
 	panic("implement me")
 }
@@ -169,12 +169,12 @@ func (g grpcWebClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer i
 	panic("implement me")
 }
 
-func (g grpcWebClientProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+func (g grpcWebClientProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (g grpcWebClientProtocol) encodeEnvelope(e envelope) [5]byte {
+func (g grpcWebClientProtocol) encodeEnvelope(e envelope) envelopeBytes {
 	//TODO implement me
 	panic("implement me")
 }
@@ -211,12 +211,12 @@ func (g grpcWebServerProtocol) extractEndFromTrailers(o *operation, headers http
 	panic("implement me")
 }
 
-func (g grpcWebServerProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+func (g grpcWebServerProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (g grpcWebServerProtocol) encodeEnvelope(e envelope) [5]byte {
+func (g grpcWebServerProtocol) encodeEnvelope(e envelope) envelopeBytes {
 	//TODO implement me
 	panic("implement me")
 }
