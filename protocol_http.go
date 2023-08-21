@@ -50,12 +50,12 @@ func httpWriteError(rsp http.ResponseWriter, err error) {
 	}
 	cerr := asError(err)
 	statusCode := httpStatusCodeFromRPC(cerr.Code())
-	status := grpcStatusFromError(err)
+	stat := grpcStatusFromError(cerr)
 
 	hdr := rsp.Header()
 	hdr.Set("Content-Type", "application/json")
 	hdr.Set("Content-Encoding", "identity")
-	bin, err := codec.MarshalAppend(nil, status)
+	bin, err := codec.MarshalAppend(nil, stat)
 	if err != nil {
 		statusCode = http.StatusInternalServerError
 		hdr.Set("Content-Type", "application/json")

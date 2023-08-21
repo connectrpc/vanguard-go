@@ -72,23 +72,25 @@ func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers 
 }
 
 func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
-	//TODO implement me
-	panic("implement me")
+	return grpcAddResponseMeta("application/grpc+", meta, headers, allowedCompression)
 }
 
-func (g grpcClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	//TODO implement me
-	panic("implement me")
+func (g grpcClientProtocol) encodeEnd(_ Codec, end *responseEnd, _ io.Writer, wasInHeaders bool) http.Header {
+	if wasInHeaders {
+		// already recorded this in call to addProtocolResponseHeaders
+		return nil
+	}
+	trailers := make(http.Header, len(end.trailers)+3)
+	grpcWriteEndToTrailers(end, trailers)
+	return trailers
 }
 
 func (g grpcClientProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
-	//TODO implement me
-	panic("implement me")
+	return grpcServerProtocol{}.decodeEnvelope(bytes)
 }
 
-func (g grpcClientProtocol) encodeEnvelope(e envelope) envelopeBytes {
-	//TODO implement me
-	panic("implement me")
+func (g grpcClientProtocol) encodeEnvelope(env envelope) envelopeBytes {
+	return grpcServerProtocol{}.encodeEnvelope(env)
 }
 
 func (g grpcClientProtocol) String() string {
@@ -141,7 +143,7 @@ func (g grpcServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
 	return envBytes
 }
 
-func (g grpcServerProtocol) decodeEndFromMessage(codec Codec, reader io.Reader) (responseEnd, error) {
+func (g grpcServerProtocol) decodeEndFromMessage(_ Codec, _ io.Reader) (responseEnd, error) {
 	return responseEnd{}, errors.New("gRPC protocol does not allow embedding result/trailers in body")
 }
 
@@ -153,8 +155,6 @@ func (g grpcServerProtocol) String() string {
 // processing RPCs received from the client.
 type grpcWebClientProtocol struct{}
 
-// TODO: many of these methods can delegate to grpcClientProtocol since
-// the two protocols are extremely similar.
 var _ clientProtocolHandler = grpcWebClientProtocol{}
 var _ envelopedProtocolHandler = grpcWebClientProtocol{}
 
@@ -171,23 +171,42 @@ func (g grpcWebClientProtocol) extractProtocolRequestHeaders(_ *operation, heade
 }
 
 func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
-	//TODO implement me
-	panic("implement me")
+	return grpcAddResponseMeta("application/grpc-web+", meta, headers, allowedCompression)
 }
 
-func (g grpcWebClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	//TODO implement me
-	panic("implement me")
+func (g grpcWebClientProtocol) encodeEnd(_ Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+	if wasInHeaders {
+		// already recorded this in call to addProtocolResponseHeaders
+		return nil
+	}
+	trailers := make(http.Header, len(end.trailers)+3)
+	grpcWriteEndToTrailers(end, trailers)
+	// TODO: probably should pass op instead of Codec since it looks like none of the impls
+	//       will actually need codec, but this impl (as well as connect streaming) will
+	//       want the op's bufferPool
+	buffer := bytes.NewBuffer(make([]byte, 0, initialBufferSize)) // TODO: use bufferPool
+	_ = trailers.Write(buffer)
+	env := envelope{trailer: true, length: uint32(buffer.Len())}
+	envBytes := g.encodeEnvelope(env)
+	_, _ = writer.Write(envBytes[:])
+	_, _ = buffer.WriteTo(writer)
+	return nil
 }
 
 func (g grpcWebClientProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
-	//TODO implement me
-	panic("implement me")
+	return grpcServerProtocol{}.decodeEnvelope(bytes)
 }
 
-func (g grpcWebClientProtocol) encodeEnvelope(e envelope) envelopeBytes {
-	//TODO implement me
-	panic("implement me")
+func (g grpcWebClientProtocol) encodeEnvelope(env envelope) envelopeBytes {
+	var envBytes envelopeBytes
+	if env.compressed {
+		envBytes[0] = 1
+	}
+	if env.trailer {
+		envBytes[0] |= 0x80
+	}
+	binary.BigEndian.PutUint32(envBytes[1:], env.length)
+	return envBytes
 }
 
 func (g grpcWebClientProtocol) String() string {
@@ -198,8 +217,6 @@ func (g grpcWebClientProtocol) String() string {
 // sending RPCs to the server handler.
 type grpcWebServerProtocol struct{}
 
-// TODO: many of these methods can delegate to grpcServerProtocol since
-// the two protocols are extremely similar.
 var _ serverProtocolHandler = grpcWebServerProtocol{}
 var _ serverEnvelopedProtocolHandler = grpcWebServerProtocol{}
 
@@ -215,7 +232,7 @@ func (g grpcWebServerProtocol) extractProtocolResponseHeaders(statusCode int, he
 	return grpcExtractResponseMeta("application/grpc-web", "application/grpc-web+", statusCode, headers), nil, nil
 }
 
-func (g grpcWebServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
+func (g grpcWebServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
 	return responseEnd{}, errors.New("gRPC-Web protocol does not use HTTP trailers")
 }
 
@@ -331,7 +348,7 @@ func grpcAddRequestMeta(contentTypePrefix string, meta requestMeta, headers http
 	if allowedCompression == nil {
 		allowedCompression = meta.acceptCompression
 	}
-	headers.Set("Grpc-Accept-Encoding", strings.Join(allowedCompression, ","))
+	headers.Set("Grpc-Accept-Encoding", strings.Join(allowedCompression, ", "))
 	if meta.hasTimeout {
 		timeoutStr, ok := grpcEncodeTimeout(meta.timeout)
 		if ok {
@@ -340,44 +357,59 @@ func grpcAddRequestMeta(contentTypePrefix string, meta requestMeta, headers http
 	}
 }
 
-func grpcWriteError(rsp http.ResponseWriter, err error) {
-	statusCode := http.StatusOK
-	status := grpcStatusFromError(err)
-
-	hdr := rsp.Header()
-	hdr.Del("Content-Encoding")
-	hdr.Set("Grpc-Encoding", "identity")
-	hdr.Set("Trailers", "Grpc-Status, Grpc-Message")
-	rsp.WriteHeader(statusCode)
-
-	bin, err := proto.Marshal(status)
-	if err != nil {
-		hdr.Set("Grpc-Status", strconv.Itoa(int(connect.CodeInternal)))
-		hdr.Set("Grpc-Message", grpcPercentEncode("failed to marshal error: "+err.Error()))
-		return
+func grpcAddResponseMeta(contentTypePrefix string, meta responseMeta, headers http.Header, allowedCompression []string) int {
+	if meta.end != nil {
+		grpcWriteEndToTrailers(meta.end, headers)
+		return http.StatusOK
 	}
-	hdr.Set("Grpc-Status", strconv.Itoa(int(status.Code)))
-	hdr.Set("Grpc-Message", grpcPercentEncode(status.Message))
-	hdr.Set("Grpc-Status-Details-Bin", connect.EncodeBinaryHeader(bin))
+	headers.Set("Content-Type", contentTypePrefix+meta.codec)
+	if meta.compression != "" {
+		headers.Set("Grpc-Encoding", meta.compression)
+	}
+	if allowedCompression == nil {
+		allowedCompression = meta.acceptCompression
+	}
+	headers.Set("Grpc-Accept-Encoding", strings.Join(allowedCompression, ", "))
+	headers.Set("Trailers", "Grpc-Status, Grpc-Message")
+	return http.StatusOK
 }
 
-func grpcStatusFromError(err error) *status.Status {
-	cerr := asError(err)
-	status := &status.Status{
-		Code:    int32(cerr.Code()),
-		Message: cerr.Message(),
+func grpcWriteEndToTrailers(respEnd *responseEnd, trailers http.Header) {
+	for k, v := range respEnd.trailers {
+		trailers[k] = v
 	}
-	if details := cerr.Details(); len(details) > 0 {
-		// TODO: better way to do this?
-		status.Details = make([]*anypb.Any, len(details))
+	if respEnd.err == nil {
+		trailers.Set("Grpc-Status", "0")
+		trailers.Set("Grpc-Message", "")
+	} else {
+		trailers.Set("Grpc-Status", strconv.Itoa(int(respEnd.err.Code())))
+		trailers.Set("Grpc-Message", grpcPercentEncode(respEnd.err.Message()))
+		if len(respEnd.err.Details()) == 0 {
+			return
+		}
+		stat := grpcStatusFromError(respEnd.err)
+		bin, err := proto.Marshal(stat)
+		if err == nil {
+			trailers.Set("Grpc-Status-Details-Bin", connect.EncodeBinaryHeader(bin))
+		}
+	}
+}
+
+func grpcStatusFromError(err *connect.Error) *status.Status {
+	stat := &status.Status{
+		Code:    int32(err.Code()),
+		Message: err.Message(),
+	}
+	if details := err.Details(); len(details) > 0 {
+		stat.Details = make([]*anypb.Any, len(details))
 		for i, detail := range details {
-			status.Details[i] = &anypb.Any{
+			stat.Details[i] = &anypb.Any{
 				TypeUrl: "type.googleapis.com/" + detail.Type(),
 				Value:   detail.Bytes(),
 			}
 		}
 	}
-	return status
+	return stat
 }
 
 // grpcPercentEncode follows RFC 3986 Section 2.1 and the gRPC HTTP/2 spec.
@@ -412,7 +444,7 @@ func grpcPercentEncodeSlow(msg string, offset int) string {
 	for i := offset; i < len(msg); i++ {
 		c := msg[i]
 		if c < ' ' || c > '~' || c == '%' {
-			fmt.Fprintf(&out, "%%%02X", c)
+			_, _ = fmt.Fprintf(&out, "%%%02X", c)
 			continue
 		}
 		out.WriteByte(c)
@@ -494,15 +526,15 @@ func grpcErrorFromTrailer(tlr http.Header) *connect.Error {
 			errProtocol("invalid grpc-status-details-bin trailer: %w", err),
 		)
 	}
-	var status status.Status
-	if err := proto.Unmarshal(detailsBinary, &status); err != nil {
+	var stat status.Status
+	if err := proto.Unmarshal(detailsBinary, &stat); err != nil {
 		return connect.NewError(
 			connect.CodeInternal,
 			errProtocol("invalid protobuf for error details: %w", err),
 		)
 	}
-	trailerErr := connect.NewWireError(connect.Code(status.Code), errors.New(status.Message))
-	for _, msg := range status.Details {
+	trailerErr := connect.NewWireError(connect.Code(stat.Code), errors.New(stat.Message))
+	for _, msg := range stat.Details {
 		errDetail, _ := connect.NewErrorDetail(msg)
 		trailerErr.AddDetail(errDetail)
 	}
@@ -513,7 +545,6 @@ func grpcExtractTimeoutFromHeaders(headers http.Header, meta *requestMeta) error
 	timeoutStr := headers.Get("Grpc-Timeout")
 	headers.Del("Grpc-Timeout")
 	if timeoutStr == "" {
-		// TODO: make sure this is because header is not present, vs. malformed empty header
 		return nil
 	}
 	timeout, err := grpcDecodeTimeout(timeoutStr)
