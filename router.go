@@ -150,24 +150,32 @@ func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeT
 // the method. This can be used to send back a well-formed "Allow" response
 // header. If both are nil, the path and verb did not match.
 func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
-	if trie == nil {
-		return nil, nil
-	}
 	if len(path) == 0 {
 		return trie.getTarget(verb, method)
 	}
 	current := path[0]
 	path = path[1:]
 
-	if target, methods := trie.children[current].findTarget(path, verb, method); target != nil {
-		return target, methods
+	if child := trie.children[current]; child != nil {
+		target, methods := child.findTarget(path, verb, method)
+		if target != nil || methods != nil {
+			return target, methods
+		}
 	}
-	if target, methods := trie.children["*"].findTarget(path, verb, method); target != nil {
-		return target, methods
+
+	if childAst := trie.children["*"]; childAst != nil {
+		target, methods := childAst.findTarget(path, verb, method)
+		if target != nil || methods != nil {
+			return target, methods
+		}
 	}
+
 	// Double-asterisk must be the last element in pattern.
 	// So it consumes all remaining path elements.
-	return trie.children["**"].findTarget(nil, verb, method)
+	if childDblAst := trie.children["**"]; childDblAst != nil {
+		return childDblAst.findTarget(nil, verb, method)
+	}
+	return nil, nil
 }
 
 // getTarget gets the target for the given verb and method from the

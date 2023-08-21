@@ -259,6 +259,12 @@ func unhex(char byte) byte {
 }
 
 // pathEncoding is the encoding used for path variables.
+// Single encoding is used for single segment capture variables,
+// while multi encoding is used for multi segment capture variables.
+// On multi encoding variables, '/' is not escaped and is preserved
+// as '%2F' if encoded in the path.
+//
+// See: https://github.com/googleapis/googleapis/blob/1769846666fbeb0f9ece6ad929ddc0d563cccd8d/google/api/http.proto#L249-L264
 type pathEncoding int
 
 const (
