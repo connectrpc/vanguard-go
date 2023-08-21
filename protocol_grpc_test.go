@@ -40,8 +40,8 @@ func TestGRPCEncodeTimeoutQuick(t *testing.T) {
 	t.Parallel()
 	// Ensure that the error case is actually unreachable.
 	encode := func(d time.Duration) bool {
-		_, err := grpcEncodeTimeout(d)
-		return err == nil
+		_, ok := grpcEncodeTimeout(d)
+		return ok
 	}
 	if err := quick.Check(encode, nil); err != nil {
 		t.Error(err)
@@ -110,13 +110,13 @@ func TestGRPCDecodeTimeout(t *testing.T) {
 
 func TestGRPCEncodeTimeout(t *testing.T) {
 	t.Parallel()
-	timeout, err := grpcEncodeTimeout(time.Hour + time.Second)
-	assert.Nil(t, err)
+	timeout, ok := grpcEncodeTimeout(time.Hour + time.Second)
+	assert.True(t, ok)
 	assert.Equal(t, timeout, "3601000m")
-	timeout, err = grpcEncodeTimeout(time.Duration(math.MaxInt64))
-	assert.Nil(t, err)
+	timeout, ok = grpcEncodeTimeout(time.Duration(math.MaxInt64))
+	assert.True(t, ok)
 	assert.Equal(t, timeout, "2562047H")
-	timeout, err = grpcEncodeTimeout(-1 * time.Hour)
-	assert.Nil(t, err)
+	timeout, ok = grpcEncodeTimeout(-1 * time.Hour)
+	assert.True(t, ok)
 	assert.Equal(t, timeout, "0n")
 }

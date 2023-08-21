@@ -1349,8 +1349,9 @@ func intersect(setA, setB []string) []string {
 		length = len(setB)
 	}
 	if length == 0 {
-		// if either set is empty, the intersection is empty
-		return nil
+		// If either set is empty, the intersection is empty.
+		// We don't use nil since it is used in places as a sentinel.
+		return make([]string, 0)
 	}
 	result := make([]string, 0, length)
 	for _, item := range setA {

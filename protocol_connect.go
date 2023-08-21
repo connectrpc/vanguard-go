@@ -58,6 +58,8 @@ func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operati
 	reqMeta.codec = query.Get("encoding")
 	reqMeta.compression = query.Get("compression")
 	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
+	headers.Del("Accept-Encoding")
+	headers.Del("Content-Type")
 	return reqMeta, nil
 }
 
@@ -125,6 +127,7 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 		// TODO: should we support other text formats that may need charset check?
 		reqMeta.codec = CodecJSON
 	}
+	headers.Del("Content-Type")
 	reqMeta.compression = headers.Get("Content-Encoding")
 	headers.Del("Content-Encoding")
 	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
@@ -164,7 +167,7 @@ func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, 
 	panic("implement me")
 }
 
-func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -229,6 +232,7 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 		return reqMeta, err
 	}
 	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), "application/connect+")
+	headers.Del("Content-Type")
 	reqMeta.compression = headers.Get("Connect-Content-Encoding")
 	headers.Del("Connect-Content-Encoding")
 	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Connect-Accept-Encoding"))
@@ -276,7 +280,7 @@ func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta,
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }

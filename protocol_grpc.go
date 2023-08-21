@@ -6,6 +6,8 @@
 package vanguard
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -105,33 +107,42 @@ func (g grpcServerProtocol) protocol() Protocol {
 }
 
 func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
-	//TODO implement me
-	panic("implement me")
+	addGRPCRequestMeta("application/grpc+", meta, headers, allowedCompression)
 }
 
-func (g grpcServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
-	//TODO implement me
-	panic("implement me")
+func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+	return extractGRPCResponseMeta("application/grpc", "application/grpc+", statusCode, headers), nil, nil
 }
 
-func (g grpcServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
-	//TODO implement me
-	panic("implement me")
+func (g grpcServerProtocol) extractEndFromTrailers(_ *operation, trailers http.Header) (responseEnd, error) {
+	return responseEnd{
+		err:      grpcErrorFromTrailer(trailers),
+		trailers: trailers,
+	}, nil
 }
 
-func (g grpcServerProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
-	//TODO implement me
-	panic("implement me")
+func (g grpcServerProtocol) decodeEnvelope(envBytes envelopeBytes) (envelope, error) {
+	flags := envBytes[0]
+	if flags != 0 && flags != 1 {
+		return envelope{}, fmt.Errorf("invalid compression flag: must be 0 or 1; instead got %d", flags)
+	}
+	return envelope{
+		compressed: flags == 1,
+		length:     binary.BigEndian.Uint32(envBytes[1:]),
+	}, nil
 }
 
-func (g grpcServerProtocol) encodeEnvelope(e envelope) envelopeBytes {
-	//TODO implement me
-	panic("implement me")
+func (g grpcServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
+	var envBytes envelopeBytes
+	if env.compressed {
+		envBytes[0] = 1
+	}
+	binary.BigEndian.PutUint32(envBytes[1:], env.length)
+	return envBytes
 }
 
 func (g grpcServerProtocol) decodeEndFromMessage(codec Codec, reader io.Reader) (responseEnd, error) {
-	//TODO implement me
-	panic("implement me")
+	return responseEnd{}, errors.New("gRPC protocol does not allow embedding result/trailers in body")
 }
 
 func (g grpcServerProtocol) String() string {
@@ -197,55 +208,136 @@ func (g grpcWebServerProtocol) protocol() Protocol {
 }
 
 func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
-	//TODO implement me
-	panic("implement me")
+	addGRPCRequestMeta("application/grpc-web+", meta, headers, allowedCompression)
 }
 
-func (g grpcWebServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
-	//TODO implement me
-	panic("implement me")
+func (g grpcWebServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+	return extractGRPCResponseMeta("application/grpc-web", "application/grpc-web+", statusCode, headers), nil, nil
 }
 
 func (g grpcWebServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
-	//TODO implement me
-	panic("implement me")
+	return responseEnd{}, errors.New("gRPC-Web protocol does not use HTTP trailers")
 }
 
-func (g grpcWebServerProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
-	//TODO implement me
-	panic("implement me")
+func (g grpcWebServerProtocol) decodeEnvelope(envBytes envelopeBytes) (envelope, error) {
+	flags := envBytes[0]
+	if flags&0b0111_1110 != 0 {
+		// invalid bits are set
+		return envelope{}, fmt.Errorf("invalid frame flags: only highest and lowest bits may be set; instead got %d", flags)
+	}
+	return envelope{
+		compressed: flags&1 != 0,
+		trailer:    flags&0x80 != 0,
+		length:     binary.BigEndian.Uint32(envBytes[1:]),
+	}, nil
 }
 
-func (g grpcWebServerProtocol) encodeEnvelope(e envelope) envelopeBytes {
-	//TODO implement me
-	panic("implement me")
+func (g grpcWebServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
+	// Request streams don't have trailers, so we can re-use the gRPC implementation
+	// without worrying about gRPC-Web's in-body trailers.
+	return grpcServerProtocol{}.encodeEnvelope(env)
 }
 
-func (g grpcWebServerProtocol) decodeEndFromMessage(codec Codec, reader io.Reader) (responseEnd, error) {
-	//TODO implement me
-	panic("implement me")
+func (g grpcWebServerProtocol) decodeEndFromMessage(_ Codec, reader io.Reader) (responseEnd, error) {
+	// TODO: buffer size limit for headers/trailers; should use http.DefaultMaxHeaderBytes if not configured
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return responseEnd{}, err
+	}
+	headerLines := bytes.Split(data, []byte{'\r', '\n'})
+	trailers := make(http.Header, len(headerLines))
+	for i, headerLine := range headerLines {
+		// may have trailing newline, so ignore resulting trailing empty line
+		if len(headerLine) == 0 {
+			continue
+		}
+		pos := bytes.IndexByte(headerLine, ':')
+		if pos == -1 {
+			return responseEnd{}, fmt.Errorf("response body included malformed trailer at line %d", i+1)
+		}
+		trailers.Add(string(headerLine[:pos]), strings.TrimSpace(string(headerLine[pos+1:])))
+	}
+	return responseEnd{
+		err:      grpcErrorFromTrailer(trailers),
+		trailers: trailers,
+	}, nil
 }
 
 func (g grpcWebServerProtocol) String() string {
 	return protocolNameGRPCWeb
 }
 
-func extractGRPCRequestMeta(contentTypePrefixShort, contentTypePrefixLong string, headers http.Header) (requestMeta, error) {
+func extractGRPCRequestMeta(contentTypeShort, contentTypePrefix string, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
 	if err := extractGRPCTimeout(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
 	contentType := headers.Get("Content-Type")
-	if contentType == contentTypePrefixShort {
+	if contentType == contentTypeShort {
 		reqMeta.codec = CodecProto
 	} else {
-		reqMeta.codec = strings.TrimPrefix(contentType, contentTypePrefixLong)
+		reqMeta.codec = strings.TrimPrefix(contentType, contentTypePrefix)
 	}
+	headers.Del("Content-Type")
 	reqMeta.compression = headers.Get("Grpc-Encoding")
 	headers.Del("Grpc-Encoding")
 	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Grpc-Accept-Encoding"))
 	headers.Del("Grpc-Accept-Encoding")
 	return reqMeta, nil
+}
+
+func extractGRPCResponseMeta(contentTypeShort, contentTypePrefix string, statusCode int, headers http.Header) responseMeta {
+	var respMeta responseMeta
+	contentType := headers.Get("Content-Type")
+	switch {
+	case contentType == contentTypeShort:
+		respMeta.codec = CodecProto
+	case strings.HasPrefix(contentType, contentTypePrefix):
+		respMeta.codec = strings.TrimPrefix(contentType, contentTypePrefix)
+	default:
+		respMeta.codec = contentTypeShort + "?"
+	}
+	headers.Del("Content-Type")
+	respMeta.compression = headers.Get("Grpc-Encoding")
+	headers.Del("Grpc-Encoding")
+	respMeta.acceptCompression = parseMultiHeader(headers.Values("Grpc-Accept-Encoding"))
+	headers.Del("Grpc-Accept-Encoding")
+
+	// See if RPC is already over (unexpected HTTP error or trailers-only response)
+	if len(headers.Values("Grpc-Status")) > 0 {
+		connErr := grpcErrorFromTrailer(headers)
+		respMeta.end = &responseEnd{
+			err:      connErr,
+			httpCode: statusCode,
+		}
+	}
+	if statusCode != http.StatusOK {
+		if respMeta.end == nil {
+			respMeta.end = &responseEnd{}
+		}
+		if respMeta.end.err == nil {
+			// TODO: map HTTP status code to an RPC error (opposite of httpStatusCodeFromRPC)
+			respMeta.end.err = connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected HTTP error: %d %s", statusCode, http.StatusText(statusCode)))
+		}
+	}
+	return respMeta
+}
+
+func addGRPCRequestMeta(contentTypePrefix string, meta requestMeta, headers http.Header, allowedCompression []string) {
+	headers.Set("Content-Type", contentTypePrefix+meta.codec)
+	if meta.compression != "" {
+		headers.Set("Grpc-Encoding", meta.compression)
+	}
+	if allowedCompression == nil {
+		allowedCompression = meta.acceptCompression
+	}
+	headers.Set("Grpc-Accept-Encoding", strings.Join(allowedCompression, ","))
+	if meta.hasTimeout {
+		timeoutStr, ok := grpcEncodeTimeout(meta.timeout)
+		if ok {
+			headers.Set("Grpc-Timeout", timeoutStr)
+		}
+	}
 }
 
 func grpcWriteError(rsp http.ResponseWriter, err error) {
@@ -456,17 +548,17 @@ func grpcDecodeTimeout(timeout string) (time.Duration, error) {
 	return time.Duration(num) * unit, nil
 }
 
-func grpcEncodeTimeout(timeout time.Duration) (string, error) {
+func grpcEncodeTimeout(timeout time.Duration) (string, bool) {
 	if timeout <= 0 {
-		return "0n", nil
+		return "0n", true
 	}
 	for _, pair := range grpcTimeoutUnits {
 		digits := strconv.FormatInt(int64(timeout/pair.size), 10 /* base */)
 		if len(digits) < grpcMaxTimeoutChars {
-			return digits + string(pair.char), nil
+			return digits + string(pair.char), true
 		}
 	}
 	// The max time.Duration is smaller than the maximum expressible gRPC
 	// timeout, so we can't reach this case.
-	return "", errNoTimeout
+	return "", false
 }

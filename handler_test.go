@@ -1068,13 +1068,13 @@ func TestIntersection(t *testing.T) {
 			name:   "a is empty",
 			a:      nil,
 			b:      []string{"a", "b", "c", "d", "e", "f"},
-			result: nil,
+			result: []string{},
 		},
 		{
 			name:   "b is empty",
 			a:      []string{"a", "b", "c"},
 			b:      nil,
-			result: nil,
+			result: []string{},
 		},
 		{
 			name:      "result is empty",
