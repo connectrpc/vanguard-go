@@ -502,8 +502,8 @@ func (op *operation) readRequestMessage(dst *bytes.Buffer, reader io.Reader) (is
 }
 
 func (op *operation) readAndDecodeRequestMessage(r io.Reader, msg *message) error {
-	buf := msg.reset(op.buffers)
-	isCompressed, err := op.readRequestMessage(buf, r)
+	msg.reset(op.buffers)
+	isCompressed, err := op.readRequestMessage(msg.buf, r)
 	if err != nil {
 		return err
 	}
@@ -517,7 +517,7 @@ func (op *operation) readAndDecodeRequestMessage(r io.Reader, msg *message) erro
 		if err := msg.convert(op.buffers, nil, op.client.codec, op.requestMessage, false); err != nil {
 			return err
 		}
-		if err := op.clientPreparer.prepareUnmarshalledRequest(op, buf.Bytes(), op.requestMessage); err != nil {
+		if err := op.clientPreparer.prepareUnmarshalledRequest(op, msg.buf.Bytes(), op.requestMessage); err != nil {
 			return err
 		}
 		return msg.encode(op.buffers, op.server.reqCompression, op.server.codec, op.requestMessage)
@@ -878,7 +878,7 @@ func (m *message) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-func (m *message) reset(buffers *bufferPool) *bytes.Buffer {
+func (m *message) reset(buffers *bufferPool) {
 	if m.buf == nil {
 		m.buf = buffers.Get()
 	}
@@ -886,7 +886,6 @@ func (m *message) reset(buffers *bufferPool) *bytes.Buffer {
 	m.comp = nil
 	m.codec = nil
 	m.off = 0
-	return m.buf
 }
 
 // encode the message into the buffer, compressing and encoding as needed.
