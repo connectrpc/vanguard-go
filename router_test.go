@@ -108,14 +108,28 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			},
 		},
 		{
+			// No trailing slash in the path, so this should not match.
 			path: "/trailing:slash",
 		},
 		{
+			// Trailing slash in the path, so this should match.
 			path:         "/trailing/:slash",
 			expectedPath: "/trailing/**:slash",
 		},
 		{
+			// Trailing verb, should not match.
 			path: "/verb:",
+		},
+		{
+			// No trailing verb, should match.
+			path:         "/verb",
+			expectedPath: "/verb",
+		},
+		{
+			// Var capture use path unescaping.
+			path:         "/foo/bar/baz/%2f/%2A/%2f",
+			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}",
+			expectedVars: map[string]string{"thing.id": "/", "cat": "*/%2F"},
 		},
 	}
 

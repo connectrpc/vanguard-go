@@ -132,7 +132,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 		if variableSize > 1 && len(values) != variableSize {
 			return "", nil, fmt.Errorf(
 				"expected field %s to match pattern %q: instead got %q",
-				variable.fieldPath, variable.capture(segments), value,
+				variable.fieldPath, strings.Join(variable.index(segments), "/"), value,
 			)
 		}
 
@@ -150,7 +150,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 			} else if segment != part {
 				return "", nil, fmt.Errorf(
 					"expected field %s to match pattern %q: instead got %q",
-					variable.fieldPath, variable.capture(segments), value,
+					variable.fieldPath, strings.Join(variable.index(segments), "/"), value,
 				)
 			}
 		}

@@ -136,7 +136,11 @@ func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeT
 	// TODO: instead of []routeTargetMatch, we may want a different data structure
 	//       that doesn't need to allocate slices but instead retrieves substrings
 	//       of uriPath on demand.
-	return target, computeVarValues(path, target), nil
+	vars, err := computeVarValues(path, target)
+	if err != nil {
+		return nil, nil, nil
+	}
+	return target, vars, nil
 }
 
 // findTarget finds the target for the given path components, verb, and method.
@@ -174,7 +178,7 @@ func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethod
 	if target := methods[method]; target != nil {
 		return target, methods
 	}
-	// Check if a wildcard method was used
+	// See if a wildcard method was used
 	if target := methods["*"]; target != nil {
 		return target, methods
 	}
@@ -183,7 +187,7 @@ func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethod
 	//       should look like "foo/bar/". However, *should* it support having no trailing slash?
 	//       For example, should pattern "foo/bar/**" allow "foo/bar"? If so, we'd need to do a
 	//       little more work here, to see if trie has a ** child that has a matching method.
-	return nil, nil
+	return nil, methods
 }
 
 type routeMethods map[string]*routeTarget
@@ -256,16 +260,34 @@ func (v routeTargetVar) size() int {
 	}
 	return v.end - v.start
 }
-func (v routeTargetVar) capture(segments []string) string {
+func (v routeTargetVar) index(segments []string) []string {
 	start, end := v.start, v.end
-	if v.end == -1 {
+	if end == -1 {
 		if start >= len(segments) {
-			return ""
+			return nil
 		}
-		end = len(segments)
+		return segments[start:]
 	}
-	// TODO: values should be pathUnescape'd
-	return strings.Join(segments[start:end], "/")
+	return segments[start:end]
+}
+func (v routeTargetVar) capture(segments []string) (string, error) {
+	parts := v.index(segments)
+	mode := pathEncodeSingle
+	if v.end == -1 || v.start-v.end > 1 {
+		mode = pathEncodeMulti
+	}
+	var sb strings.Builder
+	for i, part := range parts {
+		val, err := pathUnescape(part, mode)
+		if err != nil {
+			return "", err
+		}
+		if i > 0 {
+			sb.WriteByte('/')
+		}
+		sb.WriteString(val)
+	}
+	return sb.String(), nil
 }
 
 type routeTargetVarMatch struct {
@@ -273,16 +295,20 @@ type routeTargetVarMatch struct {
 	value  string
 }
 
-func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch {
+func computeVarValues(path []string, target *routeTarget) ([]routeTargetVarMatch, error) {
 	if len(target.vars) == 0 {
-		return nil
+		return nil, nil
 	}
 	vars := make([]routeTargetVarMatch, len(target.vars))
 	for i, varDef := range target.vars {
+		val, err := varDef.capture(path)
+		if err != nil {
+			return nil, err
+		}
 		vars[i].fields = varDef.fields
-		vars[i].value = varDef.capture(path)
+		vars[i].value = val
 	}
-	return vars
+	return vars, nil
 }
 
 // resolvePathToDescriptors translates the given path string, in the form of "ident.ident.ident",
