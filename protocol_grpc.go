@@ -68,7 +68,7 @@ func (g grpcClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType
 }
 
 func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
-	return extractGRPCRequestMeta("application/grpc", "application/grpc+", headers)
+	return grpcExtractRequestMeta("application/grpc", "application/grpc+", headers)
 }
 
 func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
@@ -107,11 +107,11 @@ func (g grpcServerProtocol) protocol() Protocol {
 }
 
 func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
-	addGRPCRequestMeta("application/grpc+", meta, headers, allowedCompression)
+	grpcAddRequestMeta("application/grpc+", meta, headers, allowedCompression)
 }
 
 func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
-	return extractGRPCResponseMeta("application/grpc", "application/grpc+", statusCode, headers), nil, nil
+	return grpcExtractResponseMeta("application/grpc", "application/grpc+", statusCode, headers), nil, nil
 }
 
 func (g grpcServerProtocol) extractEndFromTrailers(_ *operation, trailers http.Header) (responseEnd, error) {
@@ -167,7 +167,7 @@ func (g grpcWebClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamT
 }
 
 func (g grpcWebClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
-	return extractGRPCRequestMeta("application/grpc-web", "application/grpc-web+", headers)
+	return grpcExtractRequestMeta("application/grpc-web", "application/grpc-web+", headers)
 }
 
 func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
@@ -208,11 +208,11 @@ func (g grpcWebServerProtocol) protocol() Protocol {
 }
 
 func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
-	addGRPCRequestMeta("application/grpc-web+", meta, headers, allowedCompression)
+	grpcAddRequestMeta("application/grpc-web+", meta, headers, allowedCompression)
 }
 
 func (g grpcWebServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
-	return extractGRPCResponseMeta("application/grpc-web", "application/grpc-web+", statusCode, headers), nil, nil
+	return grpcExtractResponseMeta("application/grpc-web", "application/grpc-web+", statusCode, headers), nil, nil
 }
 
 func (g grpcWebServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
@@ -267,9 +267,9 @@ func (g grpcWebServerProtocol) String() string {
 	return protocolNameGRPCWeb
 }
 
-func extractGRPCRequestMeta(contentTypeShort, contentTypePrefix string, headers http.Header) (requestMeta, error) {
+func grpcExtractRequestMeta(contentTypeShort, contentTypePrefix string, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
-	if err := extractGRPCTimeout(headers, &reqMeta); err != nil {
+	if err := grpcExtractTimeoutFromHeaders(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
 	contentType := headers.Get("Content-Type")
@@ -286,7 +286,7 @@ func extractGRPCRequestMeta(contentTypeShort, contentTypePrefix string, headers 
 	return reqMeta, nil
 }
 
-func extractGRPCResponseMeta(contentTypeShort, contentTypePrefix string, statusCode int, headers http.Header) responseMeta {
+func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusCode int, headers http.Header) responseMeta {
 	var respMeta responseMeta
 	contentType := headers.Get("Content-Type")
 	switch {
@@ -323,7 +323,7 @@ func extractGRPCResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 	return respMeta
 }
 
-func addGRPCRequestMeta(contentTypePrefix string, meta requestMeta, headers http.Header, allowedCompression []string) {
+func grpcAddRequestMeta(contentTypePrefix string, meta requestMeta, headers http.Header, allowedCompression []string) {
 	headers.Set("Content-Type", contentTypePrefix+meta.codec)
 	if meta.compression != "" {
 		headers.Set("Grpc-Encoding", meta.compression)
@@ -509,7 +509,7 @@ func grpcErrorFromTrailer(tlr http.Header) *connect.Error {
 	return trailerErr
 }
 
-func extractGRPCTimeout(headers http.Header, meta *requestMeta) error {
+func grpcExtractTimeoutFromHeaders(headers http.Header, meta *requestMeta) error {
 	timeoutStr := headers.Get("Grpc-Timeout")
 	headers.Del("Grpc-Timeout")
 	if timeoutStr == "" {
