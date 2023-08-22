@@ -2,7 +2,7 @@
 //
 // All rights reserved.
 
-//nolint:forbidigo,revive,gocritic // this is temporary, will be removed when implementation is complete
+//nolint:revive // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
@@ -82,9 +82,7 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	// TODO: support other codecs.
-	if meta.codec != "" {
-		headers["Content-Type"] = []string{"application/" + string(meta.codec)}
-	}
+	headers["Content-Type"] = []string{"application/" + meta.codec}
 	if meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
 	}
@@ -102,8 +100,8 @@ func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.W
 
 func (r restClientProtocol) requestNeedsPrep(o *operation) bool {
 	return len(o.restTarget.vars) != 0 ||
-		len(o.restTarget.requestBodyFieldPath) != 0 ||
-		len(o.request.URL.Query()) != 0
+		len(o.request.URL.Query()) != 0 ||
+		o.restTarget.requestBodyFields != nil
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
@@ -140,8 +138,11 @@ func (r restClientProtocol) responseNeedsPrep(o *operation) bool {
 }
 
 func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
+	msg := src.ProtoReflect()
+	for _, field := range op.restTarget.responseBodyFields {
+		msg = msg.Get(field).Message()
+	}
+	return op.client.codec.MarshalAppend(base, msg.Interface())
 }
 
 func (r restClientProtocol) String() string {
@@ -161,7 +162,8 @@ func (r restServerProtocol) protocol() Protocol {
 }
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	headers["Content-Type"] = []string{"application/" + string(meta.codec)}
+	// TODO: support other codecs.
+	headers["Content-Type"] = []string{"application/" + meta.codec}
 	if meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
 	}
@@ -199,7 +201,9 @@ func (r restServerProtocol) extractEndFromTrailers(o *operation, headers http.He
 }
 
 func (r restServerProtocol) requestNeedsPrep(o *operation) bool {
-	return true
+	return len(o.restTarget.vars) != 0 ||
+		len(o.request.URL.Query()) != 0 ||
+		o.restTarget.requestBodyFields != nil
 }
 
 func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
