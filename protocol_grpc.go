@@ -2,7 +2,6 @@
 //
 // All rights reserved.
 
-//nolint:forbidigo,revive,gocritic // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
