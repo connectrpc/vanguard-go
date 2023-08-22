@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -26,7 +27,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 	t.Parallel()
 
 	services := []protoreflect.FullName{
-		"buf.vanguard.test.v1.LibraryService",
+		testv1connect.LibraryServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -54,30 +55,53 @@ func TestMux_RPCxRPC(t *testing.T) {
 		protocol Protocol, codec string, compression string,
 		next http.Handler,
 	) http.HandlerFunc {
-		if compression == CompressionIdentity {
-			compression = "" // normalize "no compression" to empty string
+		var allowedCompression []string
+		if compression != "" && compression != CompressionIdentity {
+			// a server expecting gzip compression also allows identity/uncompressed
+			allowedCompression = []string{compression, CompressionIdentity, ""}
+		} else {
+			allowedCompression = []string{CompressionIdentity, ""}
 		}
 		return func(rsp http.ResponseWriter, req *http.Request) {
-			var wantHdr map[string]string
+			var wantHdr map[string][]string
 			switch protocol {
 			case ProtocolGRPC:
-				wantHdr = map[string]string{
-					"Content-Type":  fmt.Sprintf("application/grpc+%s", codec),
-					"Grpc-Encoding": compression,
+				wantHdr = map[string][]string{
+					"Content-Type":  {fmt.Sprintf("application/grpc+%s", codec)},
+					"Grpc-Encoding": allowedCompression,
 				}
 			case ProtocolGRPCWeb:
-				wantHdr = map[string]string{
-					"Content-Type":  fmt.Sprintf("application/grpc-web+%s", codec),
-					"Grpc-Encoding": compression,
+				wantHdr = map[string][]string{
+					"Content-Type":  {fmt.Sprintf("application/grpc-web+%s", codec)},
+					"Grpc-Encoding": allowedCompression,
 				}
-			// TODO: connect
+			case ProtocolConnect:
+				if strings.HasPrefix(req.Header.Get("Content-Type"), "application/connect") {
+					wantHdr = map[string][]string{
+						"Content-Type":             {fmt.Sprintf("application/connect+%s", codec)},
+						"Connect-Content-Encoding": allowedCompression,
+					}
+				} else {
+					wantHdr = map[string][]string{
+						"Content-Type":     {fmt.Sprintf("application/%s", codec)},
+						"Content-Encoding": allowedCompression,
+					}
+				}
 			default:
 				http.Error(rsp, "unknown protocol", http.StatusInternalServerError)
 				return
 			}
-			for key, val := range wantHdr {
-				if req.Header.Get(key) != val {
-					http.Error(rsp, fmt.Sprintf("missing header %s: %s", key, val), http.StatusInternalServerError)
+			for key, vals := range wantHdr {
+				var found bool
+				gotHdr := req.Header.Get(key)
+				for _, val := range vals {
+					if gotHdr == val {
+						found = true
+						break
+					}
+				}
+				if !found {
+					http.Error(rsp, fmt.Sprintf("header %s is %q; should be one of [%v]", key, gotHdr, vals), http.StatusInternalServerError)
 					return
 				}
 			}
@@ -174,7 +198,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: "/buf.vanguard.test.v1.LibraryService/GetBook",
+						method: testv1connect.LibraryServiceGetBookProcedure,
 						msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
@@ -207,20 +231,32 @@ func TestMux_RPCxRPC(t *testing.T) {
 		"GetBook_gRPC-Web_proto_identity/gRPC-Web_proto_identity": {},
 		// transformation is working
 		"GetBook_gRPC_json_gzip/gRPC_proto_gzip":                 {},
+		"GetBook_gRPC_json_identity/gRPC_json_gzip":              {},
+		"GetBook_gRPC_json_identity/gRPC_proto_gzip":             {},
 		"GetBook_gRPC_proto_gzip/gRPC_json_gzip":                 {},
+		"GetBook_gRPC_proto_identity/gRPC_json_gzip":             {},
+		"GetBook_gRPC_proto_identity/gRPC_proto_gzip":            {},
 		"GetBook_gRPC-Web_json_gzip/gRPC_proto_gzip":             {},
 		"GetBook_gRPC-Web_proto_gzip/gRPC_json_gzip":             {},
+		"GetBook_gRPC-Web_proto_identity/gRPC_json_gzip":         {},
 		"GetBook_gRPC_json_identity/gRPC_proto_identity":         {},
 		"GetBook_gRPC_proto_identity/gRPC_json_identity":         {},
+		"GetBook_gRPC-Web_json_identity/gRPC_proto_gzip":         {},
 		"GetBook_gRPC-Web_json_identity/gRPC_proto_identity":     {},
 		"GetBook_gRPC-Web_proto_identity/gRPC_json_identity":     {},
 		"GetBook_gRPC_json_gzip/gRPC-Web_proto_gzip":             {},
 		"GetBook_gRPC_proto_gzip/gRPC-Web_json_gzip":             {},
+		"GetBook_gRPC_proto_identity/gRPC-Web_json_gzip":         {},
+		"GetBook_gRPC_json_identity/gRPC-Web_proto_gzip":         {},
 		"GetBook_gRPC_json_identity/gRPC-Web_proto_identity":     {},
 		"GetBook_gRPC_proto_identity/gRPC-Web_json_identity":     {},
 		"GetBook_gRPC-Web_json_gzip/gRPC-Web_proto_gzip":         {},
 		"GetBook_gRPC-Web_proto_gzip/gRPC-Web_json_gzip":         {},
+		"GetBook_gRPC-Web_json_identity/gRPC-Web_json_gzip":      {},
+		"GetBook_gRPC-Web_json_identity/gRPC-Web_proto_gzip":     {},
 		"GetBook_gRPC-Web_json_identity/gRPC-Web_proto_identity": {},
+		"GetBook_gRPC-Web_proto_identity/gRPC-Web_json_gzip":     {},
+		"GetBook_gRPC-Web_proto_identity/gRPC-Web_proto_gzip":    {},
 		"GetBook_gRPC-Web_proto_identity/gRPC-Web_json_identity": {},
 	}
 	for _, testCase := range testRequests {
