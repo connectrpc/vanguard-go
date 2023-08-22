@@ -65,6 +65,7 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 		// invalid content-type
 		reqMeta.codec = contentType + "?"
 	}
+	headers.Del("Content-Type")
 
 	return reqMeta, nil
 }
@@ -120,7 +121,7 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	panic("implement me")
 }
 
-func (r restServerProtocol) extractProtocolResponseHeaders(i int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	//TODO implement me
 	panic("implement me")
 }

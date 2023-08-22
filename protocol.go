@@ -2,7 +2,6 @@
 //
 // All rights reserved.
 
-//nolint:unused // temporary
 package vanguard
 
 import (
@@ -158,7 +157,7 @@ type serverProtocolHandler interface {
 	protocol() Protocol
 
 	// Encodes the given requestMeta has headers into the given target
-	// headers. If provided, allowedCompression should be used instead
+	// headers. If non-nil, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
 	addProtocolRequestHeaders(meta requestMeta, target http.Header, allowedCompression []string)
 	// Returns the response metadata from the headers. If the response
@@ -170,7 +169,7 @@ type serverProtocolHandler interface {
 	// body), the body, and a pointer to the responseEnd which should
 	// be populated with the details. If the response body was compressed,
 	// it will be decompressed before it is provided to the given function.
-	extractProtocolResponseHeaders(int, http.Header) (responseMeta, responseEndUnmarshaler, error)
+	extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error)
 	// Called at end of RPC if responseEnd has not been returned by
 	// extractProtocolResponseHeaders or from an enveloped message
 	// in the response body whose trailer bit is set.
