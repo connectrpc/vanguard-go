@@ -2,7 +2,7 @@
 //
 // All rights reserved.
 
-//nolint:forbidigo,unused,revive,gocritic // this is temporary, will be removed when implementation is complete
+//nolint:forbidigo,revive,gocritic // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
@@ -352,7 +352,7 @@ type operation struct {
 	clientPreparer      clientBodyPreparer
 	clientReqNeedsPrep  bool
 	clientRespNeedsPrep bool
-	serverEnveloper     envelopedProtocolHandler
+	serverEnveloper     serverEnvelopedProtocolHandler
 	serverPreparer      serverBodyPreparer
 	serverReqNeedsPrep  bool
 	serverRespNeedsPrep bool
@@ -372,7 +372,7 @@ func (op *operation) handle() {
 		op.clientReqNeedsPrep = op.clientPreparer.requestNeedsPrep(op)
 		op.clientRespNeedsPrep = op.clientPreparer.responseNeedsPrep(op)
 	}
-	op.serverEnveloper, _ = op.server.protocol.(envelopedProtocolHandler)
+	op.serverEnveloper, _ = op.server.protocol.(serverEnvelopedProtocolHandler)
 	op.serverPreparer, _ = op.server.protocol.(serverBodyPreparer)
 	if op.serverPreparer != nil {
 		op.serverReqNeedsPrep = op.serverPreparer.requestNeedsPrep(op)
@@ -410,7 +410,11 @@ func (op *operation) handle() {
 	var skipBody bool
 	if serverRequestBuilder != nil { //nolint:nestif
 		if requireMessageForRequestLine {
-			if err := op.readAndDecodeRequestMessage(op.request.Body, &reqMsg); err != nil {
+			if err := op.readRequestMessage(op.request.Body, &reqMsg); err != nil {
+				op.earlyError(err)
+				return
+			}
+			if err := reqMsg.advanceToStage(op, stageDecoded); err != nil {
 				op.earlyError(err)
 				return
 			}
@@ -471,7 +475,7 @@ func (op *operation) readRequestMessage(reader io.Reader, msg *message) error {
 	msgLen := -1
 	compressed := true
 	if op.clientEnveloper != nil {
-		var envBuf [5]byte
+		var envBuf envelopeBytes
 		_, err := io.ReadFull(reader, envBuf[:])
 		if err != nil {
 			return err
@@ -498,29 +502,7 @@ func (op *operation) readRequestMessage(reader io.Reader, msg *message) error {
 		return err
 	}
 	msg.stage = stageRead
-
-	if op.clientReqNeedsPrep {
-		if err := op.clientPreparer.prepareUnmarshalledRequest(op, buffer.Bytes(), msg.msg); err != nil {
-			return err
-		}
-		if msg.compressed != nil {
-			op.bufferPool.Put(msg.compressed)
-			msg.compressed = nil
-		}
-		if msg.data != nil {
-			op.bufferPool.Put(msg.data)
-			msg.data = nil
-		}
-		msg.stage = stageDecoded
-	}
 	return nil
-}
-
-func (op *operation) readAndDecodeRequestMessage(r io.Reader, msg *message) error {
-	if err := op.readRequestMessage(r, msg); err != nil {
-		return err
-	}
-	return msg.advanceToStage(op, stageDecoded)
 }
 
 func (op *operation) serverBody(msg *message) io.ReadCloser {
@@ -530,16 +512,19 @@ func (op *operation) serverBody(msg *message) io.ReadCloser {
 	}
 	ret := &transformingReader{op: op, msg: msg, r: op.request.Body}
 	if msg.stage != stageEmpty {
-		ret.initFirstMessage()
+		if err := ret.prepareMessage(); err != nil {
+			ret.err = err
+		}
 	}
 	return ret
 }
 
 func (op *operation) serverWriter() (*responseWriter, error) {
-	if _, ok := op.writer.(http.Flusher); !ok {
+	flusher, ok := op.writer.(http.Flusher)
+	if !ok {
 		return nil, errors.New("http.ResponseWriter must implement http.Flusher")
 	}
-	return &responseWriter{op: op, delegate: op.writer}, nil
+	return &responseWriter{op: op, delegate: op.writer, flusher: flusher}, nil
 }
 
 func (op *operation) drainBody(body io.ReadCloser) {
@@ -573,26 +558,78 @@ func (er envelopingReader) Close() error {
 // transformingReader transforms the data from the original request
 // into a new protocol form as the data is read. It must decompress
 // and deserialize each message and then re-serialize (and optionally
-// recompress) each message.
+// recompress) each message. Since the original incoming protocol may
+// have different envelope conventions than the outgoing protocol, it
+// also rewrites envelopes.
 type transformingReader struct {
 	op  *operation
 	msg *message
 	r   io.ReadCloser
+
+	err       error
+	buffer    *bytes.Buffer
+	env       envelopeBytes
+	envRemain int
 }
 
 func (tr *transformingReader) Read(data []byte) (n int, err error) {
-	//TODO implement me
-	panic("implement me")
+	if tr.err != nil {
+		return 0, tr.err
+	}
+	if tr.buffer != nil {
+		n, err := tr.buffer.Read(data)
+		if n > 0 {
+			return n, err
+		}
+		// otherwise EOF, fall through
+	}
+	if err := tr.op.readRequestMessage(tr.r, tr.msg); err != nil {
+		tr.err = err
+		return 0, err
+	}
+	if err := tr.prepareMessage(); err != nil {
+		tr.err = err
+		return 0, err
+	}
+
+	if len(data) < tr.envRemain {
+		copy(data, tr.env[envelopeLen-tr.envRemain:])
+		tr.envRemain -= len(data)
+		return len(data), nil
+	}
+	var offset int
+	if tr.envRemain > 0 {
+		copy(data, tr.env[envelopeLen-tr.envRemain:])
+		offset = tr.envRemain
+		tr.envRemain = 0
+	}
+	n, err = tr.buffer.Read(data[offset:])
+	return offset + n, err
 }
 
 func (tr *transformingReader) Close() error {
-	//TODO implement me
-	panic("implement me")
+	tr.err = errors.New("body is closed")
+	tr.msg.release(tr.op.bufferPool)
+	return tr.r.Close()
 }
 
-func (tr *transformingReader) initFirstMessage() {
-	// TODO: make sure tr.msg is advanced to stageSend and arrange
-	//       for next call to Read to consume it
+func (tr *transformingReader) prepareMessage() error {
+	if err := tr.msg.advanceToStage(tr.op, stageSend); err != nil {
+		return err
+	}
+	tr.buffer = tr.msg.sendBuffer()
+	if tr.op.serverEnveloper == nil {
+		tr.envRemain = 0
+		return nil
+	}
+	// Need to prefix the buffer with an envelope
+	env := envelope{
+		compressed: tr.msg.wasCompressed,
+		length:     uint32(tr.buffer.Len()),
+	}
+	tr.env = tr.op.serverEnveloper.encodeEnvelope(env)
+	tr.envRemain = envelopeLen
+	return nil
 }
 
 // responseWriter wraps the original writer and performs the protocol
@@ -605,6 +642,7 @@ func (tr *transformingReader) initFirstMessage() {
 type responseWriter struct {
 	op       *operation
 	delegate http.ResponseWriter
+	flusher  http.Flusher
 	code     int
 	// has WriteHeader or first call to Write occurred?
 	headersWritten bool
@@ -708,7 +746,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		// we do not need to decompress or decode
 		rw.w = &envelopingWriter{op: rw.op, w: rw.delegate}
 	} else {
-		rw.w = &transformingWriter{op: rw.op, msg: &respMsg, w: rw.delegate}
+		rw.w = &transformingWriter{rw: rw, msg: &respMsg, w: rw.delegate}
 	}
 }
 
@@ -803,21 +841,149 @@ func (ew envelopingWriter) Close() error {
 // transformingWriter transforms the data from the original response
 // into a new protocol form as the data is written. It must decompress
 // and deserialize each message and then re-serialize (and optionally
-// recompress) each message.
+// recompress) each message. Since the original incoming protocol may
+// have different envelope conventions than the outgoing protocol, it
+// also rewrites envelopes.
 type transformingWriter struct {
-	op  *operation
+	rw  *responseWriter
 	msg *message
 	w   io.Writer
+
+	err             error
+	buffer          *bytes.Buffer
+	expectingBytes  int
+	readingEnvelope bool
+	latestEnvelope  envelope
 }
 
 func (tw *transformingWriter) Write(data []byte) (int, error) {
-	//TODO implement me
-	panic("implement me")
+	if tw.err != nil {
+		return 0, tw.err
+	}
+	if tw.buffer == nil {
+		tw.reset()
+	}
+
+	if tw.expectingBytes == -1 {
+		// TODO: implement a buffer size limit
+		return tw.buffer.Write(data)
+	}
+
+	var writeCount int
+	// For enveloped protocols, it's possible that data contains
+	// multiple messages, so we need to process in a loop.
+	for {
+		remainingBytes := tw.expectingBytes - tw.buffer.Len()
+		if len(data) < remainingBytes {
+			tw.buffer.Write(data)
+			writeCount += len(data)
+			break
+		}
+		current := data[:remainingBytes]
+		tw.buffer.Write(current)
+		writeCount += remainingBytes
+		data = data[remainingBytes:]
+		if tw.readingEnvelope {
+			var envBytes envelopeBytes
+			_, _ = tw.buffer.Read(envBytes[:])
+			var err error
+			tw.latestEnvelope, err = tw.rw.op.serverEnveloper.decodeEnvelope(envBytes)
+			if err != nil {
+				tw.rw.reportError(err)
+				tw.err = err
+				return writeCount, err
+			}
+			// TODO: implement a buffer size limit
+			tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, tw.latestEnvelope.compressed)
+			tw.expectingBytes = int(tw.latestEnvelope.length)
+			tw.readingEnvelope = false
+		} else {
+			if err := tw.flushMessage(); err != nil {
+				tw.rw.reportError(err)
+				tw.err = err
+				return writeCount, err
+			}
+			tw.expectingBytes = envelopeLen
+			tw.readingEnvelope = true
+		}
+	}
+	return writeCount, nil
 }
 
 func (tw *transformingWriter) Close() error {
-	//TODO implement me
-	panic("implement me")
+	if tw.expectingBytes == -1 {
+		if err := tw.flushMessage(); err != nil {
+			tw.rw.reportError(err)
+		}
+	} else if tw.buffer != nil && tw.buffer.Len() > 0 {
+		// Unfinished body!
+		if tw.readingEnvelope {
+			tw.rw.reportError(fmt.Errorf("handler only wrote %d out of %d bytes of message envelope", tw.buffer.Len(), envelopeLen))
+		} else {
+			tw.rw.reportError(fmt.Errorf("handler only wrote %d out of %d bytes of message", tw.buffer.Len(), tw.expectingBytes))
+		}
+	}
+	tw.msg.release(tw.rw.op.bufferPool)
+	tw.buffer = nil
+	tw.err = errors.New("body is closed")
+	return nil
+}
+
+func (tw *transformingWriter) flushMessage() error {
+	if tw.latestEnvelope.trailer {
+		data := tw.buffer
+		if tw.latestEnvelope.compressed {
+			data = tw.rw.op.bufferPool.Get()
+			defer tw.rw.op.bufferPool.Put(data)
+			if err := tw.rw.op.respCompression.decompress(data, tw.buffer); err != nil {
+				return err
+			}
+		}
+		end, err := tw.rw.op.serverEnveloper.decodeEndFromMessage(tw.rw.op.server.codec, data)
+		if err != nil {
+			return err
+		}
+		end.wasCompressed = tw.latestEnvelope.compressed
+		tw.rw.reportEnd(&end)
+		tw.err = errors.New("final message already written")
+		return nil
+	}
+
+	if err := tw.msg.advanceToStage(tw.rw.op, stageSend); err != nil {
+		return err
+	}
+	buffer := tw.msg.sendBuffer()
+	if enveloper := tw.rw.op.clientEnveloper; enveloper != nil {
+		env := tw.latestEnvelope
+		if tw.rw.op.serverEnveloper == nil {
+			// we have to synthesize an envelope
+			env.compressed = true
+			env.length = uint32(buffer.Len())
+		}
+		envBytes := enveloper.encodeEnvelope(env)
+		if _, err := tw.w.Write(envBytes[:]); err != nil {
+			return err
+		}
+	}
+	if _, err := buffer.WriteTo(tw.w); err != nil {
+		return err
+	}
+	// flush after each message
+	tw.rw.flusher.Flush()
+
+	tw.reset()
+	return nil
+}
+
+func (tw *transformingWriter) reset() {
+	if tw.rw.op.serverEnveloper != nil {
+		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, false)
+		tw.expectingBytes = envelopeLen
+		tw.readingEnvelope = true
+	} else {
+		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, true)
+		tw.expectingBytes = -1
+	}
 }
 
 type errorWriter struct {
@@ -913,6 +1079,17 @@ type message struct {
 	data *bytes.Buffer
 	// msg is the plain message; not valid unless stage is stageDecoded
 	msg proto.Message
+}
+
+// sendBuffer returns the buffer to use to read message data to be sent.
+func (m *message) sendBuffer() *bytes.Buffer {
+	if m.stage != stageSend {
+		return nil
+	}
+	if m.wasCompressed {
+		return m.compressed
+	}
+	return m.data
 }
 
 // release releases all buffers associated with message to the given pool.
@@ -1051,10 +1228,11 @@ func (m *message) decompress(op *operation, saveBuffer bool) error {
 		return nil
 	}
 
-	var src io.Reader
+	var src *bytes.Buffer
 	if saveBuffer {
-		// we allocate a new reader, but it's cheaper than re-compressing later
-		src = bytes.NewReader(m.compressed.Bytes())
+		// we allocate a new buffer, but not the underlying byte slice
+		// (it's cheaper than re-compressing later)
+		src = bytes.NewBuffer(m.compressed.Bytes())
 	} else {
 		src = m.compressed
 	}
@@ -1107,6 +1285,13 @@ func (m *message) compress(op *operation) error {
 // buffers could get out of sync with its stage. It should
 // only be called from m.advanceToStage.
 func (m *message) decode(op *operation, saveBuffer bool) error {
+	switch {
+	case m.isRequest && op.clientReqNeedsPrep:
+		return op.clientPreparer.prepareUnmarshalledRequest(op, m.data.Bytes(), m.msg)
+	case !m.isRequest && op.serverRespNeedsPrep:
+		return op.serverPreparer.prepareUnmarshalledResponse(op, m.data.Bytes(), m.msg)
+	}
+
 	var codec Codec
 	if m.isRequest {
 		codec = op.client.codec
@@ -1130,17 +1315,32 @@ func (m *message) decode(op *operation, saveBuffer bool) error {
 // buffers could get out of sync with its stage. It should
 // only be called from m.advanceToStage.
 func (m *message) encode(op *operation) error {
-	var codec Codec
-	if m.isRequest {
-		codec = op.server.codec
-	} else {
-		codec = op.client.codec
+	buf := op.bufferPool.Get()
+	var data []byte
+	var err error
+
+	switch {
+	case m.isRequest && op.serverReqNeedsPrep:
+		data, err = op.serverPreparer.prepareMarshalledRequest(op, buf.Bytes(), m.msg, op.request.Header)
+	case !m.isRequest && op.clientRespNeedsPrep:
+		data, err = op.clientPreparer.prepareMarshalledResponse(op, buf.Bytes(), m.msg, op.writer.Header())
+	default:
+		var codec Codec
+		if m.isRequest {
+			codec = op.server.codec
+		} else {
+			codec = op.client.codec
+		}
+		data, err = codec.MarshalAppend(buf.Bytes(), m.msg)
 	}
 
-	buf := op.bufferPool.Get().Bytes()
-	buf, err := codec.MarshalAppend(buf, m.msg)
-	m.data = bytes.NewBuffer(buf)
-	return err
+	if err != nil {
+		op.bufferPool.Put(buf)
+		m.data = nil
+		return err
+	}
+	m.data = op.bufferPool.Wrap(data, buf)
+	return nil
 }
 
 func intersect(setA, setB []string) []string {

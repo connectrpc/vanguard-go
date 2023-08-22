@@ -246,12 +246,12 @@ func (c connectStreamClientProtocol) encodeEnd(codec Codec, end *responseEnd, wr
 	panic("implement me")
 }
 
-func (c connectStreamClientProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+func (c connectStreamClientProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectStreamClientProtocol) encodeEnvelope(e envelope) [5]byte {
+func (c connectStreamClientProtocol) encodeEnvelope(e envelope) envelopeBytes {
 	//TODO implement me
 	panic("implement me")
 }
@@ -286,12 +286,12 @@ func (c connectStreamServerProtocol) extractEndFromTrailers(o *operation, header
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) decodeEnvelope(bytes [5]byte) (envelope, error) {
+func (c connectStreamServerProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (c connectStreamServerProtocol) encodeEnvelope(e envelope) [5]byte {
+func (c connectStreamServerProtocol) encodeEnvelope(e envelope) envelopeBytes {
 	//TODO implement me
 	panic("implement me")
 }

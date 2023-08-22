@@ -16,6 +16,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const envelopeLen = 5
+
 // Protocol represents an on-the-wire protocol for RPCs.
 type Protocol int
 
@@ -196,8 +198,8 @@ type clientProtocolEndMustBeInHeaders interface {
 // by clientProtocolHandler and serverProtocolHandler instances
 // whose protocol uses an envelope around messages.
 type envelopedProtocolHandler interface {
-	decodeEnvelope([5]byte) (envelope, error)
-	encodeEnvelope(envelope) [5]byte
+	decodeEnvelope(envelopeBytes) (envelope, error)
+	encodeEnvelope(envelope) envelopeBytes
 }
 
 // serverEnvelopedProtocolHandler is an optional interface implemented
@@ -281,6 +283,9 @@ type serverBodyPreparer interface {
 	responseNeedsPrep(*operation) bool
 	prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error
 }
+
+// envelopeBytes is an array of bytes representing an encoded envelope.
+type envelopeBytes [envelopeLen]byte
 
 // envelope is an exploded representation of the 5-byte preamble that appears
 // on the wire for enveloped protocols. This form is protocol-agnostic.
