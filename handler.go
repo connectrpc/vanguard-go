@@ -137,8 +137,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	} else if _, supportsCodec := methodConf.codecNames[reqMeta.codec]; supportsCodec {
 		op.server.codec = op.client.codec
 	} else {
-		// TODO: use preferred codec from service registration instead of always using proto?
-		op.server.codec = h.codecs[codecKey{res: methodConf.resolver, name: CodecProto}]
+		op.server.codec = h.codecs[codecKey{res: methodConf.resolver, name: methodConf.preferredCodec}]
 	}
 
 	if reqMeta.compression != "" && !cannotDecompressRequest {

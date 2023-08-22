@@ -207,12 +207,21 @@ func TestMux_RPCxRPC(t *testing.T) {
 		"GetBook_gRPC-Web_proto_identity/gRPC-Web_proto_identity": {},
 		// transformation is working
 		"GetBook_gRPC_json_gzip/gRPC_proto_gzip":                 {},
+		"GetBook_gRPC_proto_gzip/gRPC_json_gzip":                 {},
 		"GetBook_gRPC-Web_json_gzip/gRPC_proto_gzip":             {},
+		"GetBook_gRPC-Web_proto_gzip/gRPC_json_gzip":             {},
 		"GetBook_gRPC_json_identity/gRPC_proto_identity":         {},
+		"GetBook_gRPC_proto_identity/gRPC_json_identity":         {},
 		"GetBook_gRPC-Web_json_identity/gRPC_proto_identity":     {},
+		"GetBook_gRPC-Web_proto_identity/gRPC_json_identity":     {},
 		"GetBook_gRPC_json_gzip/gRPC-Web_proto_gzip":             {},
+		"GetBook_gRPC_proto_gzip/gRPC-Web_json_gzip":             {},
 		"GetBook_gRPC_json_identity/gRPC-Web_proto_identity":     {},
+		"GetBook_gRPC_proto_identity/gRPC-Web_json_identity":     {},
+		"GetBook_gRPC-Web_json_gzip/gRPC-Web_proto_gzip":         {},
+		"GetBook_gRPC-Web_proto_gzip/gRPC-Web_json_gzip":         {},
 		"GetBook_gRPC-Web_json_identity/gRPC-Web_proto_identity": {},
+		"GetBook_gRPC-Web_proto_identity/gRPC-Web_json_identity": {},
 	}
 	for _, testCase := range testRequests {
 		testCase := testCase
