@@ -54,15 +54,15 @@ func (p *compressionPool) Name() string {
 	return p.name
 }
 
-func (p *compressionPool) compress(dest, src *bytes.Buffer) error {
+func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
 	if p == nil {
-		_, err := io.Copy(dest, src)
+		_, err := io.Copy(dst, src)
 		return err
 	}
 	comp := p.compressors.Get().(connect.Compressor) //nolint:forcetypeassert,errcheck
 	defer p.compressors.Put(comp)
 
-	comp.Reset(dest)
+	comp.Reset(dst)
 	_, err := src.WriteTo(comp)
 	if err != nil {
 		return err
@@ -70,9 +70,9 @@ func (p *compressionPool) compress(dest, src *bytes.Buffer) error {
 	return comp.Close()
 }
 
-func (p *compressionPool) decompress(dest, src *bytes.Buffer) error {
+func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
 	if p == nil {
-		_, err := io.Copy(dest, src)
+		_, err := io.Copy(dst, src)
 		return err
 	}
 	decomp := p.decompressors.Get().(connect.Decompressor) //nolint:forcetypeassert,errcheck
@@ -81,7 +81,7 @@ func (p *compressionPool) decompress(dest, src *bytes.Buffer) error {
 	if err := decomp.Reset(src); err != nil {
 		return err
 	}
-	if _, err := dest.ReadFrom(decomp); err != nil {
+	if _, err := dst.ReadFrom(decomp); err != nil {
 		return err
 	}
 	return decomp.Close()

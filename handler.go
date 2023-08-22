@@ -558,14 +558,18 @@ func (er envelopingReader) Close() error {
 // transformingReader transforms the data from the original request
 // into a new protocol form as the data is read. It must decompress
 // and deserialize each message and then re-serialize (and optionally
-// recompress) each message.
+// recompress) each message. Since the original incoming protocol may
+// have different envelope conventions than the outgoing protocol, it
+// also rewrites envelopes.
 type transformingReader struct {
 	op  *operation
 	msg *message
 	r   io.ReadCloser
 
-	err    error
-	buffer io.Reader
+	err       error
+	buffer    *bytes.Buffer
+	env       envelopeBytes
+	envRemain int
 }
 
 func (tr *transformingReader) Read(data []byte) (n int, err error) {
@@ -587,7 +591,20 @@ func (tr *transformingReader) Read(data []byte) (n int, err error) {
 		tr.err = err
 		return 0, err
 	}
-	return tr.buffer.Read(data)
+
+	if len(data) < tr.envRemain {
+		copy(data, tr.env[envelopeLen-tr.envRemain:])
+		tr.envRemain -= len(data)
+		return len(data), nil
+	}
+	var offset int
+	if tr.envRemain > 0 {
+		copy(data, tr.env[envelopeLen-tr.envRemain:])
+		offset = tr.envRemain
+		tr.envRemain = 0
+	}
+	n, err = tr.buffer.Read(data[offset:])
+	return offset + n, err
 }
 
 func (tr *transformingReader) Close() error {
@@ -600,18 +617,18 @@ func (tr *transformingReader) prepareMessage() error {
 	if err := tr.msg.advanceToStage(tr.op, stageSend); err != nil {
 		return err
 	}
-	buffer := tr.msg.sendBuffer()
+	tr.buffer = tr.msg.sendBuffer()
 	if tr.op.serverEnveloper == nil {
-		tr.buffer = buffer
+		tr.envRemain = 0
 		return nil
 	}
 	// Need to prefix the buffer with an envelope
 	env := envelope{
 		compressed: tr.msg.wasCompressed,
-		length:     uint32(buffer.Len()),
+		length:     uint32(tr.buffer.Len()),
 	}
-	envBytes := tr.op.serverEnveloper.encodeEnvelope(env)
-	tr.buffer = io.MultiReader(bytes.NewReader(envBytes[:]), tr.buffer)
+	tr.env = tr.op.serverEnveloper.encodeEnvelope(env)
+	tr.envRemain = envelopeLen
 	return nil
 }
 
@@ -824,7 +841,9 @@ func (ew envelopingWriter) Close() error {
 // transformingWriter transforms the data from the original response
 // into a new protocol form as the data is written. It must decompress
 // and deserialize each message and then re-serialize (and optionally
-// recompress) each message.
+// recompress) each message. Since the original incoming protocol may
+// have different envelope conventions than the outgoing protocol, it
+// also rewrites envelopes.
 type transformingWriter struct {
 	rw  *responseWriter
 	msg *message
@@ -942,7 +961,9 @@ func (tw *transformingWriter) flushMessage() error {
 			env.length = uint32(buffer.Len())
 		}
 		envBytes := enveloper.encodeEnvelope(env)
-		buffer.Write(envBytes[:])
+		if _, err := tw.w.Write(envBytes[:]); err != nil {
+			return err
+		}
 	}
 	if _, err := buffer.WriteTo(tw.w); err != nil {
 		return err
@@ -1318,7 +1339,7 @@ func (m *message) encode(op *operation) error {
 		m.data = nil
 		return err
 	}
-	m.data = bytes.NewBuffer(data)
+	m.data = op.bufferPool.Wrap(data, buf)
 	return nil
 }
 
