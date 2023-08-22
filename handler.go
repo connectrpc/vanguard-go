@@ -108,11 +108,11 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			cannotDecompressRequest = true
 		}
 	}
-	if newCodec := h.mux.codecImpls[reqMeta.codec]; newCodec == nil {
+	op.client.codec = h.codecs[codecKey{res: methodConf.resolver, name: reqMeta.codec}]
+	if op.client.codec == nil {
 		http.Error(writer, fmt.Sprintf("%q sub-format not supported", reqMeta.codec), http.StatusUnsupportedMediaType)
 		return
 	}
-	op.client.codec = h.codecs[codecKey{res: methodConf.resolver, name: reqMeta.codec}]
 
 	// Now we can determine the destination protocol details
 	if _, supportsProtocol := methodConf.protocols[clientProtoHandler.protocol()]; supportsProtocol {
@@ -137,7 +137,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	} else if _, supportsCodec := methodConf.codecNames[reqMeta.codec]; supportsCodec {
 		op.server.codec = op.client.codec
 	} else {
-		op.server.codec = h.mux.codecImpls[CodecProto](methodConf.resolver)
+		// TODO: use preferred codec from service registration instead of always using proto?
+		op.server.codec = h.codecs[codecKey{res: methodConf.resolver, name: CodecProto}]
 	}
 
 	if reqMeta.compression != "" && !cannotDecompressRequest {
@@ -435,8 +436,11 @@ func (op *operation) handle() {
 		op.request.Method = http.MethodPost
 	}
 	op.request.URL.ForceQuery = false
-	allowedResponseCompression := intersect(op.reqMeta.acceptCompression, op.canDecompress)
-	op.server.protocol.addProtocolRequestHeaders(op.reqMeta, op.writer.Header(), allowedResponseCompression)
+	svrReqMeta := op.reqMeta
+	svrReqMeta.codec = op.server.codec.Name()
+	svrReqMeta.compression = op.server.reqCompression.Name()
+	svrReqMeta.acceptCompression = intersect(op.reqMeta.acceptCompression, op.canDecompress)
+	op.server.protocol.addProtocolRequestHeaders(svrReqMeta, op.request.Header)
 
 	// Now we can define the transformed request body.
 	if skipBody {
@@ -497,6 +501,10 @@ func (op *operation) readRequestMessage(reader io.Reader, msg *message) error {
 		_, err = io.Copy(buffer, reader)
 	} else {
 		_, err = io.CopyN(buffer, reader, int64(msgLen))
+		if errors.Is(err, io.EOF) {
+			// EOF is a sentinel that means normal end of stream; replace it so callers know an error occurred
+			err = io.ErrUnexpectedEOF
+		}
 	}
 	if err != nil {
 		return err
@@ -603,7 +611,9 @@ func (tr *transformingReader) Read(data []byte) (n int, err error) {
 		offset = tr.envRemain
 		tr.envRemain = 0
 	}
-	n, err = tr.buffer.Read(data[offset:])
+	if len(data) > offset {
+		n, err = tr.buffer.Read(data[offset:])
+	}
 	return offset + n, err
 }
 
@@ -648,8 +658,10 @@ type responseWriter struct {
 	headersWritten bool
 	// have headers actually been flushed to delegate?
 	headersFlushed bool
-	respMeta       *responseMeta
-	err            error
+	// have we already written the end of the stream (error/trailers/etc)?
+	endWritten bool
+	respMeta   *responseMeta
+	err        error
 	// wraps op.writer; initialized after headers are written
 	w io.WriteCloser
 }
@@ -672,16 +684,17 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	if rw.headersWritten {
 		return
 	}
+	rw.headersWritten = true
 	rw.code = statusCode
 	respMeta, processBody, err := rw.op.server.protocol.extractProtocolResponseHeaders(statusCode, rw.Header())
 	if err != nil {
 		rw.reportError(err)
 		return
 	}
-	if rw.respMeta.compression == CompressionIdentity {
-		rw.respMeta.compression = "" // normalize to empty string
-	}
 	rw.respMeta = &respMeta
+	if respMeta.compression == CompressionIdentity {
+		respMeta.compression = "" // normalize to empty string
+	}
 	if respMeta.compression != "" {
 		var ok bool
 		rw.op.respCompression, ok = rw.op.muxConfig.compressionPools[respMeta.compression]
@@ -730,7 +743,6 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		respMsg.msg = messageType.New().Interface()
 	}
 
-	rw.respMeta = &respMeta
 	var endMustBeInHeaders bool
 	if mustBe, ok := rw.op.client.protocol.(clientProtocolEndMustBeInHeaders); ok {
 		endMustBeInHeaders = mustBe.endMustBeInHeaders()
@@ -770,6 +782,10 @@ func (rw *responseWriter) reportError(err error) {
 }
 
 func (rw *responseWriter) reportEnd(end *responseEnd) {
+	if rw.endWritten {
+		// ruh-roh... this should not happen
+		return
+	}
 	switch {
 	case rw.headersFlushed:
 		// write error to body or trailers
@@ -783,6 +799,7 @@ func (rw *responseWriter) reportEnd(end *responseEnd) {
 				hdrs[k] = v
 			}
 		}
+		rw.endWritten = true
 	case rw.respMeta != nil:
 		rw.respMeta.end = end
 		rw.flushHeaders()
@@ -799,12 +816,16 @@ func (rw *responseWriter) flushHeaders() {
 	if rw.headersFlushed {
 		return // already flushed
 	}
-	allowedRequestCompression := intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
-	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(*rw.respMeta, rw.Header(), allowedRequestCompression)
+	cliRespMeta := *rw.respMeta
+	cliRespMeta.codec = rw.op.client.codec.Name()
+	cliRespMeta.compression = rw.op.client.reqCompression.Name()
+	cliRespMeta.acceptCompression = intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
+	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, rw.Header())
 	rw.delegate.WriteHeader(statusCode)
 	if rw.respMeta.end != nil {
 		// response is done
 		rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
+		rw.endWritten = true
 		rw.err = context.Canceled
 	}
 	rw.headersFlushed = true
@@ -819,6 +840,16 @@ func (rw *responseWriter) close() {
 		_ = rw.w.Close()
 	}
 	rw.flushHeaders()
+	if rw.endWritten {
+		return // all done
+	}
+	end, err := rw.op.server.protocol.extractEndFromTrailers(rw.op, httpExtractTrailers(rw.Header()))
+	if err != nil {
+		end = responseEnd{
+			err: connect.NewError(connect.CodeInternal, err),
+		}
+	}
+	rw.reportEnd(&end)
 }
 
 // envelopingWriter will translate between envelope styles as data is
@@ -949,16 +980,16 @@ func (tw *transformingWriter) flushMessage() error {
 		return nil
 	}
 
+	// We've finished reading the message, so we can manually set the stage
+	tw.msg.stage = stageRead
 	if err := tw.msg.advanceToStage(tw.rw.op, stageSend); err != nil {
 		return err
 	}
 	buffer := tw.msg.sendBuffer()
 	if enveloper := tw.rw.op.clientEnveloper; enveloper != nil {
-		env := tw.latestEnvelope
-		if tw.rw.op.serverEnveloper == nil {
-			// we have to synthesize an envelope
-			env.compressed = true
-			env.length = uint32(buffer.Len())
+		env := envelope{
+			compressed: tw.msg.wasCompressed,
+			length:     uint32(buffer.Len()),
 		}
 		envBytes := enveloper.encodeEnvelope(env)
 		if _, err := tw.w.Write(envBytes[:]); err != nil {
@@ -1122,6 +1153,8 @@ func (m *message) reset(pool *bufferPool, isRequest, isCompressed bool) *bytes.B
 	}
 	if buffer1 == nil {
 		buffer1 = pool.Get()
+	} else {
+		buffer1.Reset()
 	}
 	if isCompressed {
 		m.compressed, m.data = buffer1, nil

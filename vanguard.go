@@ -342,7 +342,7 @@ func WithCompression(names ...string) ServiceOption {
 func WithNoCompression() ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
 		// a non-nil but empty set signals no compression
-		opts.codecNames = map[string]struct{}{}
+		opts.compressorNames = map[string]struct{}{}
 	})
 }
 

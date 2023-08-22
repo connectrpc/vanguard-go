@@ -70,7 +70,7 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	return reqMeta, nil
 }
 
-func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
+func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	//TODO implement me
 	panic("implement me")
 }
@@ -116,7 +116,7 @@ func (r restServerProtocol) protocol() Protocol {
 	return ProtocolREST
 }
 
-func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
+func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	//TODO implement me
 	panic("implement me")
 }

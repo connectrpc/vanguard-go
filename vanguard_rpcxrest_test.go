@@ -50,6 +50,11 @@ func TestMux_RPCxREST(t *testing.T) {
 			WithProtocols(ProtocolREST),
 			WithCodecs(codec.Name()),
 		}
+		if compression == CompressionIdentity {
+			opts = append(opts, WithNoCompression())
+		} else {
+			opts = append(opts, WithCompression(compression))
+		}
 		hdlr := interceptor.restUnaryHandler(codec, comp, decomp)
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
 

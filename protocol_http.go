@@ -244,3 +244,28 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	}
 	return path, query, nil
 }
+
+func httpExtractTrailers(headers http.Header) http.Header {
+	trailers := http.Header{}
+	var expectedTrailers []string
+	if len(headers.Values("Trailer")) > 0 {
+		expectedTrailers = strings.Split(headers.Get("Trailer"), ",")
+	}
+	expectedTrailerSet := make(map[string]struct{}, len(expectedTrailers))
+	for i := range expectedTrailers {
+		expectedTrailerSet[strings.TrimSpace(expectedTrailers[i])] = struct{}{}
+	}
+	for key, vals := range headers {
+		if strings.HasPrefix(key, http.TrailerPrefix) {
+			trailers[strings.TrimPrefix(key, http.TrailerPrefix)] = vals
+			delete(headers, key)
+			continue
+		}
+		if _, expected := expectedTrailerSet[key]; expected {
+			trailers[key] = vals
+			delete(headers, key)
+			continue
+		}
+	}
+	return trailers
+}
