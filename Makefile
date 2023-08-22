@@ -29,6 +29,7 @@ clean: ## Delete intermediate build artifacts
 .PHONY: test
 test: build ## Run unit tests
 	$(GO) test -vet=off -race -cover ./...
+	$(GO) test -run - -bench 'BufferPool' -benchmem -benchtime 5s
 
 .PHONY: build
 build: generate ## Build all packages
