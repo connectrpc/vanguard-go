@@ -159,21 +159,10 @@ func TestMux_RPCxRPC(t *testing.T) {
 		// Add more tests...
 	}
 
-	failingCases := map[string]struct{}{
-		"GetBook_gRPC_json_gzip/gRPC-Web_json_gzip":           {},
-		"GetBook_gRPC_json_gzip/gRPC-Web_json_identity":       {},
-		"GetBook_gRPC_proto_gzip/gRPC-Web_proto_gzip":         {},
-		"GetBook_gRPC_proto_gzip/gRPC-Web_proto_identity":     {},
-		"GetBook_gRPC-Web_json_gzip/gRPC-Web_json_identity":   {},
-		"GetBook_gRPC-Web_proto_gzip/gRPC-Web_proto_identity": {},
-	}
 	for _, testCase := range testRequests {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, shouldFail := failingCases[testCase.name]; shouldFail {
-				t.Skip()
-			}
 
 			interceptor.set(t, testCase.stream)
 			defer interceptor.del(t)

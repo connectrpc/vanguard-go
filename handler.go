@@ -583,10 +583,11 @@ func (er *envelopingReader) Read(data []byte) (n int, err error) {
 	}
 	if er.current != nil {
 		n, err := er.current.Read(data)
-		if n > 0 {
-			return n, err
+		isEOF := errors.Is(err, io.EOF)
+		if n > 0 && (err == nil || isEOF) {
+			return n, nil
 		}
-		if !errors.Is(err, io.EOF) {
+		if err != nil && !isEOF {
 			er.err = err
 			return n, err
 		}
@@ -1165,6 +1166,7 @@ func (ew *envelopingWriter) handleTrailer() error {
 		if err := ew.rw.op.respCompression.decompress(uncompressed, data); err != nil {
 			return err
 		}
+		data = uncompressed
 	}
 	end, err := ew.rw.op.serverEnveloper.decodeEndFromMessage(ew.rw.op.server.codec, data)
 	if err != nil {
