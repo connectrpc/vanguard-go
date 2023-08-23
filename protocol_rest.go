@@ -6,6 +6,7 @@
 package vanguard
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -90,6 +91,7 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	if len(meta.acceptCompression) != 0 {
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
+	fmt.Println("restClientProtocol.addProtocolResponseHeaders", meta.end, isErr)
 	if isErr {
 		return meta.end.httpCode
 	}
@@ -97,6 +99,7 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 }
 
 func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+	fmt.Println("restClientProtocol.encodeEnd", end.err)
 	cerr := end.err
 	if cerr == nil {
 		return nil
