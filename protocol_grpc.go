@@ -493,7 +493,7 @@ func grpcErrorFromTrailer(tlr http.Header) *connect.Error {
 	if codeHeader == "" {
 		return connect.NewError(
 			connect.CodeInternal,
-			errProtocol("missing trailer header %q"),
+			errProtocol("missing trailer header %q", "Grpc-Status"),
 		)
 	}
 	if codeHeader == "0" {

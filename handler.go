@@ -476,7 +476,7 @@ func (op *operation) earlyError(_ error) {
 
 func (op *operation) readRequestMessage(reader io.Reader, msg *message) error {
 	msgLen := -1
-	compressed := true
+	compressed := op.client.reqCompression != nil
 	if op.clientEnveloper != nil {
 		var envBuf envelopeBytes
 		_, err := io.ReadFull(reader, envBuf[:])
@@ -819,11 +819,17 @@ func (rw *responseWriter) flushHeaders() {
 	cliRespMeta.codec = rw.op.client.codec.Name()
 	cliRespMeta.compression = rw.op.client.reqCompression.Name()
 	cliRespMeta.acceptCompression = intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
-	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, rw.Header())
+	hdr := rw.Header()
+	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, hdr)
 	rw.delegate.WriteHeader(statusCode)
 	if rw.respMeta.end != nil {
 		// response is done
-		rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
+		trailer := rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
+		for key, vals := range trailer {
+			for _, val := range vals {
+				hdr.Add(key, val)
+			}
+		}
 		rw.endWritten = true
 		rw.err = context.Canceled
 	}
@@ -1083,6 +1089,21 @@ const (
 	// whether message data was compressed or not).
 	stageSend
 )
+
+func (s messageStage) String() string {
+	switch s {
+	case stageEmpty:
+		return "empty"
+	case stageRead:
+		return "read"
+	case stageDecoded:
+		return "decoded"
+	case stageSend:
+		return "send"
+	default:
+		return "unknown"
+	}
+}
 
 // message represents a single message in an RPC stream. It can be re-used in a stream,
 // so we only allocate one and then re-use it for subsequent messages (if stream has

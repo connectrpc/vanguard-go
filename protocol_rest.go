@@ -81,21 +81,33 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 }
 
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
+	isErr := meta.end != nil && meta.end.err != nil
 	// TODO: support other codecs.
 	headers["Content-Type"] = []string{"application/" + meta.codec}
-	if meta.compression != "" {
+	if !isErr && meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
 	}
 	if len(meta.acceptCompression) != 0 {
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
+	if isErr {
+		return meta.end.httpCode
+	}
 	return http.StatusOK
 }
 
 func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	// TODO: encode error here?
-	// httpWriteError(writer, err)
-	return nil // no trailers
+	cerr := end.err
+	if cerr == nil {
+		return nil
+	}
+	stat := grpcStatusFromError(cerr)
+	bin, err := codec.MarshalAppend(nil, stat)
+	if err != nil {
+		bin = []byte(`{"code": 12, "message":"` + err.Error() + `"}`)
+	}
+	_, _ = writer.Write(bin)
+	return nil
 }
 
 func (r restClientProtocol) requestNeedsPrep(o *operation) bool {
@@ -109,8 +121,10 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	for _, field := range op.restTarget.requestBodyFields {
 		msg = msg.Mutable(field).Message()
 	}
-	if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
-		return err
+	if len(src) > 0 {
+		if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
+			return err
+		}
 	}
 	msg = target.ProtoReflect()
 	for i := len(op.restVars) - 1; i >= 0; i-- {

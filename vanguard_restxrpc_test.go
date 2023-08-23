@@ -30,7 +30,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 	t.Parallel()
 
 	services := []protoreflect.FullName{
-		"buf.vanguard.test.v1.LibraryService",
+		testv1connect.LibraryServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -52,33 +52,6 @@ func TestMux_RESTxRPC(t *testing.T) {
 		connect.WithInterceptors(&interceptor),
 	))
 
-	// protocolMiddelware asserts the request headers for the given protocol.
-	protocolMiddelware := func(
-		protocol Protocol, codec string, compression string,
-		next http.Handler,
-	) http.HandlerFunc {
-		return func(rsp http.ResponseWriter, req *http.Request) {
-			var wantHdr map[string]string
-			switch protocol {
-			case ProtocolGRPC:
-				wantHdr = map[string]string{
-					"Content-Type":  fmt.Sprintf("application/grpc+%s", codec),
-					"Grpc-Encoding": compression,
-				}
-			default:
-				http.Error(rsp, "unknown protocol", http.StatusInternalServerError)
-				return
-			}
-			for key, val := range wantHdr {
-				if req.Header.Get(key) != val {
-					http.Error(rsp, fmt.Sprintf("missing header %s: %s", key, val), http.StatusInternalServerError)
-					return
-				}
-			}
-			next.ServeHTTP(rsp, req)
-		}
-	}
-
 	type testMux struct {
 		name string
 		mux  *Mux
@@ -88,12 +61,12 @@ func TestMux_RESTxRPC(t *testing.T) {
 			WithProtocols(protocol),
 			WithCodecs(codec),
 		}
-		if compression == CompressionIdentity {
-			opts = append(opts, WithNoCompression())
-		} else {
+		if compression != CompressionIdentity {
 			opts = append(opts, WithCompression(compression))
+		} else {
+			opts = append(opts, WithNoCompression())
 		}
-		hdlr := protocolMiddelware(protocol, codec, compression, serveMux)
+		hdlr := protocolAssertMiddleware(protocol, codec, compression, serveMux)
 		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
 
 		mux := &Mux{}
@@ -156,31 +129,6 @@ func TestMux_RESTxRPC(t *testing.T) {
 		body proto.Message
 		meta http.Header
 	}
-	checkResponse := func(t *testing.T, rsp *httptest.ResponseRecorder, want output, codec Codec, decomp connect.Decompressor) {
-		t.Helper()
-
-		if !assert.Equal(t, want.code, rsp.Code, "status code") {
-			return
-		}
-		assert.Equal(t, want.meta, rsp.Header(), "headers")
-		if want.body == nil {
-			assert.Empty(t, rsp.Body.String(), "body")
-			return
-		}
-		require.NotEmpty(t, rsp.Body.String(), "body")
-		body := rsp.Body
-		if decomp != nil && rsp.Header().Get("Content-Encoding") != "" {
-			out := &bytes.Buffer{}
-			require.NoError(t, decomp.Reset(body))
-			_, err := io.Copy(out, body)
-			require.NoError(t, err)
-			require.NoError(t, decomp.Close())
-			body = out
-		}
-		got := want.body.ProtoReflect().New().Interface()
-		require.NoError(t, codec.Unmarshal(body.Bytes(), got), "unmarshal body")
-		assert.Empty(t, cmp.Diff(want.body, got, protocmp.Transform()))
-	}
 	type testRequest struct {
 		name   string
 		input  input
@@ -206,7 +154,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			},
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: "/vanguard.library.v1.LibraryService/GetBook",
+					method: testv1connect.LibraryServiceGetBookProcedure,
 					msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 				}},
 				{out: &testMsgOut{
@@ -297,12 +245,21 @@ func TestMux_RESTxRPC(t *testing.T) {
 			}
 		}
 	}
+	passingCases := map[string]struct{}{
+		"GetBook_identity/gRPC_proto_identity": {},
+		"GetBook_gzip/gRPC_proto_identity":     {},
+		"GetBook_identity/gRPC_proto_gzip":     {},
+		"GetBook_gzip/gRPC_proto_gzip":         {},
+	}
+	_ = passingCases
 	for _, testCase := range testCases {
 		testCase := testCase
 		codec := DefaultJSONCodec(protoregistry.GlobalTypes)
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			t.Skip("TODO: implement")
+			if _, shouldPass := passingCases[testCase.name]; !shouldPass {
+				t.Skip()
+			}
 
 			interceptor.set(t, testCase.req.stream)
 			defer interceptor.del(t)
@@ -311,10 +268,40 @@ func TestMux_RESTxRPC(t *testing.T) {
 			req.Header.Set("Test", t.Name()) // for interceptor
 			t.Log(req.Method, req.URL.String())
 
+			// debug, _ := httputil.DumpRequest(req, true)
+			// t.Log("req:", string(debug))
+
 			rsp := httptest.NewRecorder()
 			testCase.mux.mux.AsHandler().ServeHTTP(rsp, req)
 
-			checkResponse(t, rsp, testCase.req.output, codec, testCase.decompressor)
+			// debug, _ = httputil.DumpResponse(rsp.Result(), true)
+			// t.Log("rsp:", string(debug))
+
+			// Check response
+			want := testCase.req.output
+			decomp := testCase.decompressor
+
+			if !assert.Equal(t, want.code, rsp.Code, "status code") {
+				return
+			}
+			assert.Subset(t, rsp.Header(), want.meta, "headers")
+			if want.body == nil {
+				assert.Empty(t, rsp.Body.String(), "body")
+				return
+			}
+			require.NotEmpty(t, rsp.Body.String(), "body")
+			body := rsp.Body
+			if decomp != nil && rsp.Header().Get("Content-Encoding") != "" {
+				out := &bytes.Buffer{}
+				require.NoError(t, decomp.Reset(body))
+				_, err := io.Copy(out, body)
+				require.NoError(t, err)
+				require.NoError(t, decomp.Close())
+				body = out
+			}
+			got := want.body.ProtoReflect().New().Interface()
+			require.NoError(t, codec.Unmarshal(body.Bytes(), got), "unmarshal body")
+			assert.Empty(t, cmp.Diff(want.body, got, protocmp.Transform()))
 		})
 	}
 }
