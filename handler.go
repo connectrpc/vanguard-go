@@ -834,15 +834,14 @@ func (rw *responseWriter) close() {
 	if rw.w != nil {
 		_ = rw.w.Close()
 	}
-	rw.flushHeaders()
 	if rw.endWritten {
 		return // all done
 	}
-	end, err := rw.op.server.protocol.extractEndFromTrailers(rw.op, httpExtractTrailers(rw.Header()))
+	trailer := httpExtractTrailers(rw.Header())
+	end, err := rw.op.server.protocol.extractEndFromTrailers(rw.op, trailer)
 	if err != nil {
-		end = responseEnd{
-			err: connect.NewError(connect.CodeInternal, err),
-		}
+		rw.reportError(err)
+		return
 	}
 	rw.reportEnd(&end)
 }

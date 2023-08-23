@@ -91,7 +91,7 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
 	if isErr {
-		return meta.end.httpCode
+		return httpStatusCodeFromRPC(meta.end.err.Code())
 	}
 	return http.StatusOK
 }

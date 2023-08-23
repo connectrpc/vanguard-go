@@ -193,7 +193,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		stream: testStream{
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: "/vanguard.library.v1.LibraryService/GetBook",
+					method: testv1connect.LibraryServiceGetBookProcedure,
 					msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 				}},
 				{out: &testMsgOut{
@@ -250,6 +250,11 @@ func TestMux_RESTxRPC(t *testing.T) {
 		"GetBook_gzip/gRPC_proto_identity":     {},
 		"GetBook_identity/gRPC_proto_gzip":     {},
 		"GetBook_gzip/gRPC_proto_gzip":         {},
+
+		// "GetBook-Error_identity/gRPC_json_gzip":      {},
+		// "GetBook-Error_identity/gRPC_json_identity":  {},
+		"GetBook-Error_identity/gRPC_proto_gzip":     {},
+		"GetBook-Error_identity/gRPC_proto_identity": {},
 	}
 	_ = passingCases
 	for _, testCase := range testCases {
