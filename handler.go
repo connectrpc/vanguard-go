@@ -835,7 +835,6 @@ func (rw *responseWriter) close() {
 		_ = rw.w.Close()
 	}
 	if rw.endWritten {
-		rw.flushHeaders()
 		return // all done
 	}
 	trailer := httpExtractTrailers(rw.Header())
