@@ -2,7 +2,6 @@
 //
 // All rights reserved.
 
-//nolint:forbidigo,revive,gocritic // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
@@ -27,7 +26,7 @@ type handler struct {
 	canDecompress []string
 }
 
-func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) { //nolint:gocyclo
 	// Identify the protocol.
 	clientProtoHandler, originalContentType, queryVars := classifyRequest(request)
 	if clientProtoHandler == nil {
@@ -582,14 +581,14 @@ func (er *envelopingReader) Read(data []byte) (n int, err error) {
 		return 0, er.err
 	}
 	if er.current != nil {
-		n, err := er.current.Read(data)
+		bytesRead, err := er.current.Read(data)
 		isEOF := errors.Is(err, io.EOF)
-		if n > 0 && (err == nil || isEOF) {
-			return n, nil
+		if bytesRead > 0 && (err == nil || isEOF) {
+			return bytesRead, nil
 		}
 		if err != nil && !isEOF {
 			er.err = err
-			return n, err
+			return bytesRead, err
 		}
 		// otherwise EOF, fall through
 	}
@@ -632,7 +631,12 @@ func (er *envelopingReader) Close() error {
 func (er *envelopingReader) prepareNext() error {
 	var env envelope
 	er.current = er.r
-	if er.op.clientEnveloper == nil {
+	switch {
+	case er.op.clientEnveloper == nil && er.op.serverEnveloper == nil:
+		// no envelopes to transform, just pass the body through w/ no change
+		er.envRemain = 0
+		return nil
+	case er.op.clientEnveloper == nil:
 		if er.op.serverEnveloper == nil {
 			// no envelopes to transform, just pass the body through w/ no change
 			er.envRemain = 0
@@ -653,7 +657,7 @@ func (er *envelopingReader) prepareNext() error {
 			er.current = buf
 			env.length = uint32(buf.Len())
 		}
-	} else {
+	default: // clientEnveloper != nil
 		var envBytes envelopeBytes
 		_, err := io.ReadFull(er.r, envBytes[:])
 		if err != nil {
@@ -665,6 +669,7 @@ func (er *envelopingReader) prepareNext() error {
 		}
 		er.current = io.LimitReader(er.r, int64(env.length))
 	}
+
 	if er.op.serverEnveloper == nil {
 		er.envRemain = 0
 	} else {
@@ -1021,7 +1026,7 @@ func (ew *envelopingWriter) Write(data []byte) (int, error) {
 			ew.err = err
 			return written, err
 		}
-		if ew.writingEnvelope {
+		if ew.writingEnvelope { //nolint:nestif
 			ew.writingEnvelope = false
 			env, err := ew.rw.op.serverEnveloper.decodeEnvelope(ew.env)
 			if err != nil {
@@ -1151,7 +1156,6 @@ func (ew *envelopingWriter) maybeInit() {
 	}
 	ew.current = ew.w
 	ew.remainingBytes = envelopeLen
-	return
 }
 
 func (ew *envelopingWriter) handleTrailer() error {
