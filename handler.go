@@ -790,13 +790,7 @@ func (rw *responseWriter) reportEnd(end *responseEnd) {
 		// write error to body or trailers
 		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
 		if len(trailers) > 0 {
-			hdrs := rw.Header()
-			for k, v := range trailers {
-				if !strings.HasPrefix(k, http.TrailerPrefix) {
-					k = http.TrailerPrefix + k
-				}
-				hdrs[k] = v
-			}
+			httpMergeTrailers(rw.Header(), trailers)
 		}
 		rw.endWritten = true
 	case rw.respMeta != nil:
@@ -824,12 +818,8 @@ func (rw *responseWriter) flushHeaders() {
 	rw.delegate.WriteHeader(statusCode)
 	if rw.respMeta.end != nil {
 		// response is done
-		trailer := rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
-		for key, vals := range trailer {
-			for _, val := range vals {
-				hdr.Add(key, val)
-			}
-		}
+		trl := rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
+		httpMergeTrailers(hdr, trl)
 		rw.endWritten = true
 		rw.err = context.Canceled
 	}
