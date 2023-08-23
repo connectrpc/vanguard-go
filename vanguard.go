@@ -165,6 +165,13 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 			return fmt.Errorf("codec %s is not known; use config.AddCodec to add known codecs first", codecName)
 		}
 	}
+	if svcOpts.preferredCodec == "" {
+		if len(m.Codecs) > 0 {
+			svcOpts.preferredCodec = m.Codecs[0]
+		} else {
+			svcOpts.preferredCodec = CodecProto
+		}
+	}
 	// empty is allowed here: non-nil but empty means do not send compressed data to handler
 	svcOpts.compressorNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
 	for compressorName := range svcOpts.compressorNames {
@@ -235,6 +242,7 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 		resolver:        opts.resolver,
 		protocols:       opts.protocols,
 		codecNames:      opts.codecNames,
+		preferredCodec:  opts.preferredCodec,
 		compressorNames: opts.compressorNames,
 	}
 	m.methods[methodPath] = methodConf
@@ -310,6 +318,11 @@ func WithCodecs(names ...string) ServiceOption {
 		}
 		for _, n := range names {
 			opts.codecNames[n] = struct{}{}
+		}
+		if len(names) > 0 {
+			opts.preferredCodec = names[0]
+		} else {
+			opts.preferredCodec = ""
 		}
 	})
 }
@@ -387,6 +400,7 @@ type serviceOptions struct {
 	resolver                    TypeResolver
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
+	preferredCodec              string
 }
 
 type methodConfig struct {
@@ -396,6 +410,7 @@ type methodConfig struct {
 	resolver                    TypeResolver
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
+	preferredCodec              string
 }
 
 // computeSet returns a resolved set of values of type T, preferring the given values if
