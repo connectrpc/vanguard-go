@@ -155,7 +155,9 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if reqMeta.compression != "" && !cannotDecompressRequest {
 		if _, supportsCompression := methodConf.compressorNames[reqMeta.compression]; supportsCompression {
 			op.server.reqCompression = op.client.reqCompression
-		} // else: no compression
+		}
+		// else: we'll just decompress and not recompress
+		// TODO: should we instead pick a supported compression scheme (if there is one)?
 	}
 
 	// Now we know enough to handle the request.
@@ -742,7 +744,7 @@ func (tr *transformingReader) prepareMessage() error {
 	}
 	// Need to prefix the buffer with an envelope
 	env := envelope{
-		compressed: tr.msg.wasCompressed,
+		compressed: tr.msg.wasCompressed && tr.op.server.reqCompression != nil,
 		length:     uint32(tr.buffer.Len()),
 	}
 	tr.env = tr.op.serverEnveloper.encodeEnvelope(env)
@@ -1002,6 +1004,7 @@ func (ew *envelopingWriter) Write(data []byte) (int, error) {
 		if len(data) < ew.remainingBytes {
 			// not enough data to trigger next action; ingest data and return
 			n, err := ew.writeBytes(data)
+			ew.remainingBytes -= n
 			written += n
 			if err != nil {
 				ew.err = err
@@ -1011,11 +1014,12 @@ func (ew *envelopingWriter) Write(data []byte) (int, error) {
 		// ingest remaining needed and trigger next action
 		n, err := ew.writeBytes(data[:ew.remainingBytes])
 		written += n
+		data = data[ew.remainingBytes:]
+		ew.remainingBytes -= n
 		if err != nil {
 			ew.err = err
 			return written, err
 		}
-		data = data[ew.remainingBytes:]
 		if ew.writingEnvelope {
 			ew.writingEnvelope = false
 			env, err := ew.rw.op.serverEnveloper.decodeEnvelope(ew.env)
@@ -1046,12 +1050,6 @@ func (ew *envelopingWriter) Write(data []byte) (int, error) {
 			continue
 		}
 
-		n, err = ew.current.Write(data[:ew.remainingBytes])
-		written += n
-		if err != nil {
-			ew.err = err
-			return written, err
-		}
 		if ew.currentIsTrailer {
 			err := ew.handleTrailer()
 			if err != nil {
@@ -1096,7 +1094,12 @@ func (ew *envelopingWriter) Close() error {
 			return err
 		}
 	}
-	if ew.remainingBytes > 0 {
+	var normalEOF bool
+	if ew.writingEnvelope && ew.remainingBytes == envelopeLen {
+		// We were looking for envelope of next message, but no next message in the stream
+		normalEOF = true
+	}
+	if ew.remainingBytes > 0 && !normalEOF {
 		// Unfinished body!
 		if ew.writingEnvelope {
 			ew.rw.reportError(fmt.Errorf("handler only wrote %d out of %d bytes of message envelope", envelopeLen-ew.remainingBytes, envelopeLen))

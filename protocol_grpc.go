@@ -67,6 +67,7 @@ func (g grpcClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType
 }
 
 func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
+	// TODO: if headers has "Te: trailers", should we remove it?
 	return grpcExtractRequestMeta("application/grpc", "application/grpc+", headers)
 }
 
@@ -109,6 +110,7 @@ func (g grpcServerProtocol) protocol() Protocol {
 
 func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	grpcAddRequestMeta("application/grpc+", meta, headers)
+	headers.Set("Te", "trailers")
 }
 
 func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
