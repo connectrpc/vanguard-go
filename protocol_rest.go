@@ -2,12 +2,15 @@
 //
 // All rights reserved.
 
-//nolint:forbidigo,revive,gocritic // this is temporary, will be removed when implementation is complete
+//nolint:revive // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
@@ -67,37 +70,93 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	}
 	headers.Del("Content-Type")
 
+	if timeoutStr := headers.Get("X-Server-Timeout"); timeoutStr != "" {
+		timeout, err := strconv.ParseFloat(timeoutStr, 64)
+		if err != nil {
+			return requestMeta{}, err
+		}
+		reqMeta.timeout = time.Duration(timeout * float64(time.Second))
+	}
 	return reqMeta, nil
 }
 
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	//TODO implement me
-	panic("implement me")
+	isErr := meta.end != nil && meta.end.err != nil
+	// TODO: support other codecs.
+	headers["Content-Type"] = []string{"application/" + meta.codec}
+	if !isErr && meta.compression != "" {
+		headers["Content-Encoding"] = []string{meta.compression}
+	}
+	if len(meta.acceptCompression) != 0 {
+		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
+	}
+	if isErr {
+		return meta.end.httpCode
+	}
+	return http.StatusOK
 }
 
 func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	//TODO implement me
-	panic("implement me")
+	cerr := end.err
+	if cerr == nil {
+		return nil
+	}
+	stat := grpcStatusFromError(cerr)
+	bin, err := codec.MarshalAppend(nil, stat)
+	if err != nil {
+		bin = []byte(`{"code": 12, "message":"` + err.Error() + `"}`)
+	}
+	_, _ = writer.Write(bin)
+	return nil
 }
 
 func (r restClientProtocol) requestNeedsPrep(o *operation) bool {
-	//TODO implement me
-	panic("implement me")
+	return len(o.restTarget.vars) != 0 ||
+		len(o.request.URL.Query()) != 0 ||
+		o.restTarget.requestBodyFields != nil
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	//TODO implement me
-	panic("implement me")
+	msg := target.ProtoReflect()
+	for _, field := range op.restTarget.requestBodyFields {
+		msg = msg.Mutable(field).Message()
+	}
+	if len(src) > 0 {
+		if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
+			return err
+		}
+	}
+	msg = target.ProtoReflect()
+	for i := len(op.restVars) - 1; i >= 0; i-- {
+		variable := op.restVars[i]
+		if err := setParameter(msg, variable.fields, variable.value); err != nil {
+			return err
+		}
+	}
+	for fieldPath, values := range op.queryValues() {
+		fields, err := resolvePathToDescriptors(msg.Descriptor(), fieldPath)
+		if err != nil {
+			return err
+		}
+		for _, value := range values {
+			if err := setParameter(msg, fields, value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r restClientProtocol) responseNeedsPrep(o *operation) bool {
-	//TODO implement me
-	panic("implement me")
+	return len(o.restTarget.responseBodyFields) != 0
 }
 
 func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
+	msg := src.ProtoReflect()
+	for _, field := range op.restTarget.responseBodyFields {
+		msg = msg.Get(field).Message()
+	}
+	return op.client.codec.MarshalAppend(base, msg.Interface())
 }
 
 func (r restClientProtocol) String() string {
@@ -117,48 +176,89 @@ func (r restServerProtocol) protocol() Protocol {
 }
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	//TODO implement me
-	panic("implement me")
+	// TODO: support other codecs.
+	headers["Content-Type"] = []string{"application/" + meta.codec}
+	if meta.compression != "" {
+		headers["Content-Encoding"] = []string{meta.compression}
+	}
+	if len(meta.acceptCompression) != 0 {
+		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
+	}
+	if meta.timeout != 0 {
+		// Encode timeout as a float in seconds.
+		value := strconv.FormatFloat(meta.timeout.Seconds(), 'E', -1, 64)
+		headers["X-Server-Timeout"] = []string{value}
+	}
 }
 
 func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
-	//TODO implement me
-	panic("implement me")
+	codecName := strings.TrimPrefix(headers.Get("Content-Type"), "application/")
+	if codecName == "" {
+		codecName = "json"
+	}
+	compressionName := headers.Get("Content-Encoding")
+
+	return responseMeta{
+			end:         &responseEnd{},
+			codec:       codecName,
+			compression: compressionName,
+		}, func(_ Codec, src io.Reader, end *responseEnd) {
+			if err := httpErrorFromResponse(src); err != nil {
+				end.err = err
+				end.httpCode = httpStatusCodeFromRPC(err.Code())
+			}
+		}, nil
 }
 
 func (r restServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
-	//TODO implement me
-	panic("implement me")
+	return responseEnd{}, nil
 }
 
 func (r restServerProtocol) requestNeedsPrep(o *operation) bool {
-	//TODO implement me
-	panic("implement me")
+	return len(o.restTarget.vars) != 0 ||
+		len(o.request.URL.Query()) != 0 ||
+		o.restTarget.requestBodyFields != nil
 }
 
 func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
+	msg := src.ProtoReflect()
+	for i := len(op.restVars) - 1; i >= 0; i-- {
+		variable := op.restVars[i]
+		if err := setParameter(msg, variable.fields, variable.value); err != nil {
+			return nil, err
+		}
+	}
+	for _, field := range op.restTarget.requestBodyFields {
+		msg = msg.Get(field).Message()
+	}
+	return op.server.codec.MarshalAppend(base, msg.Interface())
 }
 
 func (r restServerProtocol) responseNeedsPrep(o *operation) bool {
-	//TODO implement me
-	panic("implement me")
+	return len(o.restTarget.responseBodyFieldPath) != 0
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
-	//TODO implement me
-	panic("implement me")
+	msg := target.ProtoReflect()
+	for _, field := range op.restTarget.responseBodyFields {
+		msg = msg.Mutable(field).Message()
+	}
+	return op.server.codec.Unmarshal(src, msg.Interface())
 }
 
 func (r restServerProtocol) requiresMessageToProvideRequestLine(o *operation) bool {
-	//TODO implement me
-	panic("implement me")
+	return true
 }
 
 func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
-	//TODO implement me
-	panic("implement me")
+	path, query, err := httpEncodePathValues(req.ProtoReflect(), op.restTarget)
+	if err != nil {
+		return "", "", "", false, err
+	}
+	urlPath = path
+	queryParams = query.Encode()
+	includeBody = op.restTarget.requestBodyFields != nil // can be len(0) if body is '*'
+	return urlPath, queryParams, op.restTarget.method, includeBody, nil
 }
 
 func (r restServerProtocol) String() string {

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -50,65 +49,6 @@ func TestMux_RPCxRPC(t *testing.T) {
 		connect.WithInterceptors(&interceptor),
 	))
 
-	// protocolMiddleware asserts the request headers for the given protocol.
-	protocolMiddleware := func(
-		protocol Protocol, codec string, compression string,
-		next http.Handler,
-	) http.HandlerFunc {
-		var allowedCompression []string
-		if compression != "" && compression != CompressionIdentity {
-			// a server expecting gzip compression also allows identity/uncompressed
-			allowedCompression = []string{compression, CompressionIdentity, ""}
-		} else {
-			allowedCompression = []string{CompressionIdentity, ""}
-		}
-		return func(rsp http.ResponseWriter, req *http.Request) {
-			var wantHdr map[string][]string
-			switch protocol {
-			case ProtocolGRPC:
-				wantHdr = map[string][]string{
-					"Content-Type":  {fmt.Sprintf("application/grpc+%s", codec)},
-					"Grpc-Encoding": allowedCompression,
-				}
-			case ProtocolGRPCWeb:
-				wantHdr = map[string][]string{
-					"Content-Type":  {fmt.Sprintf("application/grpc-web+%s", codec)},
-					"Grpc-Encoding": allowedCompression,
-				}
-			case ProtocolConnect:
-				if strings.HasPrefix(req.Header.Get("Content-Type"), "application/connect") {
-					wantHdr = map[string][]string{
-						"Content-Type":             {fmt.Sprintf("application/connect+%s", codec)},
-						"Connect-Content-Encoding": allowedCompression,
-					}
-				} else {
-					wantHdr = map[string][]string{
-						"Content-Type":     {fmt.Sprintf("application/%s", codec)},
-						"Content-Encoding": allowedCompression,
-					}
-				}
-			default:
-				http.Error(rsp, "unknown protocol", http.StatusInternalServerError)
-				return
-			}
-			for key, vals := range wantHdr {
-				var found bool
-				gotHdr := req.Header.Get(key)
-				for _, val := range vals {
-					if gotHdr == val {
-						found = true
-						break
-					}
-				}
-				if !found {
-					http.Error(rsp, fmt.Sprintf("header %s is %q; should be one of [%v]", key, gotHdr, vals), http.StatusInternalServerError)
-					return
-				}
-			}
-			next.ServeHTTP(rsp, req)
-		}
-	}
-
 	makeServer := func(protocol Protocol, codec, compression string) testServer {
 		opts := []ServiceOption{
 			WithProtocols(protocol),
@@ -119,7 +59,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 		} else {
 			opts = append(opts, WithCompression(compression))
 		}
-		hdlr := protocolMiddleware(protocol, codec, compression, serveMux)
+		hdlr := protocolAssertMiddleware(protocol, codec, compression, serveMux)
 		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
 
 		mux := &Mux{}

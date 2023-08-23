@@ -269,3 +269,14 @@ func httpExtractTrailers(headers http.Header) http.Header {
 	}
 	return trailers
 }
+
+func httpMergeTrailers(header http.Header, trailer http.Header) {
+	for key, vals := range trailer {
+		if !strings.HasPrefix(key, http.TrailerPrefix) {
+			key = http.TrailerPrefix + key
+		}
+		for _, val := range vals {
+			header.Add(key, val)
+		}
+	}
+}
