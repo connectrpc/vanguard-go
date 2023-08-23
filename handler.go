@@ -838,7 +838,8 @@ func (rw *responseWriter) close() {
 		rw.flushHeaders()
 		return // all done
 	}
-	end, err := rw.op.server.protocol.extractEndFromTrailers(rw.op, rw.Header())
+	trailer := httpExtractTrailers(rw.Header())
+	end, err := rw.op.server.protocol.extractEndFromTrailers(rw.op, trailer)
 	if err != nil {
 		rw.reportError(err)
 		return
