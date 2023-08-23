@@ -16,6 +16,8 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 func TestGRPCErrorWriter(t *testing.T) {
@@ -24,15 +26,30 @@ func TestGRPCErrorWriter(t *testing.T) {
 	err := fmt.Errorf("test error: %s", "Hello, 世界")
 	cerr := connect.NewWireError(connect.CodeUnauthenticated, err)
 	rec := httptest.NewRecorder()
-	grpcWriteError(rec, cerr)
+	grpcWriteEndToTrailers(&responseEnd{err: cerr}, rec.Header())
 
-	assert.Equal(t, "identity", rec.Header().Get("Grpc-Encoding"))
 	assert.Equal(t, "16", rec.Header().Get("Grpc-Status"))
 	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
-	assert.Equal(t, "CBASGXRlc3QgZXJyb3I6IEhlbGxvLCDkuJbnlYw", rec.Header().Get("Grpc-Status-Details-Bin"))
+	// if error has no details, no need to generate this response trailer
+	assert.Equal(t, "", rec.Header().Get("Grpc-Status-Details-Bin"))
 	assert.Len(t, rec.Body.Bytes(), 0)
 
 	got := grpcErrorFromTrailer(rec.Header())
+	assert.Equal(t, cerr, got)
+
+	// Now again, but this time an error with details
+	errDetail, err := connect.NewErrorDetail(&wrapperspb.StringValue{Value: "foo"})
+	require.NoError(t, err)
+	cerr.AddDetail(errDetail)
+	rec = httptest.NewRecorder()
+	grpcWriteEndToTrailers(&responseEnd{err: cerr}, rec.Header())
+
+	assert.Equal(t, "16", rec.Header().Get("Grpc-Status"))
+	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
+	assert.Equal(t, "CBASGXRlc3QgZXJyb3I6IEhlbGxvLCDkuJbnlYwaOAovdHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUucHJvdG9idWYuU3RyaW5nVmFsdWUSBQoDZm9v", rec.Header().Get("Grpc-Status-Details-Bin"))
+	assert.Len(t, rec.Body.Bytes(), 0)
+
+	got = grpcErrorFromTrailer(rec.Header())
 	assert.Equal(t, cerr, got)
 }
 

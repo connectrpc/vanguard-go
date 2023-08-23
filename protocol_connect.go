@@ -63,7 +63,7 @@ func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operati
 	return reqMeta, nil
 }
 
-func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
+func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	//TODO implement me
 	panic("implement me")
 }
@@ -135,7 +135,7 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 	return reqMeta, nil
 }
 
-func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
+func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	//TODO implement me
 	panic("implement me")
 }
@@ -162,7 +162,7 @@ func (c connectUnaryServerProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
+func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -240,7 +240,7 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 	return reqMeta, nil
 }
 
-func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header, allowedCompression []string) int {
+func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	//TODO implement me
 	panic("implement me")
 }
@@ -275,7 +275,7 @@ func (c connectStreamServerProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header, allowedCompression []string) {
+func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	//TODO implement me
 	panic("implement me")
 }

@@ -38,7 +38,8 @@ func TestMux_RPCxRPC(t *testing.T) {
 	}
 	protocols := []Protocol{
 		ProtocolGRPC,
-		// TODO: grpc-web & connect
+		ProtocolGRPCWeb,
+		// TODO: connect
 	}
 
 	var interceptor testInterceptor
@@ -48,11 +49,14 @@ func TestMux_RPCxRPC(t *testing.T) {
 		connect.WithInterceptors(&interceptor),
 	))
 
-	// protocolMiddelware asserts the request headers for the given protocol.
-	protocolMiddelware := func(
+	// protocolMiddleware asserts the request headers for the given protocol.
+	protocolMiddleware := func(
 		protocol Protocol, codec string, compression string,
 		next http.Handler,
 	) http.HandlerFunc {
+		if compression == CompressionIdentity {
+			compression = "" // normalize "no compression" to empty string
+		}
 		return func(rsp http.ResponseWriter, req *http.Request) {
 			var wantHdr map[string]string
 			switch protocol {
@@ -61,6 +65,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 					"Content-Type":  fmt.Sprintf("application/grpc+%s", codec),
 					"Grpc-Encoding": compression,
 				}
+			case ProtocolGRPCWeb:
+				wantHdr = map[string]string{
+					"Content-Type":  fmt.Sprintf("application/grpc-web+%s", codec),
+					"Grpc-Encoding": compression,
+				}
+			// TODO: connect
 			default:
 				http.Error(rsp, "unknown protocol", http.StatusInternalServerError)
 				return
@@ -80,26 +90,26 @@ func TestMux_RPCxRPC(t *testing.T) {
 			WithProtocols(protocol),
 			WithCodecs(codec),
 		}
-		if compression != "identity" {
+		if compression == CompressionIdentity {
+			opts = append(opts, WithNoCompression())
+		} else {
 			opts = append(opts, WithCompression(compression))
 		}
-		hdlr := protocolMiddelware(protocol, codec, compression, serveMux)
+		hdlr := protocolMiddleware(protocol, codec, compression, serveMux)
 		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
 
 		mux := &Mux{}
 		for _, service := range services {
-			if err := mux.RegisterServiceByName(
-				hdlr, service, opts...,
-			); err != nil {
-				t.Fatal(err)
-			}
+			err := mux.RegisterServiceByName(hdlr, service, opts...)
+			require.NoError(t, err)
 		}
-		server := httptest.NewUnstartedServer(hdlr)
-		server.Start()
+		server := httptest.NewUnstartedServer(mux.AsHandler())
+		server.EnableHTTP2 = true
+		server.StartTLS()
 		t.Cleanup(server.Close)
 		return testServer{name: name, svr: server}
 	}
-	servers := []testServer{}
+	var servers []testServer
 	for _, protocol := range protocols {
 		for _, codec := range codecs {
 			for _, compression := range compressions {
@@ -108,9 +118,9 @@ func TestMux_RPCxRPC(t *testing.T) {
 		}
 	}
 
-	testOpts := []testOpt{}
+	var testOpts []testOpt
 	for _, server := range servers {
-		opts := []connect.ClientOption{}
+		var opts []connect.ClientOption
 		for _, protocol := range protocols {
 			opts := appendClientProtocolOptions(t, opts, protocol)
 			for _, codec := range codecs {
@@ -140,7 +150,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 		stream testStream
 		output output
 	}
-	testRequests := []testRequest{}
+	var testRequests []testRequest
 	for _, opts := range testOpts {
 		libClient := testv1connect.NewLibraryServiceClient(
 			opts.svr.Client(), opts.svr.URL, opts.opts...,
@@ -164,18 +174,18 @@ func TestMux_RPCxRPC(t *testing.T) {
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: "/vanguard.library.v1.LibraryService/GetBook",
+						method: "/buf.vanguard.test.v1.LibraryService/GetBook",
 						msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.Book{Name: "shelves/1/books/1"},
 					}},
 				},
-				rspTrailer: http.Header{"Trailer": []string{"end"}},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
 			},
 			output: output{
 				header:  http.Header{"Message": []string{"world"}},
-				trailer: http.Header{"Trailer": []string{"end"}},
+				trailer: http.Header{"Trailer-Val": []string{"end"}},
 				messages: []proto.Message{
 					&testv1.Book{Name: "shelves/1/books/1"},
 				},
@@ -185,18 +195,39 @@ func TestMux_RPCxRPC(t *testing.T) {
 		// Add more tests...
 	}
 
+	passingCases := map[string]struct{}{
+		// pass-through, no transformation
+		"GetBook_gRPC_json_gzip/gRPC_json_gzip":                   {},
+		"GetBook_gRPC_json_identity/gRPC_json_identity":           {},
+		"GetBook_gRPC_proto_gzip/gRPC_proto_gzip":                 {},
+		"GetBook_gRPC_proto_identity/gRPC_proto_identity":         {},
+		"GetBook_gRPC-Web_json_gzip/gRPC-Web_json_gzip":           {},
+		"GetBook_gRPC-Web_json_identity/gRPC-Web_json_identity":   {},
+		"GetBook_gRPC-Web_proto_gzip/gRPC-Web_proto_gzip":         {},
+		"GetBook_gRPC-Web_proto_identity/gRPC-Web_proto_identity": {},
+		// transformation is working
+		"GetBook_gRPC_json_gzip/gRPC_proto_gzip":                 {},
+		"GetBook_gRPC-Web_json_gzip/gRPC_proto_gzip":             {},
+		"GetBook_gRPC_json_identity/gRPC_proto_identity":         {},
+		"GetBook_gRPC-Web_json_identity/gRPC_proto_identity":     {},
+		"GetBook_gRPC_json_gzip/gRPC-Web_proto_gzip":             {},
+		"GetBook_gRPC_json_identity/gRPC-Web_proto_identity":     {},
+		"GetBook_gRPC-Web_json_identity/gRPC-Web_proto_identity": {},
+	}
 	for _, testCase := range testRequests {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			t.Skip()
+			if _, shouldPass := passingCases[testCase.name]; !shouldPass {
+				t.Skip()
+			}
 
 			interceptor.set(t, testCase.stream)
 			defer interceptor.del(t)
 
 			header, messages, trailer := testCase.input(t)
-			assert.Subset(t, testCase.output.header, header)
-			assert.Subset(t, testCase.output.trailer, trailer)
+			assert.Subset(t, header, testCase.output.header)
+			assert.Subset(t, trailer, testCase.output.trailer)
 			require.Len(t, messages, len(testCase.output.messages))
 			for i, msg := range messages {
 				want := testCase.output.messages[i]

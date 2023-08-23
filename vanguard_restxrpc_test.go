@@ -88,7 +88,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 			WithProtocols(protocol),
 			WithCodecs(codec),
 		}
-		if compression != "identity" {
+		if compression == CompressionIdentity {
+			opts = append(opts, WithNoCompression())
+		} else {
 			opts = append(opts, WithCompression(compression))
 		}
 		hdlr := protocolMiddelware(protocol, codec, compression, serveMux)

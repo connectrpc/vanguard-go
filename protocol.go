@@ -123,7 +123,7 @@ type clientProtocolHandler interface {
 	// code and set headers. When meta.end is non-nil, encodeEnd will
 	// also be called, which is where a response body and trailers
 	// can be written.
-	addProtocolResponseHeaders(meta responseMeta, target http.Header, allowedCompression []string) int
+	addProtocolResponseHeaders(meta responseMeta, target http.Header) int
 	// Encodes the given final disposition of the RPC to the given
 	// writer. It can also return any trailers to add to the response.
 	// Some protocols may ignore the writer; some will return no
@@ -159,7 +159,7 @@ type serverProtocolHandler interface {
 	// Encodes the given requestMeta has headers into the given target
 	// headers. If non-nil, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
-	addProtocolRequestHeaders(meta requestMeta, target http.Header, allowedCompression []string)
+	addProtocolRequestHeaders(meta requestMeta, target http.Header)
 	// Returns the response metadata from the headers. If the response
 	// meta's end field is set (i.e. headers indicate RPC is over), but
 	// the protocol needs to read the response body to populate it, it
