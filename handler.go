@@ -214,6 +214,7 @@ func (h *handler) findMethod(op *operation) (*methodConfig, *httpError) {
 			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
 			return nil, &httpError{code: http.StatusNotFound}
 		}
+		op.restTarget = methodConf.httpRule
 		if op.request.Method != http.MethodPost {
 			mayAllowGet, ok := op.client.protocol.(clientProtocolAllowsGet)
 			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
@@ -1326,11 +1327,11 @@ func (tw *transformingWriter) flushMessage() error {
 
 func (tw *transformingWriter) reset() {
 	if tw.rw.op.serverEnveloper != nil {
-		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, false)
+		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, tw.msg.wasCompressed)
 		tw.expectingBytes = envelopeLen
 		tw.writingEnvelope = true
 	} else {
-		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, true)
+		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, tw.msg.wasCompressed)
 		tw.expectingBytes = -1
 	}
 }

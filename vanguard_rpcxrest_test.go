@@ -28,7 +28,7 @@ func TestMux_RPCxREST(t *testing.T) {
 
 	var interceptor testInterceptor
 	services := []protoreflect.FullName{
-		"buf.vanguard.test.v1.LibraryService",
+		testv1connect.LibraryServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -66,7 +66,7 @@ func TestMux_RPCxREST(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		server := httptest.NewUnstartedServer(hdlr)
+		server := httptest.NewUnstartedServer(mux.AsHandler())
 		server.Start()
 		t.Cleanup(server.Close)
 		return testServer{name: name, svr: server}
@@ -137,18 +137,16 @@ func TestMux_RPCxREST(t *testing.T) {
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: "/shelves/1/books/1",
+						method: "/v1/shelves/1/books/1",
 						msg:    nil, // GET request.
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.Book{Name: "shelves/1/books/1"},
 					}},
 				},
-				rspTrailer: http.Header{"Trailer": []string{"end"}},
 			},
 			output: output{
-				header:  http.Header{"Message": []string{"world"}},
-				trailer: http.Header{"Trailer": []string{"end"}},
+				header: http.Header{"Message": []string{"world"}},
 				messages: []proto.Message{
 					&testv1.Book{Name: "shelves/1/books/1"},
 				},
@@ -158,18 +156,25 @@ func TestMux_RPCxREST(t *testing.T) {
 		// Add more tests...
 	}
 
+	passingCases := map[string]struct{}{
+		"GetBook_gRPC_proto_identity/REST_json_identity": {},
+		// "GetBook_gRPC_proto_gzip/REST_json_gzip":         {},
+	}
+	_ = passingCases
 	for _, testCase := range testRequests {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			t.Skip()
+			if _, ok := passingCases[testCase.name]; !ok {
+				t.Skip()
+			}
 
 			interceptor.set(t, testCase.stream)
 			defer interceptor.del(t)
 
 			header, messages, trailer := testCase.input(t)
-			assert.Subset(t, testCase.output.header, header)
-			assert.Subset(t, testCase.output.trailer, trailer)
+			assert.Subset(t, header, testCase.output.header)
+			assert.Subset(t, trailer, testCase.output.trailer)
 			require.Len(t, messages, len(testCase.output.messages))
 			for i, msg := range messages {
 				want := testCase.output.messages[i]

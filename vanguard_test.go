@@ -223,8 +223,8 @@ func (o *testInterceptor) restUnaryHandler(
 		if err != nil {
 			return err
 		}
-		assert.Equal(stream.T, req.URL.String(), inn.method, "URL didn't match")
-		assert.Subset(stream.T, stream.reqHeader, req.Header, "headers didn't match")
+		assert.Equal(stream.T, inn.method, req.URL.String(), "url didn't match")
+		assert.Subset(stream.T, req.Header, stream.reqHeader, "headers didn't match")
 		contentType := req.Header.Get("Content-Type")
 		encoding := req.Header.Get("Content-Encoding")
 		acceptEncoding := req.Header.Get("Accept-Encoding")
@@ -245,7 +245,11 @@ func (o *testInterceptor) restUnaryHandler(
 		got := proto.Clone(inn.msg)
 		if len(body) > 0 {
 			codecName := codecNames[contentType]
-			assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match")
+			if !assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match") {
+				stream.Log("codec:", codec.Name())
+				stream.Log("contentType:", contentType)
+				return fmt.Errorf("codec didn't match")
+			}
 			if err := codec.Unmarshal(body, got); err != nil {
 				return err
 			}

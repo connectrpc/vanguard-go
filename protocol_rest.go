@@ -176,7 +176,6 @@ func (r restServerProtocol) protocol() Protocol {
 }
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	// TODO: support other codecs.
 	headers["Content-Type"] = []string{"application/" + meta.codec}
 	if meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
@@ -199,7 +198,6 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 	compressionName := headers.Get("Content-Encoding")
 
 	return responseMeta{
-			end:         &responseEnd{},
 			codec:       codecName,
 			compression: compressionName,
 		}, func(_ Codec, src io.Reader, end *responseEnd) {
@@ -214,20 +212,20 @@ func (r restServerProtocol) extractEndFromTrailers(o *operation, headers http.He
 	return responseEnd{}, nil
 }
 
-func (r restServerProtocol) requestNeedsPrep(o *operation) bool {
-	return len(o.restTarget.vars) != 0 ||
-		len(o.request.URL.Query()) != 0 ||
-		o.restTarget.requestBodyFields != nil
+func (r restServerProtocol) requestNeedsPrep(opx *operation) bool {
+	if opx.restTarget == nil {
+		return false // no REST bindings
+	}
+	return len(opx.restTarget.vars) != 0 ||
+		len(opx.request.URL.Query()) != 0 ||
+		opx.restTarget.requestBodyFields != nil
 }
 
 func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	msg := src.ProtoReflect()
-	for i := len(op.restVars) - 1; i >= 0; i-- {
-		variable := op.restVars[i]
-		if err := setParameter(msg, variable.fields, variable.value); err != nil {
-			return nil, err
-		}
+	if op.restTarget.requestBodyFields == nil {
+		return base, nil
 	}
+	msg := src.ProtoReflect()
 	for _, field := range op.restTarget.requestBodyFields {
 		msg = msg.Get(field).Message()
 	}

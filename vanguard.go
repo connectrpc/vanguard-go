@@ -11,11 +11,8 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
-	"google.golang.org/genproto/googleapis/api/annotations"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 const (
@@ -231,10 +228,6 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 	if _, ok := m.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
-	methodOpts, ok := methodDesc.Options().(*descriptorpb.MethodOptions)
-	if !ok {
-		return fmt.Errorf("method %s has unknown options type %T", methodPath, methodDesc.Options())
-	}
 	methodConf := &methodConfig{
 		descriptor:      methodDesc,
 		methodPath:      "/" + methodPath, // this usage wants proper URI path, with leading slash
@@ -246,16 +239,18 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 		compressorNames: opts.compressorNames,
 	}
 	m.methods[methodPath] = methodConf
-	if proto.HasExtension(methodOpts, annotations.E_Http) {
-		httpRule, ok := proto.GetExtension(methodOpts, annotations.E_Http).(*annotations.HttpRule)
-		if !ok {
-			return fmt.Errorf("method %s has unexpected type for google.api.http annotation: %T", methodPath, proto.GetExtension(methodOpts, annotations.E_Http))
-		}
-		if err := m.restRoutes.addRoute(methodConf, httpRule); err != nil {
+
+	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
+		firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
+		if err != nil {
 			return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
 		}
+		methodConf.httpRule = firstTarget
 		for i, rule := range httpRule.AdditionalBindings {
-			if err := m.restRoutes.addRoute(methodConf, rule); err != nil {
+			if len(rule.AdditionalBindings) > 0 {
+				return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
+			}
+			if _, err := m.restRoutes.addRoute(methodConf, rule); err != nil {
 				return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 			}
 		}
@@ -411,6 +406,7 @@ type methodConfig struct {
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
 	preferredCodec              string
+	httpRule                    *routeTarget // First HTTP rule, if any.
 }
 
 // computeSet returns a resolved set of values of type T, preferring the given values if
