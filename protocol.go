@@ -125,9 +125,7 @@ type clientProtocolHandler interface {
 	// can be written.
 	addProtocolResponseHeaders(meta responseMeta, target http.Header, allowedCompression []string) int
 	// Encodes the given final disposition of the RPC to the given
-	// writer. It can also return any trailers to add to the response.
-	// Some protocols may ignore the writer; some will return no
-	// trailers.
+	// response.
 	//
 	// The given codec represents the sub-format that the client used
 	// (which could be used, for example, to encode the error).
@@ -138,7 +136,7 @@ type clientProtocolHandler interface {
 	// normal response (where the end is signalled in the response
 	// body or trailers, not headers). When this is true, the end was
 	// also already provided to addProtocolResponseHeaders.
-	encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header
+	encodeEnd(codec Codec, end *responseEnd, rsp http.ResponseWriter, wasInHeaders bool)
 
 	// String returns a human-readable name/description of protocol.
 	String() string

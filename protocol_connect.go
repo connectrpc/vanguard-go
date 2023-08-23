@@ -68,7 +68,7 @@ func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseM
 	panic("implement me")
 }
 
-func (c connectUnaryGetClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (c connectUnaryGetClientProtocol) encodeEnd(codec Codec, end *responseEnd, rsp http.ResponseWriter, wasInHeaders bool) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -140,7 +140,7 @@ func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta response
 	panic("implement me")
 }
 
-func (c connectUnaryPostClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (c connectUnaryPostClientProtocol) encodeEnd(codec Codec, end *responseEnd, rsp http.ResponseWriter, wasInHeaders bool) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -245,7 +245,7 @@ func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMet
 	panic("implement me")
 }
 
-func (c connectStreamClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (c connectStreamClientProtocol) encodeEnd(codec Codec, end *responseEnd, rsp http.ResponseWriter, wasInHeaders bool) {
 	//TODO implement me
 	panic("implement me")
 }

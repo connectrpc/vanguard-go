@@ -773,16 +773,7 @@ func (rw *responseWriter) reportEnd(end *responseEnd) {
 	switch {
 	case rw.headersFlushed:
 		// write error to body or trailers
-		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
-		if len(trailers) > 0 {
-			hdrs := rw.Header()
-			for k, v := range trailers {
-				if !strings.HasPrefix(k, http.TrailerPrefix) {
-					k = http.TrailerPrefix + k
-				}
-				hdrs[k] = v
-			}
-		}
+		rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
 	case rw.respMeta != nil:
 		rw.respMeta.end = end
 		rw.flushHeaders()

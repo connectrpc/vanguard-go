@@ -6,7 +6,6 @@
 package vanguard
 
 import (
-	"io"
 	"net/http"
 
 	"connectrpc.com/connect"
@@ -75,7 +74,7 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	panic("implement me")
 }
 
-func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, rsp http.ResponseWriter, wasInHeaders bool) {
 	//TODO implement me
 	panic("implement me")
 }

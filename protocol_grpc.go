@@ -76,7 +76,7 @@ func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	panic("implement me")
 }
 
-func (g grpcClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (g grpcClientProtocol) encodeEnd(codec Codec, end *responseEnd, rsp http.ResponseWriter, wasInHeaders bool) {
 	//TODO implement me
 	panic("implement me")
 }
@@ -175,7 +175,7 @@ func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, hea
 	panic("implement me")
 }
 
-func (g grpcWebClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (g grpcWebClientProtocol) encodeEnd(codec Codec, end *responseEnd, rsp http.ResponseWriter, wasInHeaders bool) {
 	//TODO implement me
 	panic("implement me")
 }
