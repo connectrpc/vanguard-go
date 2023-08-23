@@ -770,17 +770,7 @@ func (rw *responseWriter) reportError(err error) {
 }
 
 func (rw *responseWriter) reportEnd(end *responseEnd) {
-	switch {
-	case rw.headersFlushed:
-		// write error to body or trailers
-		rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
-	case rw.respMeta != nil:
-		rw.respMeta.end = end
-		rw.flushHeaders()
-	default:
-		rw.respMeta = &responseMeta{end: end}
-		rw.flushHeaders()
-	}
+	rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
 	// response is done
 	rw.op.cancel()
 	rw.err = context.Canceled
@@ -792,7 +782,9 @@ func (rw *responseWriter) flushHeaders() {
 	}
 	allowedRequestCompression := intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
 	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(*rw.respMeta, rw.Header(), allowedRequestCompression)
-	rw.delegate.WriteHeader(statusCode)
+	if statusCode != http.StatusOK {
+		rw.delegate.WriteHeader(statusCode)
+	}
 	if rw.respMeta.end != nil {
 		// response is done
 		rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
