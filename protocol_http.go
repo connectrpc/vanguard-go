@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -278,4 +279,20 @@ func httpMergeTrailers(header http.Header, trailer http.Header) {
 			header.Add(key, val)
 		}
 	}
+}
+
+func httpExtractContentLength(headers http.Header) (int, error) {
+	contentLenStr := headers.Get("Content-Length")
+	if contentLenStr == "" {
+		return -1, nil
+	}
+	i, err := strconv.Atoi(contentLenStr)
+	if err != nil {
+		return 0, fmt.Errorf("could not parse content-length %q: %w", contentLenStr, err)
+	}
+	if i < 0 {
+		return 0, fmt.Errorf("content-length %d should not be negative", i)
+	}
+	headers.Del("Content-Length")
+	return i, nil
 }
