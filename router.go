@@ -18,13 +18,10 @@ import (
 // interpolating parts of the URI path into an RPC request field. The
 // map is keyed by the path component that corresponds to a given node.
 type routeTrie struct {
-	// If the path to this node represents a complete path, this
-	// will be non-nil and represent the method table  for the path.
-	methods routeMethods
 	// Child nodes, keyed by the next segment in the path.
 	children map[string]*routeTrie
-	// If this is the final path element, any matches for this path
-	// that contain ":verb" suffixes are in this map, keyed by verb.
+	// Final node in the path has a map of verbs to methods.
+	// Verbs are either an empty string or a single literal.
 	verbs map[string]routeMethods
 }
 
@@ -56,7 +53,6 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if template == "" {
 		return fmt.Errorf("invalid HTTP rule: path template is blank")
 	}
-
 	segments, variables, err := parsePathTemplate(template)
 	if err != nil {
 		return err
@@ -94,26 +90,16 @@ func (trie *routeTrie) insertVerb(verb string) routeMethods {
 // insert the target into the trie using the given method and segment path.
 // The path is followed until the final segment is reached.
 func (trie *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
-	cursor, methods := trie, trie.methods
+	cursor := trie
 	for _, segment := range segments.path {
 		cursor = cursor.insertChild(segment)
-		methods = cursor.methods // may be nil.
 	}
-	if segments.verb != "" {
-		methods = cursor.insertVerb(segments.verb) // cannot be nil.
-		cursor = nil
-	}
-	if existing := methods[method]; existing != nil {
+	if existing := cursor.verbs[segments.verb][method]; existing != nil {
 		return alreadyExistsError{
 			existing: existing, pathPattern: segments.String(), method: method,
 		}
 	}
-	// Lazily allocate the method map for a trie node.
-	if methods == nil {
-		methods = make(routeMethods, 1)
-		cursor.methods = methods
-	}
-	methods[method] = target
+	cursor.insertVerb(segments.verb)[method] = target
 	return nil
 }
 
@@ -150,7 +136,11 @@ func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeT
 	// TODO: instead of []routeTargetMatch, we may want a different data structure
 	//       that doesn't need to allocate slices but instead retrieves substrings
 	//       of uriPath on demand.
-	return target, computeVarValues(path, target), nil
+	vars, err := computeVarValues(path, target)
+	if err != nil {
+		return nil, nil, nil
+	}
+	return target, vars, nil
 }
 
 // findTarget finds the target for the given path components, verb, and method.
@@ -163,7 +153,6 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 	if len(path) == 0 {
 		return trie.getTarget(verb, method)
 	}
-
 	current := path[0]
 	path = path[1:]
 
@@ -183,29 +172,23 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 
 	// Double-asterisk must be the last element in pattern.
 	// So it consumes all remaining path elements.
-	childDblAst := trie.children["**"]
-	if childDblAst == nil {
-		return nil, nil
+	if childDblAst := trie.children["**"]; childDblAst != nil {
+		return childDblAst.findTarget(nil, verb, method)
 	}
-	return childDblAst.findTarget(nil, verb, method)
+	return nil, nil
 }
 
 // getTarget gets the target for the given verb and method from the
 // node trie. It is like findTarget, except that it does not use a
 // path to first descend into a sub-trie.
 func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) {
-	methods := trie.methods
-	if verb != "" {
-		methods = trie.verbs[verb]
-	}
-	target := methods[method]
-	if target != nil {
-		return target, nil
+	methods := trie.verbs[verb]
+	if target := methods[method]; target != nil {
+		return target, methods
 	}
 	// See if a wildcard method was used
-	target = methods["*"]
-	if target != nil {
-		return target, nil
+	if target := methods["*"]; target != nil {
+		return target, methods
 	}
 	// TODO: If final segment is ** and nothing is provided that matches, the request path should
 	//       have trailing slash. For example, if the pattern is "foo/bar/**", an empty match
@@ -285,16 +268,34 @@ func (v routeTargetVar) size() int {
 	}
 	return v.end - v.start
 }
-func (v routeTargetVar) capture(segments []string) string {
+func (v routeTargetVar) index(segments []string) []string {
 	start, end := v.start, v.end
-	if v.end == -1 {
+	if end == -1 {
 		if start >= len(segments) {
-			return ""
+			return nil
 		}
-		end = len(segments)
+		return segments[start:]
 	}
-	// TODO: values should be pathUnescape'd
-	return strings.Join(segments[start:end], "/")
+	return segments[start:end]
+}
+func (v routeTargetVar) capture(segments []string) (string, error) {
+	parts := v.index(segments)
+	mode := pathEncodeSingle
+	if v.end == -1 || v.start-v.end > 1 {
+		mode = pathEncodeMulti
+	}
+	var sb strings.Builder
+	for i, part := range parts {
+		val, err := pathUnescape(part, mode)
+		if err != nil {
+			return "", err
+		}
+		if i > 0 {
+			sb.WriteByte('/')
+		}
+		sb.WriteString(val)
+	}
+	return sb.String(), nil
 }
 
 type routeTargetVarMatch struct {
@@ -302,16 +303,20 @@ type routeTargetVarMatch struct {
 	value  string
 }
 
-func computeVarValues(path []string, target *routeTarget) []routeTargetVarMatch {
+func computeVarValues(path []string, target *routeTarget) ([]routeTargetVarMatch, error) {
 	if len(target.vars) == 0 {
-		return nil
+		return nil, nil
 	}
 	vars := make([]routeTargetVarMatch, len(target.vars))
 	for i, varDef := range target.vars {
+		val, err := varDef.capture(path)
+		if err != nil {
+			return nil, err
+		}
 		vars[i].fields = varDef.fields
-		vars[i].value = varDef.capture(path)
+		vars[i].value = val
 	}
-	return vars
+	return vars, nil
 }
 
 // resolvePathToDescriptors translates the given path string, in the form of "ident.ident.ident",

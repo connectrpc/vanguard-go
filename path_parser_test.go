@@ -211,6 +211,13 @@ func TestPath_ParsePathTemplate(t *testing.T) {
 			{fieldPath: "short.bb", start: 9, end: 10},
 			{fieldPath: "last", start: 11, end: -1},
 		},
+	}, {
+		tmpl:     "/foo%2Fbar/%2A/%2A%2a/{starstar=%2A%2a/**}:%2c",
+		wantPath: []string{"foo%2Fbar", "%2A", "%2A%2A", "%2A%2A", "**"},
+		wantVerb: "%2C",
+		wantVars: []pathVariable{
+			{fieldPath: "starstar", start: 3, end: -1},
+		},
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase
