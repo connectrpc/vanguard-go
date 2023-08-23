@@ -103,7 +103,6 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if !ok {
 			return nil, fmt.Errorf("invalid testCase header: %s", val)
 		}
-		fmt.Println("unary", req)
 		assert.Subset(stream.T, req.Header(), stream.reqHeader)
 		if len(stream.msgs) != 2 {
 			err := fmt.Errorf("expected 2 messages, got %d", len(stream.msgs))
@@ -141,7 +140,6 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 					err.Meta()[key] = values
 				}
 			}
-			fmt.Println("unary err", err)
 			return nil, err
 		}
 
@@ -153,7 +151,6 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		for key, values := range stream.rspTrailer {
 			rsp.Trailer()[key] = values
 		}
-		fmt.Println("rsp?", rsp)
 		return rsp, nil
 	})
 }

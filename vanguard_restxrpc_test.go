@@ -251,10 +251,10 @@ func TestMux_RESTxRPC(t *testing.T) {
 		"GetBook_identity/gRPC_proto_gzip":     {},
 		"GetBook_gzip/gRPC_proto_gzip":         {},
 
-		//"GetBook-Error_identity/gRPC_json_gzip":      {},
+		// "GetBook-Error_identity/gRPC_json_gzip":      {},
+		// "GetBook-Error_identity/gRPC_json_identity":  {},
 		"GetBook-Error_identity/gRPC_proto_gzip":     {},
 		"GetBook-Error_identity/gRPC_proto_identity": {},
-		//"GetBook-Error_identity/gRPC_json_identity":  {},
 	}
 	_ = passingCases
 	for _, testCase := range testCases {
