@@ -51,12 +51,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		op.queryVars = queryVars
 	}
 	originalHeaders := request.Header.Clone()
-	var err error
-	op.contentLen, err = httpExtractContentLength(request.Header)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
-		return
-	}
+	op.contentLen = request.ContentLength
 
 	// Identify the method being invoked.
 	methodConf, httpErr := h.findMethod(&op)
@@ -337,7 +332,7 @@ type operation struct {
 	request       *http.Request
 	queryVars     url.Values
 	contentType   string // original content-type in incoming request headers
-	contentLen    int    // original content-length in incoming request headers or -1
+	contentLen    int64  // original content-length in incoming request headers or -1
 	reqMeta       requestMeta
 	cancel        context.CancelFunc
 	bufferPool    *bufferPool
@@ -512,7 +507,8 @@ func (op *operation) readRequestMessage(reader io.Reader, msg *message) error {
 	if msgLen == -1 {
 		// TODO: apply some limit to request message size to avoid unlimited memory use
 		if op.contentLen != -1 {
-			buffer.Grow(op.contentLen)
+			// TODO: don't just trust contentLen; make sure body does not exceed it
+			buffer.Grow(int(op.contentLen))
 		}
 		_, err = io.Copy(buffer, reader)
 	} else {
@@ -630,20 +626,17 @@ func (er *envelopingReader) Close() error {
 
 func (er *envelopingReader) prepareNext() error {
 	var env envelope
-	er.current = er.r
 	switch {
 	case er.op.clientEnveloper == nil && er.op.serverEnveloper == nil:
 		// no envelopes to transform, just pass the body through w/ no change
+		er.current = er.r
 		er.envRemain = 0
 		return nil
 	case er.op.clientEnveloper == nil:
-		if er.op.serverEnveloper == nil {
-			// no envelopes to transform, just pass the body through w/ no change
-			er.envRemain = 0
-			return nil
-		}
 		env.compressed = er.op.client.reqCompression != nil
 		if er.op.contentLen != -1 {
+			er.current = er.r
+			// TODO: don't just trust contentLen; make sure we don't buffer too much
 			env.length = uint32(er.op.contentLen)
 		} else {
 			// Oof. We have to buffer entire request in order to measure it.
