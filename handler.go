@@ -689,10 +689,11 @@ type transformingReader struct {
 	msg *message
 	r   io.ReadCloser
 
-	err       error
-	buffer    *bytes.Buffer
-	env       envelopeBytes
-	envRemain int
+	consumedFirst bool
+	err           error
+	buffer        *bytes.Buffer
+	env           envelopeBytes
+	envRemain     int
 }
 
 func (tr *transformingReader) Read(data []byte) (n int, err error) {
@@ -707,8 +708,15 @@ func (tr *transformingReader) Read(data []byte) (n int, err error) {
 		// otherwise EOF, fall through
 	}
 	if err := tr.op.readRequestMessage(tr.r, tr.msg); err != nil {
-		tr.err = err
-		return 0, err
+		// If this is the first request message, the error is EOF, and there's a body
+		// preparer, we'll allow it and let the preparer produce a message from zero
+		// request bytes.
+		if !tr.consumedFirst && errors.Is(err, io.EOF) && tr.op.clientReqNeedsPrep {
+			tr.msg.stage = stageRead
+		} else {
+			tr.err = err
+			return 0, err
+		}
 	}
 	if err := tr.prepareMessage(); err != nil {
 		tr.err = err
@@ -739,6 +747,7 @@ func (tr *transformingReader) Close() error {
 }
 
 func (tr *transformingReader) prepareMessage() error {
+	tr.consumedFirst = true
 	if err := tr.msg.advanceToStage(tr.op, stageSend); err != nil {
 		return err
 	}

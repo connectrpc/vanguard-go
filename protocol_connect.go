@@ -239,7 +239,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 	trailers := connectExtractUnaryTrailers(headers)
 
 	var endUnmarshaler responseEndUnmarshaler
-	if statusCode == http.StatusOK {
+	if statusCode == http.StatusOK { //nolint:nestif
 		respMeta.pendingTrailers = trailers
 	} else {
 		// Content-Type must be application/json for errors or else it's invalid
