@@ -138,7 +138,7 @@ type clientProtocolHandler interface {
 	// normal response (where the end is signalled in the response
 	// body or trailers, not headers). When this is true, the end was
 	// also already provided to addProtocolResponseHeaders.
-	encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header
+	encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header
 
 	// String returns a human-readable name/description of protocol.
 	String() string
@@ -160,10 +160,22 @@ type serverProtocolHandler interface {
 	// headers. If non-nil, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
 	addProtocolRequestHeaders(meta requestMeta, target http.Header)
-	// Returns the response metadata from the headers. If the response
-	// meta's end field is set (i.e. headers indicate RPC is over), but
-	// the protocol needs to read the response body to populate it, it
-	// should return a non-nil function as the second returned value.
+	// Returns the response metadata from the headers.
+	//
+	// If the response meta's end field is set (i.e. headers indicate RPC
+	// is over), but the protocol needs to read the response body to
+	// populate it, it should return a non-nil function as the second
+	// returned value. This generally only occurs when the RPC fails and
+	// the body includes error information. If the body includes response
+	// message data, handlers should NOT set a non-nil end.
+	//
+	// If the headers include trailers (such as in the Connect unary
+	// protocol), but the RPC isn't quite over because the message data
+	// must still be read from the response body, the handler should
+	// instead populate the pendingTrailers field of meta. Note that
+	// this field is ignored if the end field is non-nil. So if the
+	// end is set to non-nil, the handler should store trailers there.
+	//
 	// This function will receive the server's codec (optionally used
 	// to encode other messages and could be used to decode the error
 	// body), the body, and a pointer to the responseEnd which should
@@ -214,7 +226,7 @@ type serverEnvelopedProtocolHandler interface {
 	// The given codec represents the sub-format used to send
 	// the request to the server (which may be used to decode
 	// the error).
-	decodeEndFromMessage(Codec, io.Reader) (responseEnd, error)
+	decodeEndFromMessage(*operation, io.Reader) (responseEnd, error)
 }
 
 // requestLineBuilder is an optional interface implemented by
@@ -311,6 +323,7 @@ type responseMeta struct {
 	codec             string
 	compression       string
 	acceptCompression []string
+	pendingTrailers   http.Header
 }
 
 // responseEnd is a protocol-agnostic representation of the disposition

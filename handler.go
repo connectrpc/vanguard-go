@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -513,6 +514,9 @@ func (op *operation) readRequestMessage(reader io.Reader, msg *message) error {
 			buffer.Grow(int(op.contentLen))
 		}
 		_, err = io.Copy(buffer, reader)
+		if err == nil && buffer.Len() == 0 {
+			err = io.EOF
+		}
 	} else {
 		buffer.Grow(msgLen)
 		_, err = io.CopyN(buffer, reader, int64(msgLen))
@@ -776,6 +780,10 @@ type responseWriter struct {
 	err        error
 	// wraps op.writer; initialized after headers are written
 	w io.WriteCloser
+	// may be used in place of op.writer for protocols that must see
+	// trailers before writing the first bytes of data (like Connect
+	// and REST unary).
+	buf *bytes.Buffer
 }
 
 func (rw *responseWriter) Header() http.Header {
@@ -846,6 +854,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		}
 		// We can send back error response immediately.
 		rw.flushHeaders()
+		rw.w = noResponseBodyWriter{}
 		return
 	}
 
@@ -870,19 +879,33 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	if mustBe, ok := rw.op.client.protocol.(clientProtocolEndMustBeInHeaders); ok {
 		endMustBeInHeaders = mustBe.endMustBeInHeaders()
 	}
-	if !endMustBeInHeaders {
-		// We can go ahead and flush headers now. Otherwise, we'll wait until we've verified we
-		// can handle the response data, so we still have an opportunity to send back an error.
+	var delegate io.Writer
+	if endMustBeInHeaders {
+		// We must await the end before we can write headers, which means we have to
+		// buffer the entire response.
+		// TODO: buffer size limits
+		rw.buf = rw.op.bufferPool.Get()
+		delegate = rw.buf
+	} else {
+		// We can go ahead and flush headers now.
 		rw.flushHeaders()
+		delegate = rw.delegate
 	}
 
 	// Now we can define the transformed response body.
 	if sameResponseCodec {
 		// we do not need to decompress or decode
-		rw.w = &envelopingWriter{rw: rw, w: rw.delegate}
+		rw.w = &envelopingWriter{rw: rw, w: delegate}
 	} else {
-		rw.w = &transformingWriter{rw: rw, msg: &respMsg, w: rw.delegate}
+		rw.w = &transformingWriter{rw: rw, msg: &respMsg, w: delegate}
 	}
+}
+
+// Unwrap provides access to the underlying response writer. This plays nicely
+// with ResponseController functionality introduced in Go 1.21 without actually
+// depending on Go 1.21.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.delegate
 }
 
 func (rw *responseWriter) Flush() {
@@ -890,6 +913,15 @@ func (rw *responseWriter) Flush() {
 	// or blow-up when doing type conversion. But it's a no-op
 	// since we automatically flush at message boundaries when
 	// transforming the response body.
+}
+
+func (rw *responseWriter) flushMessage() {
+	if rw.buf != nil {
+		// we are buffering until we see trailers, so we don't
+		// want to actually flush the underlying response writer yet
+		return
+	}
+	rw.flusher.Flush()
 }
 
 func (rw *responseWriter) reportError(err error) {
@@ -909,14 +941,14 @@ func (rw *responseWriter) reportEnd(end *responseEnd) {
 		// ruh-roh... this should not happen
 		return
 	}
+	if rw.respMeta != nil && len(rw.respMeta.pendingTrailers) > 0 && len(end.trailers) == 0 {
+		// add any pending trailers to the end
+		end.trailers = rw.respMeta.pendingTrailers
+	}
 	switch {
 	case rw.headersFlushed:
 		// write error to body or trailers
-		trailers := rw.op.client.protocol.encodeEnd(rw.op.client.codec, end, rw.delegate, false)
-		if len(trailers) > 0 {
-			httpMergeTrailers(rw.Header(), trailers)
-		}
-		rw.endWritten = true
+		rw.writeEnd(end, false)
 	case rw.respMeta != nil:
 		rw.respMeta.end = end
 		rw.flushHeaders()
@@ -936,18 +968,24 @@ func (rw *responseWriter) flushHeaders() {
 	}
 	cliRespMeta := *rw.respMeta
 	cliRespMeta.codec = rw.op.client.codec.Name()
-	cliRespMeta.compression = rw.op.client.reqCompression.Name()
+	cliRespMeta.compression = rw.op.respCompression.Name()
 	cliRespMeta.acceptCompression = intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
-	hdr := rw.Header()
-	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, hdr)
+	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, rw.Header())
+	if rw.buf != nil {
+		rw.Header().Set("Content-Length", strconv.Itoa(rw.buf.Len()))
+	}
 	rw.delegate.WriteHeader(statusCode)
 	if rw.respMeta.end != nil {
 		// response is done
-		trl := rw.op.client.protocol.encodeEnd(rw.op.client.codec, rw.respMeta.end, rw.delegate, true)
-		httpMergeTrailers(hdr, trl)
-		rw.endWritten = true
+		rw.writeEnd(rw.respMeta.end, true)
 		rw.err = context.Canceled
 	}
+	if rw.buf != nil {
+		_, _ = rw.buf.WriteTo(rw.delegate)
+		rw.op.bufferPool.Put(rw.buf)
+		rw.buf = nil
+	}
+
 	rw.headersFlushed = true
 }
 
@@ -962,6 +1000,12 @@ func (rw *responseWriter) close() {
 	if rw.endWritten {
 		return // all done
 	}
+	if rw.respMeta.end != nil {
+		// got end in headers
+		rw.reportEnd(rw.respMeta.end)
+		return
+	}
+	// try to get end from trailers
 	trailer := httpExtractTrailers(rw.Header())
 	end, err := rw.op.server.protocol.extractEndFromTrailers(rw.op, trailer)
 	if err != nil {
@@ -969,6 +1013,12 @@ func (rw *responseWriter) close() {
 		return
 	}
 	rw.reportEnd(&end)
+}
+
+func (rw *responseWriter) writeEnd(end *responseEnd, wasInHeaders bool) {
+	trailers := rw.op.client.protocol.encodeEnd(rw.op, end, rw.delegate, wasInHeaders)
+	httpMergeTrailers(rw.Header(), trailers)
+	rw.endWritten = true
 }
 
 // envelopingWriter will translate between envelope styles as data is
@@ -989,8 +1039,6 @@ type envelopingWriter struct {
 }
 
 func (ew *envelopingWriter) Write(data []byte) (int, error) {
-	// TODO: track total amount written while ew.rw.headersFlushed is false
-	//       so we can potentially write a content-length response header
 	ew.maybeInit()
 	if ew.err != nil {
 		return 0, ew.err
@@ -1060,7 +1108,7 @@ func (ew *envelopingWriter) Write(data []byte) (int, error) {
 			}
 		} else {
 			// flush after each message and reset for next envelope
-			ew.rw.flusher.Flush()
+			ew.rw.flushMessage()
 			ew.writingEnvelope = true
 			ew.remainingBytes = envelopeLen
 		}
@@ -1169,14 +1217,14 @@ func (ew *envelopingWriter) handleTrailer() error {
 		}
 		data = uncompressed
 	}
-	end, err := ew.rw.op.serverEnveloper.decodeEndFromMessage(ew.rw.op.server.codec, data)
+	end, err := ew.rw.op.serverEnveloper.decodeEndFromMessage(ew.rw.op, data)
 	if err != nil {
 		ew.rw.reportError(err)
 		return err
 	}
 	end.wasCompressed = ew.trailerIsCompressed
 	ew.rw.reportEnd(&end)
-	ew.err = errors.New("final message already written")
+	ew.err = errors.New("final data already written")
 	return nil
 }
 
@@ -1199,8 +1247,6 @@ type transformingWriter struct {
 }
 
 func (tw *transformingWriter) Write(data []byte) (int, error) {
-	// TODO: track total amount written while tw.rw.headersFlushed is false
-	//       so we can potentially write a content-length response header
 	if tw.err != nil {
 		return 0, tw.err
 	}
@@ -1285,14 +1331,14 @@ func (tw *transformingWriter) flushMessage() error {
 				return err
 			}
 		}
-		end, err := tw.rw.op.serverEnveloper.decodeEndFromMessage(tw.rw.op.server.codec, data)
+		end, err := tw.rw.op.serverEnveloper.decodeEndFromMessage(tw.rw.op, data)
 		if err != nil {
 			tw.rw.reportError(err)
 			return err
 		}
 		end.wasCompressed = tw.latestEnvelope.compressed
 		tw.rw.reportEnd(&end)
-		tw.err = errors.New("final message already written")
+		tw.err = errors.New("final data already written")
 		return nil
 	}
 
@@ -1304,7 +1350,7 @@ func (tw *transformingWriter) flushMessage() error {
 	buffer := tw.msg.sendBuffer()
 	if enveloper := tw.rw.op.clientEnveloper; enveloper != nil {
 		env := envelope{
-			compressed: tw.msg.wasCompressed,
+			compressed: tw.msg.wasCompressed && tw.rw.op.respCompression != nil,
 			length:     uint32(buffer.Len()),
 		}
 		envBytes := enveloper.encodeEnvelope(env)
@@ -1318,7 +1364,7 @@ func (tw *transformingWriter) flushMessage() error {
 		return err
 	}
 	// flush after each message
-	tw.rw.flusher.Flush()
+	tw.rw.flushMessage()
 
 	tw.reset()
 	return nil
@@ -1377,6 +1423,17 @@ func (ew *errorWriter) Close() error {
 	}
 	ew.rw.flushHeaders()
 	ew.buffer = nil
+	return nil
+}
+
+type noResponseBodyWriter struct {
+}
+
+func (c noResponseBodyWriter) Write([]byte) (int, error) {
+	return 0, errors.New("final data already written")
+}
+
+func (c noResponseBodyWriter) Close() error {
 	return nil
 }
 
