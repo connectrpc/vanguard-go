@@ -1327,11 +1327,12 @@ func (tw *transformingWriter) flushMessage() error {
 
 func (tw *transformingWriter) reset() {
 	if tw.rw.op.serverEnveloper != nil {
-		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, tw.msg.wasCompressed)
+		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, false)
 		tw.expectingBytes = envelopeLen
 		tw.writingEnvelope = true
 	} else {
-		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, tw.msg.wasCompressed)
+		isCompressed := tw.rw.respMeta.compression != "" && tw.rw.respMeta.compression != "identity"
+		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, isCompressed)
 		tw.expectingBytes = -1
 	}
 }

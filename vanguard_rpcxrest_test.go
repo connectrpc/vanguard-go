@@ -158,7 +158,8 @@ func TestMux_RPCxREST(t *testing.T) {
 
 	passingCases := map[string]struct{}{
 		"GetBook_gRPC_proto_identity/REST_json_identity": {},
-		// "GetBook_gRPC_proto_gzip/REST_json_gzip":         {},
+		"GetBook_gRPC_proto_gzip/REST_json_gzip":         {},
+		"GetBook_gRPC_proto_gzip/REST_json_identity":     {},
 	}
 	_ = passingCases
 	for _, testCase := range testRequests {

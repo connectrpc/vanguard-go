@@ -230,12 +230,16 @@ func (o *testInterceptor) restUnaryHandler(
 		acceptEncoding := req.Header.Get("Accept-Encoding")
 
 		var input io.Reader = req.Body
-		if decomp != nil {
+		if decomp != nil && req.ContentLength != 0 {
 			assert.Equal(stream.T, encoding, "gzip", "expected encoding") // TODO: use decomp.Name()
 			if err := decomp.Reset(input); err != nil {
-				return err
+				if !errors.Is(err, io.EOF) {
+					return err
+				}
+			} else {
+				// TODO: ensure content length is zero.
+				defer decomp.Close()
 			}
-			defer decomp.Close()
 		}
 		body, err := io.ReadAll(input)
 		if err != nil {

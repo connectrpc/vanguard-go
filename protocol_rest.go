@@ -176,6 +176,7 @@ func (r restServerProtocol) protocol() Protocol {
 }
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
+	// TODO: don't set content-type on no body requests.
 	headers["Content-Type"] = []string{"application/" + meta.codec}
 	if meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
@@ -191,21 +192,30 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 }
 
 func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
-	codecName := strings.TrimPrefix(headers.Get("Content-Type"), "application/")
-	if codecName == "" {
-		codecName = "json"
+	errDecoder := func(_ Codec, src io.Reader, end *responseEnd) {
+		if err := httpErrorFromResponse(src); err != nil {
+			end.err = err
+			end.httpCode = httpStatusCodeFromRPC(err.Code())
+		}
 	}
-	compressionName := headers.Get("Content-Encoding")
+	if statusCode/100 != 2 {
+		return responseMeta{}, errDecoder, nil
+	}
+	var meta responseMeta
+	meta.codec = strings.TrimPrefix(headers.Get("Content-Type"), "application/")
+	if meta.codec == "" {
+		meta.codec = "json"
+	} else if n := strings.Index(meta.codec, ";"); n != -1 {
+		meta.codec = meta.codec[:n]
+	}
+	headers.Del("Content-Type")
 
-	return responseMeta{
-			codec:       codecName,
-			compression: compressionName,
-		}, func(_ Codec, src io.Reader, end *responseEnd) {
-			if err := httpErrorFromResponse(src); err != nil {
-				end.err = err
-				end.httpCode = httpStatusCodeFromRPC(err.Code())
-			}
-		}, nil
+	meta.compression = headers.Get("Content-Encoding")
+	headers.Del("Content-Encoding")
+
+	meta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
+	headers.Del("Accept-Encoding")
+	return meta, nil, nil
 }
 
 func (r restServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
