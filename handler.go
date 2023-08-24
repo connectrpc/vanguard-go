@@ -26,7 +26,7 @@ type handler struct {
 	canDecompress []string
 }
 
-func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) { //nolint:gocyclo
+func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// Identify the protocol.
 	clientProtoHandler, originalContentType, queryVars := classifyRequest(request)
 	if clientProtoHandler == nil {
@@ -100,6 +100,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// Remove other headers that might mess up the next leg
 	request.Header.Del("Content-Encoding")
 	request.Header.Del("Accept-Encoding")
+	request.Header.Del("Content-Length")
 
 	op.reqMeta = reqMeta
 	var cannotDecompressRequest bool
