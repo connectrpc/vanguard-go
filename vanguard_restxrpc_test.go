@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"testing"
 
@@ -125,9 +126,10 @@ func TestMux_RESTxRPC(t *testing.T) {
 		return req
 	}
 	type output struct {
-		code int
-		body proto.Message
-		meta http.Header
+		code    int
+		body    proto.Message
+		rawBody string // if not proto.Message
+		meta    http.Header
 	}
 	type testRequest struct {
 		name   string
@@ -173,7 +175,8 @@ func TestMux_RESTxRPC(t *testing.T) {
 			path:   "/v1/shelves/1/books/1",
 		},
 		output: output{
-			code: http.StatusMethodNotAllowed,
+			code:    http.StatusMethodNotAllowed,
+			rawBody: "Method Not Allowed\n",
 			// TODO: status?
 			// msg: &status.Status{
 			// 	Code:    int32(connect.CodeUnimplemented),
@@ -245,26 +248,11 @@ func TestMux_RESTxRPC(t *testing.T) {
 			}
 		}
 	}
-	passingCases := map[string]struct{}{
-		"GetBook_identity/gRPC_proto_identity": {},
-		"GetBook_gzip/gRPC_proto_identity":     {},
-		"GetBook_identity/gRPC_proto_gzip":     {},
-		"GetBook_gzip/gRPC_proto_gzip":         {},
-
-		// "GetBook-Error_identity/gRPC_json_gzip":      {},
-		// "GetBook-Error_identity/gRPC_json_identity":  {},
-		"GetBook-Error_identity/gRPC_proto_gzip":     {},
-		"GetBook-Error_identity/gRPC_proto_identity": {},
-	}
-	_ = passingCases
 	for _, testCase := range testCases {
 		testCase := testCase
 		codec := DefaultJSONCodec(protoregistry.GlobalTypes)
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if _, shouldPass := passingCases[testCase.name]; !shouldPass {
-				t.Skip()
-			}
 
 			interceptor.set(t, testCase.req.stream)
 			defer interceptor.del(t)
@@ -273,14 +261,16 @@ func TestMux_RESTxRPC(t *testing.T) {
 			req.Header.Set("Test", t.Name()) // for interceptor
 			t.Log(req.Method, req.URL.String())
 
-			// debug, _ := httputil.DumpRequest(req, true)
-			// t.Log("req:", string(debug))
+			debug, _ := httputil.DumpRequest(req, true)
+			t.Log("req:", string(debug))
 
 			rsp := httptest.NewRecorder()
 			testCase.mux.mux.AsHandler().ServeHTTP(rsp, req)
 
-			// debug, _ = httputil.DumpResponse(rsp.Result(), true)
-			// t.Log("rsp:", string(debug))
+			result := rsp.Result()
+			defer result.Body.Close()
+			debug, _ = httputil.DumpResponse(result, true)
+			t.Log("rsp:", string(debug))
 
 			// Check response
 			want := testCase.req.output
@@ -291,7 +281,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			}
 			assert.Subset(t, rsp.Header(), want.meta, "headers")
 			if want.body == nil {
-				assert.Empty(t, rsp.Body.String(), "body")
+				assert.Equal(t, want.rawBody, rsp.Body.String(), "body")
 				return
 			}
 			require.NotEmpty(t, rsp.Body.String(), "body")
