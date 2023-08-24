@@ -52,6 +52,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	originalHeaders := request.Header.Clone()
 	op.contentLen = request.ContentLength
+	request.ContentLength = -1 // transforming it will likely change it
 
 	// Identify the method being invoked.
 	methodConf, httpErr := h.findMethod(&op)
@@ -987,6 +988,8 @@ type envelopingWriter struct {
 }
 
 func (ew *envelopingWriter) Write(data []byte) (int, error) {
+	// TODO: track total amount written while ew.rw.headersFlushed is false
+	//       so we can potentially write a content-length response header
 	ew.maybeInit()
 	if ew.err != nil {
 		return 0, ew.err
@@ -1195,6 +1198,8 @@ type transformingWriter struct {
 }
 
 func (tw *transformingWriter) Write(data []byte) (int, error) {
+	// TODO: track total amount written while tw.rw.headersFlushed is false
+	//       so we can potentially write a content-length response header
 	if tw.err != nil {
 		return 0, tw.err
 	}
