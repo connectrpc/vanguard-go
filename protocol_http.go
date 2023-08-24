@@ -302,5 +302,5 @@ func httpExtractContentLength(headers http.Header) (int, error) {
 func getHTTPRuleExtension(desc protoreflect.MethodDescriptor) (*annotations.HttpRule, bool) {
 	opts := desc.Options()
 	rule, ok := proto.GetExtension(opts, annotations.E_Http).(*annotations.HttpRule)
-	return rule, ok
+	return rule, ok && rule != nil
 }
