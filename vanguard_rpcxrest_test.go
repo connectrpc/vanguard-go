@@ -44,7 +44,17 @@ func TestMux_RPCxREST(t *testing.T) {
 	}
 
 	makeServer := func(compression string) testServer {
-		comp, decomp := getCompressor(t, compression), getDecompressor(t, compression)
+		var comp *compressionPool
+		if compression != CompressionIdentity {
+			comp = newCompressionPool(
+				compression,
+				func() connect.Compressor {
+					return getCompressor(t, compression)
+				}, func() connect.Decompressor {
+					return getDecompressor(t, compression)
+				},
+			)
+		}
 		codec := DefaultJSONCodec(protoregistry.GlobalTypes)
 		opts := []ServiceOption{
 			WithProtocols(ProtocolREST),
@@ -55,7 +65,7 @@ func TestMux_RPCxREST(t *testing.T) {
 		} else {
 			opts = append(opts, WithCompression(compression))
 		}
-		hdlr := interceptor.restUnaryHandler(codec, comp, decomp)
+		hdlr := interceptor.restUnaryHandler(codec, comp)
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
 
 		mux := &Mux{}
@@ -160,6 +170,13 @@ func TestMux_RPCxREST(t *testing.T) {
 		"GetBook_gRPC_proto_identity/REST_json_identity": {},
 		"GetBook_gRPC_proto_gzip/REST_json_gzip":         {},
 		"GetBook_gRPC_proto_gzip/REST_json_identity":     {},
+		"GetBook_gRPC_json_gzip/REST_json_identity":      {},
+		"GetBook_gRPC_json_gzip/REST_json_gzip":          {},
+		"GetBook_gRPC_json_identity/REST_json_identity":  {},
+
+		// TODO: fix identity to compressed
+		// "GetBook_gRPC_proto_identity/REST_json_gzip": {},
+		// "GetBook_gRPC_json_identity/REST_json_gzip":  {},
 	}
 	_ = passingCases
 	for _, testCase := range testRequests {
