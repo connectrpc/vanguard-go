@@ -981,19 +981,27 @@ func (rw *responseWriter) flushHeaders() {
 	cliRespMeta.compression = rw.op.respCompression.Name()
 	cliRespMeta.acceptCompression = intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
 	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, rw.Header())
-	if rw.buf != nil {
+	hasErr := rw.respMeta.end != nil && rw.respMeta.end.err != nil
+	// We only buffer full response for unary operations, so if we have an error,
+	// we ignore anything already written to the buffer.
+	if rw.buf != nil && !hasErr {
 		rw.Header().Set("Content-Length", strconv.Itoa(rw.buf.Len()))
 	}
+	// TODO: At this point, if the server was gRPC but the client is not, we may have "Trailer"
+	//       headers reserving the use of various metadata keys in trailers. It would be
+	//       cleaner if they were culled and only remained present for sneding to gRPC clients.
 	rw.delegate.WriteHeader(statusCode)
+	if rw.buf != nil {
+		if !hasErr {
+			_, _ = rw.buf.WriteTo(rw.delegate)
+		}
+		rw.op.bufferPool.Put(rw.buf)
+		rw.buf = nil
+	}
 	if rw.respMeta.end != nil {
 		// response is done
 		rw.writeEnd(rw.respMeta.end, true)
 		rw.err = context.Canceled
-	}
-	if rw.buf != nil {
-		_, _ = rw.buf.WriteTo(rw.delegate)
-		rw.op.bufferPool.Put(rw.buf)
-		rw.buf = nil
 	}
 
 	rw.headersFlushed = true

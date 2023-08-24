@@ -255,13 +255,15 @@ func (g grpcWebServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
 	return grpcServerProtocol{}.encodeEnvelope(env)
 }
 
-func (g grpcWebServerProtocol) decodeEndFromMessage(_ *operation, reader io.Reader) (responseEnd, error) {
+func (g grpcWebServerProtocol) decodeEndFromMessage(op *operation, reader io.Reader) (responseEnd, error) {
 	// TODO: buffer size limit for headers/trailers; should use http.DefaultMaxHeaderBytes if not configured
-	data, err := io.ReadAll(reader)
+	buffer := op.bufferPool.Get()
+	defer op.bufferPool.Put(buffer)
+	_, err := buffer.ReadFrom(reader)
 	if err != nil {
 		return responseEnd{}, err
 	}
-	headerLines := bytes.Split(data, []byte{'\r', '\n'})
+	headerLines := bytes.Split(buffer.Bytes(), []byte{'\r', '\n'})
 	trailers := make(http.Header, len(headerLines))
 	for i, headerLine := range headerLines {
 		// may have trailing newline, so ignore resulting trailing empty line
@@ -375,7 +377,22 @@ func grpcAddResponseMeta(contentTypePrefix string, meta responseMeta, headers ht
 	if len(meta.acceptCompression) > 0 {
 		headers.Set("Grpc-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
 	}
-	headers.Set("Trailer", "Grpc-Status, Grpc-Message")
+	trailingKeys := parseMultiHeader(headers.Values("Trailer"))
+	var hasStatus, hasMessage bool
+	for _, k := range trailingKeys {
+		if strings.ToLower(k) == "grpc-status" {
+			hasStatus = true
+		}
+		if strings.ToLower(k) == "grpc-message" {
+			hasMessage = true
+		}
+	}
+	if !hasStatus {
+		headers.Add("Trailer", "Grpc-Status")
+	}
+	if !hasMessage {
+		headers.Add("Trailer", "Grpc-Message")
+	}
 	return http.StatusOK
 }
 
