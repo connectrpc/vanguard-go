@@ -318,7 +318,12 @@ func (c connectUnaryServerProtocol) extractEndFromTrailers(_ *operation, _ http.
 }
 
 func (c connectUnaryServerProtocol) requestNeedsPrep(op *operation) bool {
-	return op.request.Method == http.MethodGet
+	return c.useGet(op)
+}
+
+func (c connectUnaryServerProtocol) useGet(op *operation) bool {
+	_, isStable := op.server.codec.(StableCodec)
+	return op.request.Method == http.MethodGet && isStable
 }
 
 func (c connectUnaryServerProtocol) prepareMarshalledRequest(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
@@ -338,11 +343,12 @@ func (c connectUnaryServerProtocol) prepareUnmarshalledResponse(_ *operation, _ 
 }
 
 func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(op *operation) bool {
-	return op.request.Method == http.MethodGet
+	return c.useGet(op)
 }
 
 func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
-	if op.request.Method != http.MethodGet {
+	stableMarshaler, isStable := op.server.codec.(StableCodec)
+	if op.request.Method != http.MethodGet || !isStable {
 		return op.methodPath, "", http.MethodPost, true, nil
 	}
 	vals := make(url.Values, 5)
@@ -350,17 +356,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 
 	vals.Set("encoding", op.server.codec.Name())
 	buf := op.bufferPool.Get()
-	stableMarshaler, isStable := op.server.codec.(interface {
-		StableMarshalAppend(b []byte, msg proto.Message) ([]byte, error)
-	})
-	var data []byte
-	if isStable {
-		data, err = stableMarshaler.StableMarshalAppend(buf.Bytes(), msg)
-	} else {
-		// Without stable marshalling, the URLs will be inconsistent
-		// and less cache-able.
-		data, err = op.server.codec.MarshalAppend(buf.Bytes(), msg)
-	}
+	data, err := stableMarshaler.MarshalAppendStable(buf.Bytes(), msg)
 	if err != nil {
 		op.bufferPool.Put(buf)
 		return "", "", "", false, err
@@ -385,10 +381,9 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 		data = buf.Bytes()
 	}
 
-	b64encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
-	urlEncodeLen := len(url.QueryEscape(string(data)))
 	var msgStr string
-	if b64encodedLen < urlEncodeLen {
+	if stableMarshaler.IsBinary() || op.server.reqCompression != nil {
+		b64encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
 		vals.Set("base64", "1")
 		encoded.Grow(b64encodedLen)
 		encodedBytes := encoded.Bytes()[:b64encodedLen]
