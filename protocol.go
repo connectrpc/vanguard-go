@@ -110,6 +110,22 @@ type clientProtocolHandler interface {
 	// timeout, etc. The relevant headers are interpreted into the
 	// returned requestMeta and also *removed* from the given headers.
 	extractProtocolRequestHeaders(*operation, http.Header) (requestMeta, error)
+
+	// TODO: The following two methods were meant to be agnostic as to whether
+	//       the protocol is a streaming protocol or a unary one. The operations
+	//       are split because a streaming protocol cannot change headers or the
+	//       status code from encodeEnd because headers and status have already
+	//       been written. This requires unary implementations to do extra
+	//       handling of errors in addProtocolResponseHeaders, awkwardly separated
+	//       from the handling in encodeEnd. Worse, if an unexpected error happens
+	//       in encodeEnd, it is too late to change status code or headers. We
+	//       could possibly combine these for unary-only protocols to make the
+	//       implementation simpler. If we do, we'd need a way to swap protocol
+	//       handlers -- so that a REST handler swap itself out for a unary vs.
+	//       vs. streaming implementation once the method is known (for streaming
+	//       upload/download endpoints or in future general support for server
+	//       streaming endpoints).
+
 	// Encodes the given responseMeta as headers into the given target
 	// headers. If provided, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
