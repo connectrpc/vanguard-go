@@ -1,8 +1,13 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// All rights reserved.
+
 package vanguard
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestJSONStabilize(t *testing.T) {
