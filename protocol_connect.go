@@ -7,6 +7,7 @@ package vanguard
 
 import (
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -340,23 +341,56 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 }
 
 func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	//TODO implement me
-	panic("implement me")
+	headers.Set("Content-Type", "application/connect+"+meta.codec)
+	if meta.compression != "" {
+		headers.Set("Connect-Content-Encoding", meta.compression)
+	}
+	if len(meta.acceptCompression) > 0 {
+		headers.Set("Connect-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
+	}
+	return http.StatusOK
 }
 
-func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	//TODO implement me
-	panic("implement me")
+func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, _ bool) http.Header {
+	streamEnd := &connectStreamEnd{Metadata: end.trailers}
+	if end.err != nil {
+		streamEnd.Error = connectErrorToWireError(end.err, op.resolver)
+	}
+	buffer := op.bufferPool.Get()
+	defer op.bufferPool.Put(buffer)
+	enc := json.NewEncoder(buffer)
+	if err := enc.Encode(streamEnd); err != nil {
+		buffer.WriteString(`{"error": {"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}}`)
+	}
+	// TODO: compress?
+	env := envelope{trailer: true, length: uint32(buffer.Len())}
+	envBytes := c.encodeEnvelope(env)
+	_, _ = writer.Write(envBytes[:])
+	_, _ = buffer.WriteTo(writer)
+	return nil
 }
 
-func (c connectStreamClientProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
-	//TODO implement me
-	panic("implement me")
+func (c connectStreamClientProtocol) decodeEnvelope(envBytes envelopeBytes) (envelope, error) {
+	flags := envBytes[0]
+	if flags != 0 && flags != 1 {
+		return envelope{}, fmt.Errorf("invalid compression flag: must be 0 or 1; instead got %d", flags)
+	}
+	return envelope{
+		compressed: flags == 1,
+		length:     binary.BigEndian.Uint32(envBytes[1:]),
+	}, nil
 }
 
-func (c connectStreamClientProtocol) encodeEnvelope(e envelope) envelopeBytes {
-	//TODO implement me
-	panic("implement me")
+func (c connectStreamClientProtocol) encodeEnvelope(env envelope) envelopeBytes {
+	var envBytes envelopeBytes
+	if env.compressed {
+		envBytes[0] = 1
+	}
+	if env.trailer {
+		envBytes[0] |= 2
+	}
+	binary.BigEndian.PutUint32(envBytes[1:], env.length)
+	return envBytes
 }
 
 func (c connectStreamClientProtocol) String() string {
@@ -375,33 +409,92 @@ func (c connectStreamServerProtocol) protocol() Protocol {
 }
 
 func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	//TODO implement me
-	panic("implement me")
+	headers.Set("Content-Type", "application/connect+"+meta.codec)
+	if meta.compression != "" {
+		headers.Set("Connect-Content-Encoding", meta.compression)
+	}
+	if len(meta.acceptCompression) > 0 {
+		headers.Set("Connect-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
+	}
+	if meta.hasTimeout {
+		headers.Set("Connect-Timeout-Ms", connectEncodeTimeout(meta.timeout))
+	}
 }
 
 func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
-	//TODO implement me
-	panic("implement me")
+	var respMeta responseMeta
+	contentType := headers.Get("Content-Type")
+	switch {
+	case strings.HasPrefix(contentType, "application/connect+"):
+		respMeta.codec = strings.TrimPrefix(contentType, "application/connect+")
+	default:
+		respMeta.codec = contentType + "?"
+	}
+	headers.Del("Content-Type")
+	respMeta.compression = headers.Get("Connect-Content-Encoding")
+	headers.Del("Connect-Content-Encoding")
+	respMeta.acceptCompression = parseMultiHeader(headers.Values("Connect-Accept-Encoding"))
+	headers.Del("Connect-Accept-Encoding")
+
+	// See if RPC is already over (unexpected HTTP error or trailers-only response)
+	if statusCode != http.StatusOK {
+		if respMeta.end == nil {
+			respMeta.end = &responseEnd{}
+		}
+		if respMeta.end.err == nil {
+			// TODO: map HTTP status code to an RPC error (opposite of httpStatusCodeFromRPC)
+			respMeta.end.err = connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected HTTP error: %d %s", statusCode, http.StatusText(statusCode)))
+		}
+	}
+	return respMeta, nil, nil
 }
 
 func (c connectStreamServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
-	//TODO implement me
-	panic("implement me")
+	return responseEnd{}, errors.New("connect streaming protocol does not use HTTP trailers")
 }
 
-func (c connectStreamServerProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
-	//TODO implement me
-	panic("implement me")
+func (c connectStreamServerProtocol) decodeEnvelope(envBytes envelopeBytes) (envelope, error) {
+	flags := envBytes[0]
+	if flags&0b1111_1100 != 0 {
+		// invalid bits are set
+		return envelope{}, fmt.Errorf("invalid frame flags: only lowest two bits may be set; instead got %d", flags)
+	}
+	return envelope{
+		compressed: flags&1 != 0,
+		trailer:    flags&2 != 0,
+		length:     binary.BigEndian.Uint32(envBytes[1:]),
+	}, nil
 }
 
-func (c connectStreamServerProtocol) encodeEnvelope(e envelope) envelopeBytes {
-	//TODO implement me
-	panic("implement me")
+func (c connectStreamServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
+	var envBytes envelopeBytes
+	if env.compressed {
+		envBytes[0] = 1
+	}
+	binary.BigEndian.PutUint32(envBytes[1:], env.length)
+	return envBytes
 }
 
 func (c connectStreamServerProtocol) decodeEndFromMessage(op *operation, reader io.Reader) (responseEnd, error) {
-	//TODO implement me
-	panic("implement me")
+	// TODO: buffer size limit for headers/trailers; should use http.DefaultMaxHeaderBytes if not configured
+	buffer := op.bufferPool.Get()
+	defer op.bufferPool.Put(buffer)
+	_, err := buffer.ReadFrom(reader)
+	if err != nil {
+		return responseEnd{}, err
+	}
+	var streamEnd connectStreamEnd
+	if err := json.Unmarshal(buffer.Bytes(), &streamEnd); err != nil {
+		return responseEnd{}, err
+	}
+	var cerr *connect.Error
+	if streamEnd.Error != nil {
+		cerr = streamEnd.Error.toConnectError()
+	}
+	return responseEnd{
+		err:      cerr,
+		trailers: streamEnd.Metadata,
+	}, nil
 }
 
 func (c connectStreamServerProtocol) String() string {
@@ -514,4 +607,9 @@ func connectErrorToWireError(cerr *connect.Error, resolver TypeResolver) *connec
 		}
 	}
 	return result
+}
+
+type connectStreamEnd struct {
+	Error    *connectWireError `json:"error,omitempty"`
+	Metadata http.Header       `json:"metadata,omitempty"`
 }

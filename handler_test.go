@@ -16,13 +16,11 @@ import (
 	"connectrpc.com/connect"
 	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
 	"github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1/testv1connect"
-	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
@@ -442,6 +440,7 @@ func TestHandler_Errors(t *testing.T) {
 	}
 }
 
+//nolint:dupl // some of these testStream literals are the same as in vanguard_rpcxrpc_test cases, but we don't need to share
 func TestHandler_PassThrough(t *testing.T) {
 	t.Parallel()
 	// These cases don't do any transformation and just pass through to the
@@ -773,44 +772,7 @@ func TestHandler_PassThrough(t *testing.T) {
 									clientOptions = append(clientOptions, compressionCase.opts...)
 									client := testv1connect.NewContentServiceClient(server.Client(), server.URL, clientOptions...)
 
-									interceptor.set(t, testReq.stream)
-									reqHeaders := http.Header{}
-									reqHeaders.Set("Test", t.Name()) // test header
-									for k, v := range testReq.stream.reqHeader {
-										reqHeaders[k] = v
-									}
-									var reqMsgs []proto.Message
-									for _, streamMsg := range testReq.stream.msgs {
-										if streamMsg.in != nil {
-											reqMsgs = append(reqMsgs, streamMsg.in.msg)
-										}
-									}
-									headers, responses, trailers, err := testReq.invoke(client, reqHeaders, reqMsgs)
-									var expectedErr *connect.Error
-									for _, streamMsg := range testReq.stream.msgs {
-										if streamMsg.out != nil && streamMsg.out.err != nil {
-											expectedErr = streamMsg.out.err
-											break
-										}
-									}
-									if expectedErr == nil {
-										assert.NoError(t, err)
-									} else {
-										assert.Equal(t, expectedErr.Code(), connect.CodeOf(err))
-									}
-									assert.Subset(t, headers, testReq.stream.rspHeader)
-									assert.Subset(t, trailers, testReq.stream.rspTrailer)
-									var expectedResponses []proto.Message
-									for _, streamMsg := range testReq.stream.msgs {
-										if streamMsg.out != nil && streamMsg.out.msg != nil {
-											expectedResponses = append(expectedResponses, streamMsg.out.msg)
-										}
-									}
-									require.Len(t, responses, len(expectedResponses))
-									for i, msg := range responses {
-										want := expectedResponses[i]
-										assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
-									}
+									runRPCTestCase(t, &interceptor, client, testReq.invoke, testReq.stream)
 								})
 							}
 						})

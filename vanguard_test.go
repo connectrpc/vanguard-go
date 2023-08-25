@@ -19,6 +19,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -353,11 +354,6 @@ type testServer struct {
 	name string
 	svr  *httptest.Server
 }
-type testOpt struct {
-	name string
-	svr  *httptest.Server
-	opts []connect.ClientOption
-}
 
 func appendClientProtocolOptions(t *testing.T, opts []connect.ClientOption, protocol Protocol) []connect.ClientOption {
 	t.Helper()
@@ -609,5 +605,54 @@ func protocolAssertMiddleware(
 			}
 		}
 		next.ServeHTTP(rsp, req)
+	}
+}
+
+func runRPCTestCase[Client any](
+	t *testing.T,
+	interceptor *testInterceptor,
+	client Client,
+	invoke func(Client, http.Header, []proto.Message) (http.Header, []proto.Message, http.Header, error),
+	stream testStream,
+) {
+	t.Helper()
+	interceptor.set(t, stream)
+	defer interceptor.del(t)
+	reqHeaders := http.Header{}
+	reqHeaders.Set("Test", t.Name()) // test header
+	for k, v := range stream.reqHeader {
+		reqHeaders[k] = v
+	}
+	var reqMsgs []proto.Message
+	for _, streamMsg := range stream.msgs {
+		if streamMsg.in != nil {
+			reqMsgs = append(reqMsgs, streamMsg.in.msg)
+		}
+	}
+	headers, responses, trailers, err := invoke(client, reqHeaders, reqMsgs)
+	var expectedErr *connect.Error
+	for _, streamMsg := range stream.msgs {
+		if streamMsg.out != nil && streamMsg.out.err != nil {
+			expectedErr = streamMsg.out.err
+			break
+		}
+	}
+	if expectedErr == nil {
+		assert.NoError(t, err)
+	} else {
+		assert.Equal(t, expectedErr.Code(), connect.CodeOf(err))
+	}
+	assert.Subset(t, headers, stream.rspHeader)
+	assert.Subset(t, trailers, stream.rspTrailer)
+	var expectedResponses []proto.Message
+	for _, streamMsg := range stream.msgs {
+		if streamMsg.out != nil && streamMsg.out.msg != nil {
+			expectedResponses = append(expectedResponses, streamMsg.out.msg)
+		}
+	}
+	require.Len(t, responses, len(expectedResponses))
+	for i, msg := range responses {
+		want := expectedResponses[i]
+		assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
 	}
 }

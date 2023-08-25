@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -252,7 +253,7 @@ func httpExtractTrailers(headers http.Header) http.Header {
 	expectedTrailerSet := make(map[string]struct{})
 	for _, vals := range headers.Values("Trailer") {
 		for _, val := range strings.Split(vals, ",") {
-			val = strings.TrimSpace(val)
+			val = textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(val))
 			expectedTrailerSet[val] = struct{}{}
 		}
 	}
