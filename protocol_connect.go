@@ -2,10 +2,10 @@
 //
 // All rights reserved.
 
-//nolint:forbidigo,revive,gocritic // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -14,6 +14,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -78,33 +79,68 @@ func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operati
 }
 
 func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	//TODO implement me
-	panic("implement me")
+	// Response format is the same as unary POST; only requests differ
+	return connectUnaryPostClientProtocol{}.addProtocolResponseHeaders(meta, headers)
 }
 
 func (c connectUnaryGetClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	//TODO implement me
-	panic("implement me")
+	// Response format is the same as unary POST; only requests differ
+	return connectUnaryPostClientProtocol{}.encodeEnd(op, end, writer, wasInHeaders)
 }
 
-func (c connectUnaryGetClientProtocol) requestNeedsPrep(o *operation) bool {
-	//TODO implement me
-	panic("implement me")
+func (c connectUnaryGetClientProtocol) requestNeedsPrep(_ *operation) bool {
+	return true
 }
 
 func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	//TODO implement me
-	panic("implement me")
+	if len(src) > 0 {
+		return fmt.Errorf("connect unary protocol using GET HTTP method should have no body; instead got %d bytes", len(src))
+	}
+	// TODO: ideally we could *replace* the request body with the bytes in the query string and then
+	//       otherwise use message and its re-encoding/re-compressing capability.
+	vals := op.queryValues()
+	base64Str := vals.Get("base64")
+	var base64enc bool
+	switch base64Str {
+	case "", "0":
+	// not base64-encoded
+	case "1":
+		base64enc = true
+	default:
+		return fmt.Errorf("query string parameter base64 should be absent or have value 0 or 1; instead got %q", base64Str)
+	}
+	msgStr := vals.Get("message")
+	var msgData []byte
+	if base64enc && msgStr != "" {
+		var err error
+		msgData, err = base64.RawURLEncoding.DecodeString(msgStr)
+		if err != nil {
+			// Padding characters are allowed.
+			msgData, err = base64.URLEncoding.DecodeString(msgStr)
+		}
+		if err != nil {
+			return fmt.Errorf("query string parameter message should be base64-encoded but could not decode: %w", err)
+		}
+	} else {
+		msgData = ([]byte)(msgStr)
+	}
+	if op.client.reqCompression != nil {
+		dst := op.bufferPool.Get()
+		defer op.bufferPool.Put(dst)
+		if err := op.client.reqCompression.decompress(dst, bytes.NewBuffer(msgData)); err != nil {
+			return err
+		}
+		msgData = dst.Bytes()
+	}
+	return op.client.codec.Unmarshal(msgData, target)
 }
 
-func (c connectUnaryGetClientProtocol) responseNeedsPrep(o *operation) bool {
-	//TODO implement me
-	panic("implement me")
+func (c connectUnaryGetClientProtocol) responseNeedsPrep(_ *operation) bool {
+	return false
 }
 
-func (c connectUnaryGetClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
+func (c connectUnaryGetClientProtocol) prepareMarshalledResponse(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
+	return nil, errors.New("response does not need preparation")
 }
 
 func (c connectUnaryGetClientProtocol) String() string {
@@ -279,17 +315,18 @@ func (c connectUnaryServerProtocol) extractEndFromTrailers(_ *operation, _ http.
 }
 
 func (c connectUnaryServerProtocol) requestNeedsPrep(op *operation) bool {
-	// TODO: must return true if using GET
-	return false
+	return op.request.Method == http.MethodGet
 }
 
-func (c connectUnaryServerProtocol) prepareMarshalledRequest(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
+func (c connectUnaryServerProtocol) prepareMarshalledRequest(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
 	// NB: This would be called when requestNeedsPrep returns true, for GET requests.
-	//     In that case, there is no request body, so we can nil result.
+	//     In that case, there is no request body, so we can return a nil result.
+	//     The request data will actually be put into the URL in that case.
+	//     See the requestLine method below.
 	return nil, nil
 }
 
-func (c connectUnaryServerProtocol) responseNeedsPrep(op *operation) bool {
+func (c connectUnaryServerProtocol) responseNeedsPrep(_ *operation) bool {
 	return false
 }
 
@@ -297,14 +334,65 @@ func (c connectUnaryServerProtocol) prepareUnmarshalledResponse(_ *operation, _ 
 	return errors.New("response does not need preparation")
 }
 
-func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(o *operation) bool {
-	// TODO: must return true if using GET
-	return false
+func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(op *operation) bool {
+	return op.request.Method == http.MethodGet
 }
 
-func (c connectUnaryServerProtocol) requestLine(op *operation, _ proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
-	// TODO: support GET requests, too
-	return op.methodPath, "", http.MethodPost, true, nil
+func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
+	if op.request.Method != http.MethodGet {
+		return op.methodPath, "", http.MethodPost, true, nil
+	}
+	vals := make(url.Values, 5)
+	vals.Set("connect", "v1")
+
+	vals.Set("encoding", op.server.codec.Name())
+	buf := op.bufferPool.Get()
+	stableMarshaler, isStable := op.server.codec.(interface {
+		StableMarshalAppend(b []byte, msg proto.Message) ([]byte, error)
+	})
+	var data []byte
+	if isStable {
+		data, err = stableMarshaler.StableMarshalAppend(buf.Bytes(), msg)
+	} else {
+		// Without stable marshalling, the URLs will be inconsistent
+		// and less cache-able.
+		data, err = op.server.codec.MarshalAppend(buf.Bytes(), msg)
+	}
+	if err != nil {
+		op.bufferPool.Put(buf)
+		return "", "", "", false, err
+	}
+	buf = op.bufferPool.Wrap(data, buf)
+	defer op.bufferPool.Put(buf)
+
+	// TODO: Maybe examine serialized bytes and only set this if there are
+	//       control characters or multi-byte characters? Or maybe those
+	//       characters are okay and we only do it when the result is
+	//       smaller (since percent-encoding is less efficient spacewise).
+	vals.Set("base64", "1")
+	encoded := op.bufferPool.Get()
+	encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
+	encoded.Grow(encodedLen)
+	encodedBytes := encoded.Bytes()[:encodedLen]
+	base64.RawURLEncoding.Encode(encodedBytes, data)
+	encoded = op.bufferPool.Wrap(encodedBytes, encoded)
+	defer op.bufferPool.Put(encoded)
+
+	if op.server.reqCompression != nil {
+		vals.Set("compression", op.server.reqCompression.Name())
+		buf.Reset()
+		if err := op.server.reqCompression.compress(buf, encoded); err != nil {
+			return "", "", "", false, err
+		}
+		encoded = buf
+	}
+
+	vals.Set("message", encoded.String())
+	// TODO: Limit to how big query string is (or maybe query string + URI path?)
+	//       So if transformation enlarges the query string/URL from the original
+	//       request (particularly if we de-compress w/out re-compressing), we can
+	//       decide to use POST instead of GET.
+	return op.methodPath, vals.Encode(), http.MethodGet, false, nil
 }
 
 func (c connectUnaryServerProtocol) String() string {
@@ -449,7 +537,7 @@ func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode i
 	return respMeta, nil, nil
 }
 
-func (c connectStreamServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
+func (c connectStreamServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
 	return responseEnd{}, errors.New("connect streaming protocol does not use HTTP trailers")
 }
 

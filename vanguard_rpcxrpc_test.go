@@ -98,17 +98,26 @@ func TestMux_RPCxRPC(t *testing.T) {
 		var opts []connect.ClientOption
 		for _, protocol := range protocols {
 			opts := appendClientProtocolOptions(t, opts, protocol)
-			for _, codec := range codecs {
-				opts := appendClientCodecOptions(t, opts, codec)
-				for _, compression := range compressions {
-					opts := appendClientCompressionOptions(t, opts, compression)
-					copyOpts := make([]connect.ClientOption, len(opts))
-					copy(copyOpts, opts)
-					testOpts = append(testOpts, testOpt{
-						name: fmt.Sprintf("%s_%s_%s/%s", protocol, codec, compression, server.name),
-						svr:  server.svr,
-						opts: copyOpts,
-					})
+			addlOpts := map[string]connect.ClientOption{"": nil}
+			if protocol == ProtocolConnect {
+				addlOpts["(GET)"] = connect.WithHTTPGet()
+			}
+			for suffix, addlOpt := range addlOpts {
+				if addlOpt != nil {
+					opts = append(opts, addlOpt)
+				}
+				for _, codec := range codecs {
+					opts := appendClientCodecOptions(t, opts, codec)
+					for _, compression := range compressions {
+						opts := appendClientCompressionOptions(t, opts, compression)
+						copyOpts := make([]connect.ClientOption, len(opts))
+						copy(copyOpts, opts)
+						testOpts = append(testOpts, testOpt{
+							name: fmt.Sprintf("%s%s_%s_%s/%s", protocol, suffix, codec, compression, server.name),
+							svr:  server.svr,
+							opts: copyOpts,
+						})
+					}
 				}
 			}
 		}
