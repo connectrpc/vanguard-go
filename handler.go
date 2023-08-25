@@ -1331,7 +1331,7 @@ func (tw *transformingWriter) reset() {
 		tw.expectingBytes = envelopeLen
 		tw.writingEnvelope = true
 	} else {
-		isCompressed := tw.rw.respMeta.compression != "" && tw.rw.respMeta.compression != "identity"
+		isCompressed := tw.rw.respMeta.compression != ""
 		tw.buffer = tw.msg.reset(tw.rw.op.bufferPool, false, isCompressed)
 		tw.expectingBytes = -1
 	}
