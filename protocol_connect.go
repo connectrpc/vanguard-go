@@ -365,7 +365,10 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	buf = op.bufferPool.Wrap(data, buf)
 	defer op.bufferPool.Put(buf)
 
-	// TODO: maybe examine serialized bytes and only set this if there are control characters or multi-byte characters?
+	// TODO: Maybe examine serialized bytes and only set this if there are
+	//       control characters or multi-byte characters? Or maybe those
+	//       characters are okay and we only do it when the result is
+	//       smaller (since percent-encoding is less efficient spacewise).
 	vals.Set("base64", "1")
 	encoded := op.bufferPool.Get()
 	encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
@@ -385,6 +388,10 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	}
 
 	vals.Set("message", encoded.String())
+	// TODO: Limit to how big query string is (or maybe query string + URI path?)
+	//       So if transformation enlarges the query string/URL from the original
+	//       request (particularly if we de-compress w/out re-compressing), we can
+	//       decide to use POST instead of GET.
 	return op.methodPath, vals.Encode(), http.MethodGet, false, nil
 }
 
