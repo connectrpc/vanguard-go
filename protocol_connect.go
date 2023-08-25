@@ -29,6 +29,9 @@ const (
 	protocolNameConnectUnaryGet  = protocolNameConnectUnary + " (GET)"
 	protocolNameConnectUnaryPost = protocolNameConnectUnary + " (POST)"
 	protocolNameConnectStream    = protocolNameConnect + " stream"
+
+	// TODO: Extract more constants for header names and values.
+	contentTypeJSON = "application/json"
 )
 
 // connectUnaryGetClientProtocol implements the Connect protocol for
@@ -150,7 +153,7 @@ func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta response
 	status := http.StatusOK
 	if meta.end != nil && meta.end.err != nil {
 		status = httpStatusCodeFromRPC(meta.end.err.Code())
-		headers.Set("Content-Type", "application/json") // error bodies are always in JSON
+		headers.Set("Content-Type", contentTypeJSON) // error bodies are always in JSON
 		// TODO: Content-Encoding to compress error?
 	} else {
 		headers.Set("Content-Type", "application/"+meta.codec)
@@ -243,7 +246,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 		respMeta.pendingTrailers = trailers
 	} else {
 		// Content-Type must be application/json for errors or else it's invalid
-		if contentType != "application/json" {
+		if contentType != contentTypeJSON {
 			respMeta.codec = contentType + "?"
 		} else {
 			respMeta.codec = ""

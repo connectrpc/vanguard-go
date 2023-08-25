@@ -122,7 +122,7 @@ type clientProtocolHandler interface {
 	//       could possibly combine these for unary-only protocols to make the
 	//       implementation simpler. If we do, we'd need a way to swap protocol
 	//       handlers -- so that a REST handler swap itself out for a unary vs.
-	//       vs. streaming implementation once the method is known (for streaming
+	//       streaming implementation once the method is known (for streaming
 	//       upload/download endpoints or in future general support for server
 	//       streaming endpoints).
 
