@@ -124,6 +124,9 @@ func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation,
 	} else {
 		msgData = ([]byte)(msgStr)
 	}
+	// TODO: test compression (apparently existing test harness, that creates a connect-go
+	//       client configured to send compression and to use HTTP GET, does not actually
+	//       use compression with GET requests and thus doesn't exercise this code path)
 	if op.client.reqCompression != nil {
 		dst := op.bufferPool.Get()
 		defer op.bufferPool.Put(dst)
@@ -365,29 +368,37 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	buf = op.bufferPool.Wrap(data, buf)
 	defer op.bufferPool.Put(buf)
 
-	// TODO: Maybe examine serialized bytes and only set this if there are
-	//       control characters or multi-byte characters? Or maybe those
-	//       characters are okay and we only do it when the result is
-	//       smaller (since percent-encoding is less efficient spacewise).
-	vals.Set("base64", "1")
+	// TODO: test compression (apparently existing test harness, that creates a connect-go
+	//       client configured to send compression and to use HTTP GET, does not actually
+	//       use compression with GET requests and thus doesn't exercise this code path)
 	encoded := op.bufferPool.Get()
-	encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
-	encoded.Grow(encodedLen)
-	encodedBytes := encoded.Bytes()[:encodedLen]
-	base64.RawURLEncoding.Encode(encodedBytes, data)
-	encoded = op.bufferPool.Wrap(encodedBytes, encoded)
 	defer op.bufferPool.Put(encoded)
-
 	if op.server.reqCompression != nil {
 		vals.Set("compression", op.server.reqCompression.Name())
 		buf.Reset()
-		if err := op.server.reqCompression.compress(buf, encoded); err != nil {
+		if err := op.server.reqCompression.compress(encoded, buf); err != nil {
 			return "", "", "", false, err
 		}
-		encoded = buf
+		// for the next step, we want encoded empty and data to be the message source
+		buf, encoded = encoded, buf // swap so writing to encoded doesn't mutate data
+		encoded.Reset()
+		data = buf.Bytes()
 	}
 
-	vals.Set("message", encoded.String())
+	b64encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
+	urlEncodeLen := len(url.QueryEscape(string(data)))
+	var msgStr string
+	if b64encodedLen < urlEncodeLen {
+		vals.Set("base64", "1")
+		encoded.Grow(b64encodedLen)
+		encodedBytes := encoded.Bytes()[:b64encodedLen]
+		base64.RawURLEncoding.Encode(encodedBytes, data)
+		msgStr = string(encodedBytes)
+	} else {
+		msgStr = string(data)
+	}
+
+	vals.Set("message", msgStr)
 	// TODO: Limit to how big query string is (or maybe query string + URI path?)
 	//       So if transformation enlarges the query string/URL from the original
 	//       request (particularly if we de-compress w/out re-compressing), we can
