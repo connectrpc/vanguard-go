@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"connectrpc.com/connect"
@@ -64,7 +65,8 @@ func ExampleMux_rpcRpc() {
 	// Output: Do Androids Dream of Electric Sheep?
 }
 
-func ExampleMux_restRpc() {
+// func ExampleMux_restRpc() {
+func TestMux_restRpc(t *testing.T) {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 	svc := &libraryRPC{} // implements RPC testv1connect.LibraryServiceHandler
 
@@ -108,20 +110,22 @@ func ExampleMux_restRpc() {
 }
 
 func ExampleMux_rpcRest() {
+	//func TestMux_rpcRest(t *testing.T) {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 	svc := &libraryREST{} // implements REST service
 
 	mux := &vanguard.Mux{}
 	mux.RegisterServiceByName(
 		svc, testv1connect.LibraryServiceName,
-		vanguard.WithProtocols(vanguard.ProtocolGRPC),
+		vanguard.WithProtocols(vanguard.ProtocolREST),
+		vanguard.WithCodecs(vanguard.CodecJSON),
 		vanguard.WithNoCompression(),
 	)
 
 	client := testv1connect.NewLibraryServiceClient(
 		newExampleClient(mux.AsHandler()), "",
-		connect.WithGRPCWeb(),
-		connect.WithAcceptCompression(vanguard.CompressionGzip, nil, nil),
+		connect.WithGRPC(),
+		//connect.WithAcceptCompression(vanguard.CompressionGzip, nil, nil),
 	)
 	rsp, err := client.GetBook(
 		context.Background(),
@@ -174,6 +178,7 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	}
 	rsp.WriteHeader(http.StatusOK)
 	rsp.Write(body)
+	//fmt.Println("wrote body", string(body))
 }
 
 type libraryRPC struct {
