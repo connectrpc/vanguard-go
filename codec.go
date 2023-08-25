@@ -74,11 +74,13 @@ func (p *jsonCodec) StableMarshalAppend(b []byte, msg proto.Message) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
+	return jsonStabilize(data)
+}
+
+func jsonStabilize(data []byte) ([]byte, error) {
 	// NB: Because json.Compact only removes whitespace, never elongating data, it is
 	//     safe to use the same backing slice as source and destination. This is safe
 	//     for the same reason that copy is safe even when the two slices overlap.
-	// TODO: How to better verify the above? Should we instead inject a bufferPool
-	//       and just allocate a whole new buffer, for more assured safety?
 	buf := bytes.NewBuffer(data[:0])
 	if err := json.Compact(buf, data); err != nil {
 		return nil, err
