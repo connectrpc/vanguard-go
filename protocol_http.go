@@ -14,8 +14,10 @@ import (
 	"strings"
 
 	"connectrpc.com/connect"
+	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -295,4 +297,13 @@ func httpExtractContentLength(headers http.Header) (int, error) {
 	}
 	headers.Del("Content-Length")
 	return i, nil
+}
+
+func getHTTPRuleExtension(desc protoreflect.MethodDescriptor) (*annotations.HttpRule, bool) {
+	opts := desc.Options()
+	if !proto.HasExtension(opts, annotations.E_Http) {
+		return nil, false
+	}
+	rule, ok := proto.GetExtension(opts, annotations.E_Http).(*annotations.HttpRule)
+	return rule, ok
 }

@@ -29,7 +29,7 @@ type routeTrie struct {
 // HTTP rule. Only the rule itself is added. If the rule indicates additional
 // bindings, they are ignored. To add routes for all bindings, callers must
 // invoke this method for each rule.
-func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) error {
+func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (*routeTarget, error) {
 	var method, template string
 	switch pattern := rule.Pattern.(type) {
 	case *annotations.HttpRule_Get:
@@ -45,23 +45,26 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	case *annotations.HttpRule_Custom:
 		method, template = pattern.Custom.GetKind(), pattern.Custom.GetPath()
 	default:
-		return fmt.Errorf("invalid type of pattern for HTTP rule: %T", pattern)
+		return nil, fmt.Errorf("invalid type of pattern for HTTP rule: %T", pattern)
 	}
 	if method == "" {
-		return fmt.Errorf("invalid HTTP rule: method is blank")
+		return nil, fmt.Errorf("invalid HTTP rule: method is blank")
 	}
 	if template == "" {
-		return fmt.Errorf("invalid HTTP rule: path template is blank")
+		return nil, fmt.Errorf("invalid HTTP rule: path template is blank")
 	}
 	segments, variables, err := parsePathTemplate(template)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	target, err := makeTarget(config, method, rule.Body, rule.ResponseBody, segments, variables)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return trie.insert(method, target, segments)
+	if err := trie.insert(method, target, segments); err != nil {
+		return nil, err
+	}
+	return target, nil
 }
 
 func (trie *routeTrie) insertChild(segment string) *routeTrie {

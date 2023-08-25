@@ -5,6 +5,7 @@
 package vanguard
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -206,7 +207,7 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 }
 
 func (o *testInterceptor) restUnaryHandler(
-	codec Codec, comp connect.Compressor, decomp connect.Decompressor,
+	codec Codec, comp *compressionPool,
 ) http.HandlerFunc {
 	codecNames := map[string]string{
 		"application/json": "json",
@@ -223,29 +224,31 @@ func (o *testInterceptor) restUnaryHandler(
 		if err != nil {
 			return err
 		}
-		assert.Equal(stream.T, req.URL.String(), inn.method, "URL didn't match")
-		assert.Subset(stream.T, stream.reqHeader, req.Header, "headers didn't match")
+		assert.Equal(stream.T, inn.method, req.URL.String(), "url didn't match")
+		assert.Subset(stream.T, req.Header, stream.reqHeader, "headers didn't match")
 		contentType := req.Header.Get("Content-Type")
 		encoding := req.Header.Get("Content-Encoding")
 		acceptEncoding := req.Header.Get("Accept-Encoding")
 
-		var input io.Reader = req.Body
-		if decomp != nil {
-			assert.Equal(stream.T, encoding, "gzip", "expected encoding") // TODO: use decomp.Name()
-			if err := decomp.Reset(input); err != nil {
-				return err
-			}
-			defer decomp.Close()
-		}
-		body, err := io.ReadAll(input)
+		body, err := io.ReadAll(req.Body)
 		if err != nil {
 			return err
+		}
+		if comp != nil && len(body) > 0 {
+			assert.Equal(stream.T, comp.Name(), encoding, "expected encoding")
+			var dst bytes.Buffer
+			if err := comp.decompress(&dst, bytes.NewBuffer(body)); err != nil {
+				return err
+			}
+			body = dst.Bytes()
 		}
 
 		got := proto.Clone(inn.msg)
 		if len(body) > 0 {
 			codecName := codecNames[contentType]
-			assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match")
+			if !assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match") {
+				return fmt.Errorf("codec didn't match")
+			}
 			if err := codec.Unmarshal(body, got); err != nil {
 				return err
 			}
@@ -269,19 +272,21 @@ func (o *testInterceptor) restUnaryHandler(
 
 		// Write body.
 		rsp.Header().Set("Content-Type", contentType)
-		rsp.Header().Set("Content-Encoding", acceptEncoding)
-		var output io.Writer = rsp
-		if comp != nil {
-			assert.Equal(stream.T, acceptEncoding, "gzip", "expected gzip encoding") // TODO: use comp.Name()
-			comp.Reset(output)
-			defer comp.Close()
-			output = comp
-		}
+		rsp.Header().Set("Content-Encoding", "identity")
 		body, err = codec.MarshalAppend(nil, out.msg)
 		if err != nil {
 			return err
 		}
-		_, err = output.Write(body)
+		if comp != nil {
+			assert.Equal(stream.T, comp.Name(), acceptEncoding, "expected gzip encoding")
+			rsp.Header().Set("Content-Encoding", comp.Name())
+			var dst bytes.Buffer
+			if err := comp.compress(&dst, bytes.NewBuffer(body)); err != nil {
+				return err
+			}
+			body = dst.Bytes()
+		}
+		_, err = rsp.Write(body)
 		assert.NoError(stream.T, err, "failed to write response")
 
 		// Write trailers.
