@@ -39,7 +39,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 	protocols := []Protocol{
 		ProtocolGRPC,
 		ProtocolGRPCWeb,
-		// TODO: connect
+		ProtocolConnect,
 	}
 
 	var interceptor testInterceptor

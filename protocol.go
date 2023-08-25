@@ -110,6 +110,22 @@ type clientProtocolHandler interface {
 	// timeout, etc. The relevant headers are interpreted into the
 	// returned requestMeta and also *removed* from the given headers.
 	extractProtocolRequestHeaders(*operation, http.Header) (requestMeta, error)
+
+	// TODO: The following two methods were meant to be agnostic as to whether
+	//       the protocol is a streaming protocol or a unary one. The operations
+	//       are split because a streaming protocol cannot change headers or the
+	//       status code from encodeEnd because headers and status have already
+	//       been written. This requires unary implementations to do extra
+	//       handling of errors in addProtocolResponseHeaders, awkwardly separated
+	//       from the handling in encodeEnd. Worse, if an unexpected error happens
+	//       in encodeEnd, it is too late to change status code or headers. We
+	//       could possibly combine these for unary-only protocols to make the
+	//       implementation simpler. If we do, we'd need a way to swap protocol
+	//       handlers -- so that a REST handler swap itself out for a unary vs.
+	//       streaming implementation once the method is known (for streaming
+	//       upload/download endpoints or in future general support for server
+	//       streaming endpoints).
+
 	// Encodes the given responseMeta as headers into the given target
 	// headers. If provided, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
@@ -138,7 +154,7 @@ type clientProtocolHandler interface {
 	// normal response (where the end is signalled in the response
 	// body or trailers, not headers). When this is true, the end was
 	// also already provided to addProtocolResponseHeaders.
-	encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header
+	encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header
 
 	// String returns a human-readable name/description of protocol.
 	String() string
@@ -160,10 +176,22 @@ type serverProtocolHandler interface {
 	// headers. If non-nil, allowedCompression should be used instead
 	// of meta.allowedCompression when adding "accept-encoding" headers.
 	addProtocolRequestHeaders(meta requestMeta, target http.Header)
-	// Returns the response metadata from the headers. If the response
-	// meta's end field is set (i.e. headers indicate RPC is over), but
-	// the protocol needs to read the response body to populate it, it
-	// should return a non-nil function as the second returned value.
+	// Returns the response metadata from the headers.
+	//
+	// If the response meta's end field is set (i.e. headers indicate RPC
+	// is over), but the protocol needs to read the response body to
+	// populate it, it should return a non-nil function as the second
+	// returned value. This generally only occurs when the RPC fails and
+	// the body includes error information. If the body includes response
+	// message data, handlers should NOT set a non-nil end.
+	//
+	// If the headers include trailers (such as in the Connect unary
+	// protocol), but the RPC isn't quite over because the message data
+	// must still be read from the response body, the handler should
+	// instead populate the pendingTrailers field of meta. Note that
+	// this field is ignored if the end field is non-nil. So if the
+	// end is set to non-nil, the handler should store trailers there.
+	//
 	// This function will receive the server's codec (optionally used
 	// to encode other messages and could be used to decode the error
 	// body), the body, and a pointer to the responseEnd which should
@@ -214,7 +242,7 @@ type serverEnvelopedProtocolHandler interface {
 	// The given codec represents the sub-format used to send
 	// the request to the server (which may be used to decode
 	// the error).
-	decodeEndFromMessage(Codec, io.Reader) (responseEnd, error)
+	decodeEndFromMessage(*operation, io.Reader) (responseEnd, error)
 }
 
 // requestLineBuilder is an optional interface implemented by
@@ -311,6 +339,7 @@ type responseMeta struct {
 	codec             string
 	compression       string
 	acceptCompression []string
+	pendingTrailers   http.Header
 }
 
 // responseEnd is a protocol-agnostic representation of the disposition

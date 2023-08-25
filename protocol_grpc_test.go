@@ -34,7 +34,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Equal(t, "", rec.Header().Get("Grpc-Status-Details-Bin"))
 	assert.Len(t, rec.Body.Bytes(), 0)
 
-	got := grpcErrorFromTrailer(rec.Header())
+	got := grpcExtractErrorFromTrailer(rec.Header())
 	assert.Equal(t, cerr, got)
 
 	// Now again, but this time an error with details
@@ -49,7 +49,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Equal(t, "CBASGXRlc3QgZXJyb3I6IEhlbGxvLCDkuJbnlYwaOAovdHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUucHJvdG9idWYuU3RyaW5nVmFsdWUSBQoDZm9v", rec.Header().Get("Grpc-Status-Details-Bin"))
 	assert.Len(t, rec.Body.Bytes(), 0)
 
-	got = grpcErrorFromTrailer(rec.Header())
+	got = grpcExtractErrorFromTrailer(rec.Header())
 	assert.Equal(t, cerr, got)
 }
 

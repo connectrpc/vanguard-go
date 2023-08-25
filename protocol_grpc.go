@@ -75,7 +75,7 @@ func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	return grpcAddResponseMeta("application/grpc+", meta, headers)
 }
 
-func (g grpcClientProtocol) encodeEnd(_ Codec, end *responseEnd, _ io.Writer, wasInHeaders bool) http.Header {
+func (g grpcClientProtocol) encodeEnd(_ *operation, end *responseEnd, _ io.Writer, wasInHeaders bool) http.Header {
 	if wasInHeaders {
 		// already recorded this in call to addProtocolResponseHeaders
 		return nil
@@ -119,7 +119,7 @@ func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 
 func (g grpcServerProtocol) extractEndFromTrailers(_ *operation, trailers http.Header) (responseEnd, error) {
 	return responseEnd{
-		err:      grpcErrorFromTrailer(trailers),
+		err:      grpcExtractErrorFromTrailer(trailers),
 		trailers: trailers,
 	}, nil
 }
@@ -144,7 +144,7 @@ func (g grpcServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
 	return envBytes
 }
 
-func (g grpcServerProtocol) decodeEndFromMessage(_ Codec, _ io.Reader) (responseEnd, error) {
+func (g grpcServerProtocol) decodeEndFromMessage(_ *operation, _ io.Reader) (responseEnd, error) {
 	return responseEnd{}, errors.New("gRPC protocol does not allow embedding result/trailers in body")
 }
 
@@ -175,18 +175,17 @@ func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, hea
 	return grpcAddResponseMeta("application/grpc-web+", meta, headers)
 }
 
-func (g grpcWebClientProtocol) encodeEnd(_ Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	if wasInHeaders {
 		// already recorded this in call to addProtocolResponseHeaders
 		return nil
 	}
 	trailers := make(http.Header, len(end.trailers)+3)
 	grpcWriteEndToTrailers(end, trailers)
-	// TODO: probably should pass op instead of Codec since it looks like none of the impls
-	//       will actually need codec, but this impl (as well as connect streaming) will
-	//       want the op's bufferPool
-	buffer := bytes.NewBuffer(make([]byte, 0, initialBufferSize)) // TODO: use bufferPool
+	buffer := op.bufferPool.Get()
+	defer op.bufferPool.Put(buffer)
 	_ = trailers.Write(buffer)
+	// TODO: compress?
 	env := envelope{trailer: true, length: uint32(buffer.Len())}
 	envBytes := g.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
@@ -256,7 +255,7 @@ func (g grpcWebServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
 	return grpcServerProtocol{}.encodeEnvelope(env)
 }
 
-func (g grpcWebServerProtocol) decodeEndFromMessage(_ Codec, reader io.Reader) (responseEnd, error) {
+func (g grpcWebServerProtocol) decodeEndFromMessage(_ *operation, reader io.Reader) (responseEnd, error) {
 	// TODO: buffer size limit for headers/trailers; should use http.DefaultMaxHeaderBytes if not configured
 	data, err := io.ReadAll(reader)
 	if err != nil {
@@ -276,7 +275,7 @@ func (g grpcWebServerProtocol) decodeEndFromMessage(_ Codec, reader io.Reader) (
 		trailers.Add(string(headerLine[:pos]), strings.TrimSpace(string(headerLine[pos+1:])))
 	}
 	return responseEnd{
-		err:      grpcErrorFromTrailer(trailers),
+		err:      grpcExtractErrorFromTrailer(trailers),
 		trailers: trailers,
 	}, nil
 }
@@ -323,7 +322,7 @@ func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 
 	// See if RPC is already over (unexpected HTTP error or trailers-only response)
 	if len(headers.Values("Grpc-Status")) > 0 {
-		connErr := grpcErrorFromTrailer(headers)
+		connErr := grpcExtractErrorFromTrailer(headers)
 		respMeta.end = &responseEnd{
 			err:      connErr,
 			httpCode: statusCode,
@@ -331,6 +330,10 @@ func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 		headers.Del("Grpc-Status")
 		headers.Del("Grpc-Message")
 		headers.Del("Grpc-Status-Details-Bin")
+		if contentType == "" {
+			// no need to report "?" codec if no content-type on a trailers-only response
+			respMeta.codec = ""
+		}
 	}
 	if statusCode != http.StatusOK {
 		if respMeta.end == nil {
@@ -490,8 +493,15 @@ func grpcPercentDecodeSlow(encoded string, offset int) string {
 // binary Protobuf format, even if the messages in the request/response stream
 // use a different codec. Consequently, this function needs a Protobuf codec to
 // unmarshal error information in the headers.
-func grpcErrorFromTrailer(tlr http.Header) *connect.Error {
-	codeHeader := tlr.Get("Grpc-Status")
+func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
+	grpcStatus := trailers.Get("Grpc-Status")
+	grpcMsg := trailers.Get("Grpc-Message")
+	grpcDetails := trailers.Get("Grpc-Status-Details-Bin")
+	trailers.Del("Grpc-Status")
+	trailers.Del("Grpc-Message")
+	trailers.Del("Grpc-Status-Details-Bin")
+
+	codeHeader := grpcStatus
 	if codeHeader == "" {
 		return connect.NewError(
 			connect.CodeInternal,
@@ -513,15 +523,13 @@ func grpcErrorFromTrailer(tlr http.Header) *connect.Error {
 		return nil
 	}
 
-	detailsBinaryEncoded := tlr.Get("Grpc-Status-Details-Bin")
-	if len(detailsBinaryEncoded) == 0 {
-		val := tlr.Get("Grpc-Message")
-		message := grpcPercentDecode(val)
+	if len(grpcDetails) == 0 {
+		message := grpcPercentDecode(grpcMsg)
 		return connect.NewWireError(connect.Code(code), errors.New(message))
 	}
 
 	// Prefer the Protobuf-encoded data to the headers (grpc-go does this too).
-	detailsBinary, err := connect.DecodeBinaryHeader(detailsBinaryEncoded)
+	detailsBinary, err := connect.DecodeBinaryHeader(grpcDetails)
 	if err != nil {
 		return connect.NewError(
 			connect.CodeInternal,
@@ -537,7 +545,11 @@ func grpcErrorFromTrailer(tlr http.Header) *connect.Error {
 	}
 	trailerErr := connect.NewWireError(connect.Code(stat.Code), errors.New(stat.Message))
 	for _, msg := range stat.Details {
-		errDetail, _ := connect.NewErrorDetail(msg)
+		errDetail, err := connect.NewErrorDetail(msg)
+		if err != nil {
+			// shouldn't happen since msg is an Any and doesn't need to be marshalled
+			continue
+		}
 		trailerErr.AddDetail(errDetail)
 	}
 	return trailerErr

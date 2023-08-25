@@ -82,8 +82,9 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	isErr := meta.end != nil && meta.end.err != nil
-	// TODO: support other codecs.
+	// TODO: this formulation might only be valid when meta.codec is JSON; support other codecs.
 	headers["Content-Type"] = []string{"application/" + meta.codec}
+	// TODO: Content-Encoding to compress error, too?
 	if !isErr && meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
 	}
@@ -96,16 +97,26 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	return http.StatusOK
 }
 
-func (r restClientProtocol) encodeEnd(codec Codec, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	cerr := end.err
+	if cerr != nil && !wasInHeaders {
+		// TODO: Uh oh. We already flushed headers and started writing body. What can we do?
+		//       Should this log? If we are using http/2, is there some way we could send
+		//       a "goaway" frame to the client, to indicate abnormal end of stream?
+		return nil
+	}
 	if cerr == nil {
 		return nil
 	}
 	stat := grpcStatusFromError(cerr)
-	bin, err := codec.MarshalAppend(nil, stat)
+	bin, err := op.client.codec.MarshalAppend(nil, stat)
 	if err != nil {
-		bin = []byte(`{"code": 12, "message":"` + err.Error() + `"}`)
+		// TODO: This is always uses JSON whereas above we use the given codec.
+		//       If/when we support codecs for REST other than JSON, what should
+		//       we do here?
+		bin = []byte(`{"code": 13, "message": ` + strconv.Quote(err.Error()) + `}`)
 	}
+	// TODO: compress?
 	_, _ = writer.Write(bin)
 	return nil
 }
