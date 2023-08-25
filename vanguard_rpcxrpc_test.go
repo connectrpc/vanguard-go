@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -98,13 +99,16 @@ func TestMux_RPCxRPC(t *testing.T) {
 		var opts []connect.ClientOption
 		for _, protocol := range protocols {
 			opts := appendClientProtocolOptions(t, opts, protocol)
-			addlOpts := map[string]connect.ClientOption{"": nil}
+			addlOpts := map[string][]connect.ClientOption{"": nil}
 			if protocol == ProtocolConnect {
-				addlOpts["(GET)"] = connect.WithHTTPGet()
+				addlOpts["(GET)"] = []connect.ClientOption{
+					connect.WithHTTPGet(),
+					connect.WithHTTPGetMaxURLSize(200, true),
+				}
 			}
 			for suffix, addlOpt := range addlOpts {
 				if addlOpt != nil {
-					opts = append(opts, addlOpt)
+					opts = append(opts, addlOpt...)
 				}
 				for _, codec := range codecs {
 					opts := appendClientCodecOptions(t, opts, codec)
@@ -148,6 +152,28 @@ func TestMux_RPCxRPC(t *testing.T) {
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.Book{Name: "shelves/1/books/1"},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			// Should force compression in Connect GET requests, for clients that support both.
+			// For clients that use GET but not compression, this will be too big for GET and will use POST instead.
+			name: "GetBook_large_request",
+			invoke: func(clients testClients, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, clients.libClient.GetBook, headers, msgs)
+			},
+			stream: testStream{
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msg:    &testv1.GetBookRequest{Name: strings.Repeat("foo/", 200) + "/1"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.Book{Name: strings.Repeat("foo/", 200) + "/1"},
 					}},
 				},
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},

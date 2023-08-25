@@ -124,9 +124,6 @@ func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation,
 	} else {
 		msgData = ([]byte)(msgStr)
 	}
-	// TODO: test compression (apparently existing test harness, that creates a connect-go
-	//       client configured to send compression and to use HTTP GET, does not actually
-	//       use compression with GET requests and thus doesn't exercise this code path)
 	if op.client.reqCompression != nil {
 		dst := op.bufferPool.Get()
 		defer op.bufferPool.Put(dst)
@@ -364,14 +361,10 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	buf = op.bufferPool.Wrap(data, buf)
 	defer op.bufferPool.Put(buf)
 
-	// TODO: test compression (apparently existing test harness, that creates a connect-go
-	//       client configured to send compression and to use HTTP GET, does not actually
-	//       use compression with GET requests and thus doesn't exercise this code path)
 	encoded := op.bufferPool.Get()
 	defer op.bufferPool.Put(encoded)
 	if op.server.reqCompression != nil {
 		vals.Set("compression", op.server.reqCompression.Name())
-		buf.Reset()
 		if err := op.server.reqCompression.compress(encoded, buf); err != nil {
 			return "", "", "", false, err
 		}
