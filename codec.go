@@ -5,6 +5,9 @@
 package vanguard
 
 import (
+	"bytes"
+	"encoding/json"
+
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -45,6 +48,10 @@ func (p *protoCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) 
 	return proto.MarshalOptions{}.MarshalAppend(b, msg)
 }
 
+func (p *protoCodec) StableMarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(b, msg)
+}
+
 func (p *protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return (*proto.UnmarshalOptions)(p).Unmarshal(bytes, msg)
 }
@@ -60,6 +67,23 @@ func (p *jsonCodec) Name() string {
 
 func (p *jsonCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
 	return p.m.MarshalAppend(b, msg)
+}
+
+func (p *jsonCodec) StableMarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+	data, err := p.m.MarshalAppend(b, msg)
+	if err != nil {
+		return nil, err
+	}
+	// NB: Because json.Compact only removes whitespace, never elongating data, it is
+	//     safe to use the same backing slice as source and destination. This is safe
+	//     for the same reason that copy is safe even when the two slices overlap.
+	// TODO: How to better verify the above? Should we instead inject a bufferPool
+	//       and just allocate a whole new buffer, for more assured safety?
+	buf := bytes.NewBuffer(data[:0])
+	if err := json.Compact(buf, data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (p *jsonCodec) Unmarshal(bytes []byte, msg proto.Message) error {

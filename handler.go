@@ -268,14 +268,14 @@ func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType st
 			}
 			return nil, "", nil
 		}
-		vals := req.URL.Query()
-		if vals.Get("connect") == "v1" {
-			if req.Method == http.MethodGet {
-				return connectUnaryGetClientProtocol{}, "", nil
+		values = req.URL.Query()
+		if values.Get("connect") == "v1" {
+			if req.Method != http.MethodGet {
+				return nil, "", nil
 			}
-			return nil, "", nil
+			return connectUnaryGetClientProtocol{}, "", values
 		}
-		return restClientProtocol{}, "", vals
+		return restClientProtocol{}, "", values
 	}
 
 	if len(contentTypes) > 1 {
@@ -297,11 +297,18 @@ func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType st
 			}
 			return connectUnaryPostClientProtocol{}, contentType, nil
 		}
+		values = req.URL.Query()
+		if values.Get("connect") == "v1" {
+			if req.Method != http.MethodGet {
+				return nil, "", nil
+			}
+			return connectUnaryGetClientProtocol{}, "", values
+		}
 		// REST usually uses application/json, but use of google.api.HttpBody means it could
 		// also use *any* content-type.
 		fallthrough
 	default:
-		return restClientProtocol{}, contentType, nil
+		return restClientProtocol{}, contentType, values
 	}
 }
 
@@ -424,8 +431,13 @@ func (op *operation) handle() {
 	if serverRequestBuilder != nil { //nolint:nestif
 		if requireMessageForRequestLine {
 			if err := op.readRequestMessage(op.request.Body, &reqMsg); err != nil {
-				op.earlyError(err)
-				return
+				if errors.Is(err, io.EOF) {
+					// okay for the first message: means empty message data
+					reqMsg.stage = stageRead
+				} else {
+					op.earlyError(err)
+					return
+				}
 			}
 			if err := reqMsg.advanceToStage(op, stageDecoded); err != nil {
 				op.earlyError(err)
