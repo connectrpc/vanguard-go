@@ -17,7 +17,6 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type handler struct {
@@ -64,28 +63,16 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, http.StatusText(httpErr.code), httpErr.code)
 		return
 	}
-	op.method = methodConf.descriptor
-	op.methodPath = methodConf.methodPath
+	op.methodConf = methodConf
 	op.delegate = methodConf.handler
-	op.resolver = methodConf.resolver
-	switch {
-	case op.method.IsStreamingClient() && op.method.IsStreamingServer():
-		op.streamType = connect.StreamTypeBidi
-	case op.method.IsStreamingClient():
-		op.streamType = connect.StreamTypeClient
-	case op.method.IsStreamingServer():
-		op.streamType = connect.StreamTypeServer
-	default:
-		op.streamType = connect.StreamTypeUnary
-	}
-	if !op.client.protocol.acceptsStreamType(&op, op.streamType) {
+	if !op.client.protocol.acceptsStreamType(&op, methodConf.streamType) {
 		http.Error(
 			writer,
-			fmt.Sprintf("stream type %s not supported with %s protocol", op.streamType, op.client.protocol),
+			fmt.Sprintf("stream type %s not supported with %s protocol", methodConf.streamType, op.client.protocol),
 			http.StatusUnsupportedMediaType)
 		return
 	}
-	if op.streamType == connect.StreamTypeBidi && request.ProtoMajor < 2 {
+	if methodConf.streamType == connect.StreamTypeBidi && request.ProtoMajor < 2 {
 		http.Error(writer, "bidi streams require HTTP/2", http.StatusHTTPVersionNotSupported)
 		return
 	}
@@ -355,12 +342,9 @@ type operation struct {
 	cancel         context.CancelFunc
 	bufferPool     *bufferPool
 	delegate       http.Handler
-	resolver       TypeResolver
 	canDecompress  []string
 
-	method     protoreflect.MethodDescriptor
-	methodPath string
-	streamType connect.StreamType
+	methodConf *methodConfig
 
 	client clientProtocolDetails
 	server serverProtocolDetails
@@ -397,13 +381,11 @@ func (op *operation) handle() {
 	op.clientPreparer, _ = op.client.protocol.(clientBodyPreparer)
 	if op.clientPreparer != nil {
 		op.clientReqNeedsPrep = op.clientPreparer.requestNeedsPrep(op)
-		op.clientRespNeedsPrep = op.clientPreparer.responseNeedsPrep(op)
 	}
 	op.serverEnveloper, _ = op.server.protocol.(serverEnvelopedProtocolHandler)
 	op.serverPreparer, _ = op.server.protocol.(serverBodyPreparer)
 	if op.serverPreparer != nil {
 		op.serverReqNeedsPrep = op.serverPreparer.requestNeedsPrep(op)
-		op.serverRespNeedsPrep = op.serverPreparer.responseNeedsPrep(op)
 	}
 
 	serverRequestBuilder, _ := op.server.protocol.(requestLineBuilder)
@@ -426,7 +408,7 @@ func (op *operation) handle() {
 
 	if mustDecodeRequest {
 		// Need the message type to decode
-		messageType, err := op.resolver.FindMessageByName(op.method.Input().FullName())
+		messageType, err := op.methodConf.resolver.FindMessageByName(op.methodConf.descriptor.Input().FullName())
 		if err != nil {
 			op.earlyError(err)
 			return
@@ -460,9 +442,14 @@ func (op *operation) handle() {
 			return
 		}
 		skipBody = !hasBody
+		// Recompute if the server needs to prep the request, now that we've modified
+		// properties of op.request.
+		if op.serverPreparer != nil {
+			op.serverReqNeedsPrep = op.serverPreparer.requestNeedsPrep(op)
+		}
 	} else {
 		// if no request line builder, use simple request layout
-		op.request.URL.Path = op.methodPath
+		op.request.URL.Path = op.methodConf.methodPath
 		op.request.URL.RawQuery = ""
 		op.request.Method = http.MethodPost
 	}
@@ -889,6 +876,13 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		return
 	}
 
+	if rw.op.clientPreparer != nil {
+		rw.op.clientRespNeedsPrep = rw.op.clientPreparer.responseNeedsPrep(rw.op)
+	}
+	if rw.op.serverPreparer != nil {
+		rw.op.serverRespNeedsPrep = rw.op.serverPreparer.responseNeedsPrep(rw.op)
+	}
+
 	sameCodec := rw.op.client.codec.Name() == rw.op.server.codec.Name()
 	// even if body encoding uses same content type, we can't treat them as the same
 	// (which means re-using encoded data) if either side needs to prep the data first
@@ -898,7 +892,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 
 	if !sameResponseCodec {
 		// We will have to decode and re-encode, so we need the message type.
-		messageType, err := rw.op.resolver.FindMessageByName(rw.op.method.Output().FullName())
+		messageType, err := rw.op.methodConf.resolver.FindMessageByName(rw.op.methodConf.descriptor.Output().FullName())
 		if err != nil {
 			rw.reportError(err)
 			return

@@ -337,11 +337,11 @@ func (r restServerProtocol) String() string {
 }
 
 func restHTTPBodyRequest(op *operation) bool {
-	return restIsHTTPBody(op.method.Input(), op.restTarget.requestBodyFields)
+	return restIsHTTPBody(op.methodConf.descriptor.Input(), op.restTarget.requestBodyFields)
 }
 
 func restHTTPBodyResponse(op *operation) bool {
-	return restIsHTTPBody(op.method.Output(), op.restTarget.responseBodyFields)
+	return restIsHTTPBody(op.methodConf.descriptor.Output(), op.restTarget.responseBodyFields)
 }
 
 func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {

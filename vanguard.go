@@ -26,6 +26,9 @@ const (
 	CodecJSON  = "json"
 	// TODO: Some grpc impls support "text" out of the box (but not JSON, ironically).
 	//       such as the JS impl. Should we also support it out of the box?
+
+	DefaultMaxTrailersBufferSize = 1024 * 1024
+	DefaultMaxGetURLSize         = 8 * 1024
 )
 
 // Mux is a registry of RPC handlers that can handle transforming requests
@@ -83,6 +86,43 @@ type Mux struct {
 	// only see uncompressed payloads. If any requests arrive that use a known
 	// compression algorithm, the data will be decompressed.
 	Compressors []string
+	// MaxMessageBufferSize is the maximum size of a received message when buffering
+	// is necessary. Buffering a message is sometimes necessary when translating
+	// from one protocol to another or one encoding to another. If buffering is
+	// necessary to translate a given request and a message exceeds the configured
+	// buffer size, the RPC will fail with a "resource exhausted" error. This applies
+	// to on-the-wire sizes. The actual memory usage for a buffered memory could be
+	// much higher than this due to decompression and/or decoding.
+	//
+	// If no value is configured, or it is set to a non-positive value, there is no
+	// limit, which could result in excessive buffering. This should generally be
+	// set to a value that is less than or equal to similar limits configured in
+	// the server handler (or remote server, if the server handler will proxy the
+	// request elsewhere).
+	MaxMessageBufferSize uint32
+	// MaxTrailersBufferSize is the maximum size of trailers encoded in the body,
+	// in gRPC-Web responses, when buffering is necessary to translate protocols.
+	// This is different from MaxMessageBufferSize as trailers may be encoded as
+	// HTTP trailers, which generally have smaller limits than response body data.
+	// This is mainly a concern if the response may transit other servers/proxies
+	// that impose limits on HTTP metadata (which is common).
+	//
+	// If this limit is exceeded, the RPC will fail with a "resource exhausted"
+	// error. The response may confuse clients for unary RPCs since the trailers
+	// would come after the response message on a successful RPC, and in such
+	// cases the "OK" status would necessarily be rewritten to an error status.
+	//
+	// If no value is configured, or it is set to a non-positive value, a default
+	// limit of 1 MB (1,048,576 bytes) will be used.
+	MaxTrailersBufferSize uint32
+	// MaxGetURLSize is the maximum size of a GET URL that can be used to send an
+	// RPC using the Connect unary protocol with GET as the HTTP method. If a
+	// GET request would exceed this limit, the RPC will be sent using POST as the
+	// HTTP method instead.
+	//
+	// If no value is configured, or it is set to a non-positive value, a default
+	// limit of 8 KB (8192 bytes) will be used.
+	MaxGetURLSize uint32
 	// TypeResolver is the default TypeResolver. If no TypeResolver is specified
 	// when a service is registered, this one is used. If nil, the default resolver
 	// will be [protoregistry.GlobalTypes].
@@ -177,6 +217,13 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		}
 	}
 
+	if svcOpts.maxTrailersBufferSz <= 0 {
+		svcOpts.maxTrailersBufferSz = DefaultMaxTrailersBufferSize
+	}
+	if svcOpts.maxGetURLSz <= 0 {
+		svcOpts.maxGetURLSz = DefaultMaxGetURLSize
+	}
+
 	if svcOpts.resolver == nil {
 		svcOpts.resolver = m.TypeResolver
 		if svcOpts.resolver == nil {
@@ -229,16 +276,30 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodConf := &methodConfig{
-		descriptor:      methodDesc,
-		methodPath:      "/" + methodPath, // this usage wants proper URI path, with leading slash
-		handler:         handler,
-		resolver:        opts.resolver,
-		protocols:       opts.protocols,
-		codecNames:      opts.codecNames,
-		preferredCodec:  opts.preferredCodec,
-		compressorNames: opts.compressorNames,
+		descriptor:          methodDesc,
+		methodPath:          "/" + methodPath, // this usage wants proper URI path, with leading slash
+		handler:             handler,
+		resolver:            opts.resolver,
+		protocols:           opts.protocols,
+		codecNames:          opts.codecNames,
+		preferredCodec:      opts.preferredCodec,
+		compressorNames:     opts.compressorNames,
+		maxMsgBufferSz:      opts.maxMsgBufferSz,
+		maxTrailersBufferSz: opts.maxTrailersBufferSz,
+		maxGetURLSz:         opts.maxGetURLSz,
 	}
 	m.methods[methodPath] = methodConf
+
+	switch {
+	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
+		methodConf.streamType = connect.StreamTypeBidi
+	case methodDesc.IsStreamingClient():
+		methodConf.streamType = connect.StreamTypeClient
+	case methodDesc.IsStreamingServer():
+		methodConf.streamType = connect.StreamTypeServer
+	default:
+		methodConf.streamType = connect.StreamTypeUnary
+	}
 
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
 		firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
@@ -363,6 +424,24 @@ func WithTypeResolver(resolver TypeResolver) ServiceOption {
 	})
 }
 
+func WithMaxMessageBufferSize(limit uint32) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.maxMsgBufferSz = limit
+	})
+}
+
+func WithMaxTrailersBufferSize(limit uint32) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.maxTrailersBufferSz = limit
+	})
+}
+
+func WithMaxGetURLSize(limit uint32) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.maxGetURLSz = limit
+	})
+}
+
 // TypeResolver can resolve message and extension types and is used to instantiate
 // messages as needed for the middleware to serialize/de-serialize request and
 // response payloads.
@@ -396,17 +475,24 @@ type serviceOptions struct {
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
 	preferredCodec              string
+	maxMsgBufferSz              uint32
+	maxTrailersBufferSz         uint32
+	maxGetURLSz                 uint32
 }
 
 type methodConfig struct {
 	descriptor                  protoreflect.MethodDescriptor
 	methodPath                  string
+	streamType                  connect.StreamType
 	handler                     http.Handler
 	resolver                    TypeResolver
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
 	preferredCodec              string
 	httpRule                    *routeTarget // First HTTP rule, if any.
+	maxMsgBufferSz              uint32
+	maxTrailersBufferSz         uint32
+	maxGetURLSz                 uint32
 }
 
 // computeSet returns a resolved set of values of type T, preferring the given values if
