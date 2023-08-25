@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"testing"
 	"time"
 
 	"connectrpc.com/connect"
@@ -65,8 +64,7 @@ func ExampleMux_rpcRpc() {
 	// Output: Do Androids Dream of Electric Sheep?
 }
 
-// func ExampleMux_restRpc() {
-func TestMux_restRpc(t *testing.T) {
+func ExampleMux_restRpc() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 	svc := &libraryRPC{} // implements RPC testv1connect.LibraryServiceHandler
 
@@ -82,7 +80,7 @@ func TestMux_restRpc(t *testing.T) {
 	)
 
 	// Build a REST request.
-	req, _ := http.NewRequest(http.MethodGet, "/v1/shelves/top/books/123", nil)
+	req, _ := http.NewRequest(http.MethodGet, "/v1/shelves/top/books/123", http.NoBody)
 	req.Header.Set("Accept-Encoding", "identity")
 
 	client := newExampleClient(mux.AsHandler())

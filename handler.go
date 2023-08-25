@@ -526,8 +526,6 @@ func (op *operation) readRequestMessage(reader io.Reader, msg *message) error {
 			// TODO: don't just trust contentLen; make sure body does not exceed it
 			buffer.Grow(int(op.contentLen))
 		}
-		fmt.Printf("buffer: %T\n", buffer)
-		fmt.Printf("buffer: %T\n", reader)
 		_, err = io.Copy(buffer, reader)
 		if err == nil && buffer.Len() == 0 {
 			err = io.EOF
