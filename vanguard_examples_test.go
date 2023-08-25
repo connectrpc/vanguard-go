@@ -2,6 +2,7 @@
 //
 // All rights reserved.
 
+//nolint:gocritic
 package vanguard_test
 
 import (
@@ -37,18 +38,23 @@ func ExampleMux_rpcRpc() {
 
 	// Create a Mux and register the service as a gRPC service.
 	mux := &vanguard.Mux{}
-	mux.RegisterServiceByName(
+	if err := mux.RegisterServiceByName(
 		httpMux, testv1connect.LibraryServiceName,
 		vanguard.WithProtocols(vanguard.ProtocolGRPC),
 		vanguard.WithNoCompression(),
-	)
+	); err != nil {
+		log.Fatal(err)
+	}
 
-	// Create a grpc-web client and call the service.
-	client := testv1connect.NewLibraryServiceClient(
-		newExampleClient(mux.AsHandler()), "",
-		connect.WithGRPCWeb(),
-		connect.WithAcceptCompression(vanguard.CompressionGzip, nil, nil),
-	)
+	// Create the server.
+	// (NB: This is a httptest.Server, but it could be any http.Server)
+	svr := httptest.NewUnstartedServer(mux.AsHandler())
+	svr.EnableHTTP2 = true
+	svr.StartTLS()
+	defer svr.Close()
+
+	// Create a connect client and call the service.
+	client := testv1connect.NewLibraryServiceClient(svr.Client(), svr.URL)
 
 	// Call the service.
 	rsp, err := client.GetBook(
@@ -73,17 +79,26 @@ func ExampleMux_restRpc() {
 
 	// Create a Mux and register the service as a gRPC service.
 	mux := &vanguard.Mux{}
-	mux.RegisterServiceByName(
+	if err := mux.RegisterServiceByName(
 		httpMux, testv1connect.LibraryServiceName,
 		vanguard.WithProtocols(vanguard.ProtocolGRPC),
 		vanguard.WithNoCompression(),
-	)
+	); err != nil {
+		log.Fatal(err)
+	}
+
+	// Create the server.
+	// (NB: This is a httptest.Server, but it could be any http.Server)
+	svr := httptest.NewServer(mux.AsHandler())
+	defer svr.Close()
+	client := svr.Client()
 
 	// Build a REST request.
-	req, _ := http.NewRequest(http.MethodGet, "/v1/shelves/top/books/123", http.NoBody)
+	req, _ := http.NewRequestWithContext(
+		context.Background(), http.MethodGet,
+		svr.URL+"/v1/shelves/top/books/123", nil)
 	req.Header.Set("Accept-Encoding", "identity")
 
-	client := newExampleClient(mux.AsHandler())
 	rsp, err := client.Do(req)
 	if err != nil {
 		log.Fatal(err)
@@ -92,11 +107,11 @@ func ExampleMux_restRpc() {
 	log.Println(rsp.Status)
 	log.Println(rsp.Header.Get("Content-Type"))
 
+	// Decode the response.
 	body, err := io.ReadAll(rsp.Body)
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	var book testv1.Book
 	if err := protojson.Unmarshal(body, &book); err != nil {
 		log.Fatal(err)
@@ -108,23 +123,27 @@ func ExampleMux_restRpc() {
 }
 
 func ExampleMux_rpcRest() {
-	//func TestMux_rpcRest(t *testing.T) {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 	svc := &libraryREST{} // implements REST service
 
+	// Create a Mux and register the service as a REST service.
 	mux := &vanguard.Mux{}
-	mux.RegisterServiceByName(
+	if err := mux.RegisterServiceByName(
 		svc, testv1connect.LibraryServiceName,
 		vanguard.WithProtocols(vanguard.ProtocolREST),
 		vanguard.WithCodecs(vanguard.CodecJSON),
 		vanguard.WithNoCompression(),
-	)
+	); err != nil {
+		log.Fatal(err)
+	}
 
-	client := testv1connect.NewLibraryServiceClient(
-		newExampleClient(mux.AsHandler()), "",
-		connect.WithGRPC(),
-		//connect.WithAcceptCompression(vanguard.CompressionGzip, nil, nil),
-	)
+	// Create the server.
+	// (NB: This is a httptest.Server, but it could be any http.Server)
+	svr := httptest.NewServer(mux.AsHandler())
+	defer svr.Close()
+
+	// Create a connect client and call the service.
+	client := testv1connect.NewLibraryServiceClient(svr.Client(), svr.URL)
 	rsp, err := client.GetBook(
 		context.Background(),
 		connect.NewRequest(&testv1.GetBookRequest{
@@ -175,15 +194,14 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		body, _ = protojson.Marshal(msg)
 	}
 	rsp.WriteHeader(http.StatusOK)
-	rsp.Write(body)
-	//fmt.Println("wrote body", string(body))
+	_, _ = rsp.Write(body)
 }
 
 type libraryRPC struct {
 	testv1connect.UnimplementedLibraryServiceHandler
 }
 
-func (s *libraryRPC) GetBook(ctx context.Context, req *connect.Request[testv1.GetBookRequest]) (*connect.Response[testv1.Book], error) {
+func (s *libraryRPC) GetBook(_ context.Context, req *connect.Request[testv1.GetBookRequest]) (*connect.Response[testv1.Book], error) {
 	msg := req.Msg
 	rsp := connect.NewResponse(&testv1.Book{
 		Name:        msg.Name,
@@ -197,20 +215,4 @@ func (s *libraryRPC) GetBook(ctx context.Context, req *connect.Request[testv1.Ge
 		},
 	})
 	return rsp, nil
-}
-
-type exampleClient struct {
-	hdlr http.Handler
-	rec  *httptest.ResponseRecorder
-}
-
-func (c *exampleClient) Do(req *http.Request) (*http.Response, error) {
-	c.hdlr.ServeHTTP(c.rec, req)
-	return c.rec.Result(), nil
-}
-func newExampleClient(svr http.Handler) connect.HTTPClient {
-	return &exampleClient{
-		hdlr: svr,
-		rec:  httptest.NewRecorder(),
-	}
 }
