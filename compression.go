@@ -16,7 +16,7 @@ import (
 // DefaultGzipCompressor is a factory for Compressor instances used by default
 // for the "gzip" encoding type.
 func DefaultGzipCompressor() connect.Compressor {
-	return &gzip.Writer{}
+	return gzip.NewWriter(io.Discard)
 }
 
 // DefaultGzipDecompressor is a factory for Decompressor instances used by
