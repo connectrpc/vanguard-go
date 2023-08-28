@@ -18,6 +18,7 @@ service ContentService {
     option (google.api.http) = {
       get : "/index/{page=**}"
     };
+    option idempotency_level = NO_SIDE_EFFECTS;
   }
   // Upload a file to the given path.
   rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
@@ -59,9 +60,7 @@ message DownloadResponse {
   google.api.HttpBody file = 1;
 }
 
-message SubscribeRequest {
-  repeated string filename_patterns = 1;
-}
+message SubscribeRequest { repeated string filename_patterns = 1; }
 
 message SubscribeResponse {
   string filename_changed = 1;

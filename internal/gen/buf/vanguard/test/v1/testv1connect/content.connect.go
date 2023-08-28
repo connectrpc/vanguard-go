@@ -24,7 +24,7 @@ import (
 // generated with a version of connect newer than the one compiled into your binary. You can fix the
 // problem by either regenerating this code with an older version of connect or updating the connect
 // version compiled into your binary.
-const _ = connect.IsAtLeastVersion0_1_0
+const _ = connect.IsAtLeastVersion1_7_0
 
 const (
 	// ContentServiceName is the fully-qualified name of the ContentService service.
@@ -75,7 +75,8 @@ func NewContentServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 		index: connect.NewClient[v1.IndexRequest, httpbody.HttpBody](
 			httpClient,
 			baseURL+ContentServiceIndexProcedure,
-			opts...,
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
 		),
 		upload: connect.NewClient[v1.UploadRequest, emptypb.Empty](
 			httpClient,
@@ -144,7 +145,8 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 	contentServiceIndexHandler := connect.NewUnaryHandler(
 		ContentServiceIndexProcedure,
 		svc.Index,
-		opts...,
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
 	)
 	contentServiceUploadHandler := connect.NewClientStreamHandler(
 		ContentServiceUploadProcedure,

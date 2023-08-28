@@ -862,7 +862,8 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 			return
 		}
 	}
-	if respMeta.codec != "" && respMeta.codec != rw.op.server.codec.Name() {
+	if respMeta.codec != "" && respMeta.codec != rw.op.server.codec.Name() &&
+		!responseIsSpecialHTTPBody(rw.op) {
 		// unexpected content-type for reply
 		rw.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", rw.op.server.codec.Name(), respMeta.codec))
 		return
@@ -1591,7 +1592,7 @@ func (m *message) reset(pool *bufferPool, isRequest, isCompressed bool) *bytes.B
 	return buffer1
 }
 
-func (m *message) advanceToStage(op *operation, newStage messageStage) error {
+func (m *message) advanceToStage(op *operation, newStage messageStage) (k error) {
 	if m.stage == stageEmpty {
 		return errors.New("message has not yet been read")
 	}

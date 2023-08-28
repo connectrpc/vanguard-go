@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -32,6 +33,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 
 	services := []protoreflect.FullName{
 		testv1connect.LibraryServiceName,
+		testv1connect.ContentServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -51,6 +53,10 @@ func TestMux_RESTxRPC(t *testing.T) {
 	serveMux := http.NewServeMux()
 	serveMux.Handle(testv1connect.NewLibraryServiceHandler(
 		testv1connect.UnimplementedLibraryServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	))
+	serveMux.Handle(testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
 		connect.WithInterceptors(&interceptor),
 	))
 
@@ -254,6 +260,35 @@ func TestMux_RESTxRPC(t *testing.T) {
 			body: &testv1.Book{
 				Title:  "The Art of Computer Programming",
 				Author: "Donald E. Knuth",
+			},
+		},
+	}, {
+		name: "Index",
+		input: input{
+			method: http.MethodGet,
+			path:   "/index/page.html",
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: testv1connect.ContentServiceIndexProcedure,
+					msg: &testv1.IndexRequest{
+						Page: "page.html",
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "text/html",
+						Data:        []byte("<html>hello</html>"),
+					},
+				}},
+			},
+		},
+		output: output{
+			code:    http.StatusOK,
+			rawBody: `<html>hello</html>`,
+			meta: http.Header{
+				"Content-Type": []string{"text/html"},
 			},
 		},
 	}}

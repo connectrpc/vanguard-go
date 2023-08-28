@@ -17,6 +17,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -29,6 +30,7 @@ func TestMux_RPCxREST(t *testing.T) {
 	var interceptor testInterceptor
 	services := []protoreflect.FullName{
 		testv1connect.LibraryServiceName,
+		testv1connect.ContentServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -115,7 +117,8 @@ func TestMux_RPCxREST(t *testing.T) {
 
 	ctx := context.Background()
 	type testClients struct {
-		libClient testv1connect.LibraryServiceClient
+		contentClient testv1connect.ContentServiceClient
+		libClient     testv1connect.LibraryServiceClient
 	}
 	type output struct {
 		header   http.Header
@@ -223,6 +226,34 @@ func TestMux_RPCxREST(t *testing.T) {
 				Author: "Donald E. Knuth",
 			}},
 		},
+	}, {
+		name: "Index",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.IndexRequest{Page: "page.html"},
+			}
+			return outputFromUnary(ctx, clients.contentClient.Index, hdr, msgs)
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: "/index/page.html",
+					msg:    nil, // GET request.
+				}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "text/html",
+						Data:        []byte("<html>hello</html>"),
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&httpbody.HttpBody{
+				ContentType: "text/html",
+				Data:        []byte("<html>hello</html>"),
+			}},
+		},
 	}}
 	// TODO: test download and upload streaming of google.api.httpbody.
 
@@ -230,6 +261,9 @@ func TestMux_RPCxREST(t *testing.T) {
 		opts := opts
 		clients := testClients{
 			libClient: testv1connect.NewLibraryServiceClient(
+				opts.svr.Client(), opts.svr.URL, opts.opts...,
+			),
+			contentClient: testv1connect.NewContentServiceClient(
 				opts.svr.Client(), opts.svr.URL, opts.opts...,
 			),
 		}

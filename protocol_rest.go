@@ -83,7 +83,11 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	isErr := meta.end != nil && meta.end.err != nil
 	// TODO: this formulation might only be valid when meta.codec is JSON; support other codecs.
-	headers["Content-Type"] = []string{"application/" + meta.codec}
+	// Headers are only set if they are not already set, specially to allow
+	// for google.api.HttpBody payloads.
+	if headers["Content-Type"] == nil {
+		headers["Content-Type"] = []string{"application/" + meta.codec}
+	}
 	// TODO: Content-Encoding to compress error, too?
 	if !isErr && meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
@@ -158,11 +162,28 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	return nil
 }
 
-func (r restClientProtocol) responseNeedsPrep(o *operation) bool {
-	return len(o.restTarget.responseBodyFields) != 0
+func (r restClientProtocol) responseNeedsPrep(op *operation) bool {
+	return len(op.restTarget.responseBodyFields) != 0 ||
+		responseIsSpecialHTTPBody(op)
 }
 
 func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
+	if responseIsSpecialHTTPBody(op) {
+		msg := src.ProtoReflect()
+		for _, field := range op.restTarget.responseBodyFields {
+			msg = msg.Get(field).Message()
+		}
+		desc := msg.Descriptor()
+		dataField := desc.Fields().ByName("data")
+		contentField := desc.Fields().ByName("content_type")
+		contentType := msg.Get(contentField).String()
+		bytes := msg.Get(dataField).Bytes()
+		if contentType != "" {
+			headers.Set("Content-Type", contentType)
+		}
+		return bytes, nil
+	}
+
 	msg := src.ProtoReflect()
 	for _, field := range op.restTarget.responseBodyFields {
 		msg = msg.Get(field).Message()
@@ -260,8 +281,8 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 	return op.server.codec.MarshalAppend(base, msg.Interface())
 }
 
-func (r restServerProtocol) responseNeedsPrep(o *operation) bool {
-	return len(o.restTarget.responseBodyFieldPath) != 0
+func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
+	return len(op.restTarget.responseBodyFieldPath) != 0
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
