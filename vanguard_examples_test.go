@@ -6,6 +6,7 @@
 package vanguard_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -31,7 +32,8 @@ import (
 func ExampleMux_rpcRpc() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
-	svc := &libraryRPC{} // implements RPC testv1connect.LibraryServiceHandler
+	// RPC service implementing testv1connect.LibraryService annotations.
+	svc := &libraryRPC{}
 
 	httpMux := http.NewServeMux()
 	httpMux.Handle(testv1connect.NewLibraryServiceHandler(svc))
@@ -60,7 +62,7 @@ func ExampleMux_rpcRpc() {
 	rsp, err := client.GetBook(
 		context.Background(),
 		connect.NewRequest(&testv1.GetBookRequest{
-			Name: "shelves/top/books/123",
+			Name: "shelves/top/books/1",
 		}),
 	)
 	if err != nil {
@@ -72,7 +74,9 @@ func ExampleMux_rpcRpc() {
 
 func ExampleMux_restRpc() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
-	svc := &libraryRPC{} // implements RPC testv1connect.LibraryServiceHandler
+
+	// RPC service implementing testv1connect.LibraryService annotations.
+	svc := &libraryRPC{}
 
 	httpMux := http.NewServeMux()
 	httpMux.Handle(testv1connect.NewLibraryServiceHandler(svc))
@@ -93,11 +97,26 @@ func ExampleMux_restRpc() {
 	defer svr.Close()
 	client := svr.Client()
 
-	// Build a REST request.
+	book := &testv1.Book{
+		Title:       "2001: A Space Odyssey",
+		Author:      "Arthur C. Clarke",
+		Description: "A space voyage to Jupiter awakens the crew's intelligence.",
+		Labels: map[string]string{
+			"genre": "science fiction",
+		},
+	}
+	body, _ := protojson.Marshal(book)
+
+	// Create the POST request.
 	req, _ := http.NewRequestWithContext(
-		context.Background(), http.MethodGet,
-		svr.URL+"/v1/shelves/top/books/123", nil)
+		context.Background(), http.MethodPost,
+		svr.URL+"/v1/shelves/top/books",
+		bytes.NewReader(body),
+	)
 	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("Content-Encoding", "identity")
+	req.Header.Set("Content-Type", "application/json")
+	req.URL.RawQuery = "book_id=2&request_id=123"
 
 	rsp, err := client.Do(req)
 	if err != nil {
@@ -108,23 +127,20 @@ func ExampleMux_restRpc() {
 	log.Println(rsp.Header.Get("Content-Type"))
 
 	// Decode the response.
-	body, err := io.ReadAll(rsp.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-	var book testv1.Book
-	if err := protojson.Unmarshal(body, &book); err != nil {
-		log.Fatal(err)
-	}
+	body, _ = io.ReadAll(rsp.Body)
+
+	_ = protojson.Unmarshal(body, book)
 	log.Println(book.Author)
 	// Output: 200 OK
 	// application/json
-	// Philip K. Dick
+	// Arthur C. Clarke
 }
 
 func ExampleMux_rpcRest() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
-	svc := &libraryREST{} // implements REST service
+
+	// REST service implementing testv1connect.LibraryService annotations.
+	svc := &libraryREST{}
 
 	// Create a Mux and register the service as a REST service.
 	mux := &vanguard.Mux{}
@@ -177,6 +193,22 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		default:
 			err = connect.NewError(connect.CodeNotFound, fmt.Errorf("method not found"))
 		}
+	case http.MethodPost:
+		switch {
+		case regexp.MustCompile("/v1/shelves/.*").Match(urlPath):
+			var book testv1.Book
+			body, _ := io.ReadAll(req.Body)
+			_ = protojson.Unmarshal(body, &book)
+			got, gotErr := s.CreateBook(ctx, connect.NewRequest(&testv1.CreateBookRequest{
+				Parent:    req.URL.Path[len("/v1/"):],
+				BookId:    req.URL.Query().Get("book_id"),
+				Book:      &book,
+				RequestId: req.URL.Query().Get("request_id"),
+			}))
+			msg, err = got.Msg, gotErr
+		default:
+			err = connect.NewError(connect.CodeNotFound, fmt.Errorf("method not found"))
+		}
 	default:
 		err = connect.NewError(connect.CodeNotFound, fmt.Errorf("method not found"))
 	}
@@ -213,6 +245,21 @@ func (s *libraryRPC) GetBook(_ context.Context, req *connect.Request[testv1.GetB
 		Labels: map[string]string{
 			"genre": "science fiction",
 		},
+	})
+	return rsp, nil
+}
+
+func (s *libraryRPC) CreateBook(_ context.Context, req *connect.Request[testv1.CreateBookRequest]) (*connect.Response[testv1.Book], error) {
+	msg := req.Msg
+	book := req.Msg.Book
+	rsp := connect.NewResponse(&testv1.Book{
+		Name:        strings.Join([]string{msg.Parent, "books", msg.BookId}, "/"),
+		Parent:      msg.Parent,
+		CreateTime:  timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
+		Title:       book.GetTitle(),
+		Author:      book.GetAuthor(),
+		Description: book.GetDescription(),
+		Labels:      book.GetLabels(),
 	})
 	return rsp, nil
 }
