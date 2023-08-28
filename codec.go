@@ -20,6 +20,26 @@ type Codec interface {
 	Unmarshal(bytes []byte, msg proto.Message) error
 }
 
+// StableCodec is an encoding format that can produce stable, deterministic
+// output when marshaling data. This stable form is the result of the
+// MarshalAppendStable method. So the codec's MarshalAppend method is
+// free to produce unstable/non-deterministic output, if useful for
+// improved performance. The performance penalty of stable output will
+// only be taken when necessary.
+//
+// This is used to encode messages that end up in the URL query string,
+// for the Connect protocol when unary methods use the HTTP GET method.
+// If the codec in use does not implement StableCodec then HTTP GET
+// methods will not be used; a Mux will send all unary RPCs that use the
+// Connect protocol and that codec as POST requests.
+type StableCodec interface {
+	Codec
+	MarshalAppendStable(b []byte, msg proto.Message) ([]byte, error)
+	// IsBinary returns true for non-text formats. This is used to decide
+	// whether the message query string parameter should be base64-encoded.
+	IsBinary() bool
+}
+
 // DefaultProtoCodec is the default codec factory used for
 // the codec name "proto". The given resolver is used to
 // unmarshal extensions.
@@ -40,15 +60,21 @@ func DefaultJSONCodec(res TypeResolver) Codec {
 
 type protoCodec proto.UnmarshalOptions
 
+var _ StableCodec = (*protoCodec)(nil)
+
 func (p *protoCodec) Name() string {
 	return CodecProto
+}
+
+func (p *protoCodec) IsBinary() bool {
+	return true
 }
 
 func (p *protoCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(b, msg)
 }
 
-func (p *protoCodec) StableMarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+func (p *protoCodec) MarshalAppendStable(b []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(b, msg)
 }
 
@@ -61,15 +87,21 @@ type jsonCodec struct {
 	u protojson.UnmarshalOptions
 }
 
+var _ StableCodec = (*jsonCodec)(nil)
+
 func (p *jsonCodec) Name() string {
 	return CodecJSON
+}
+
+func (p *jsonCodec) IsBinary() bool {
+	return false
 }
 
 func (p *jsonCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
 	return p.m.MarshalAppend(b, msg)
 }
 
-func (p *jsonCodec) StableMarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+func (p *jsonCodec) MarshalAppendStable(b []byte, msg proto.Message) ([]byte, error) {
 	data, err := p.m.MarshalAppend(b, msg)
 	if err != nil {
 		return nil, err
