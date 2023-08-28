@@ -28,6 +28,7 @@ linters-settings:
       - op operation
       - op *operation
       - t ttStream
+      - rw *responseWriter
 linters:
   enable-all: true
   disable:

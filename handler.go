@@ -27,7 +27,7 @@ type handler struct {
 	canDecompress []string
 }
 
-func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) { //nolint:gocyclo
+func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// Identify the protocol.
 	clientProtoHandler, originalContentType, queryVars := classifyRequest(request)
 	if clientProtoHandler == nil {
@@ -508,20 +508,19 @@ func (op *operation) handle() {
 	op.writer = rw
 
 	// And finally we can define the transformed request bodies.
-	if skipBody {
+	switch {
+	case skipBody:
 		// drain any contents of body so downstream handler sees empty
 		op.drainBody(op.request.Body)
-	} else {
-		if sameRequestCompression && sameRequestCodec && !mustDecodeRequest {
-			// we do not need to decompress or decode; just transforming envelopes
-			op.request.Body = &envelopingReader{rw: rw, r: op.request.Body}
-		} else {
-			tw := &transformingReader{rw: rw, msg: &reqMsg, r: op.request.Body}
-			op.request.Body = tw
-			if reqMsg.stage != stageEmpty {
-				if err := tw.prepareMessage(); err != nil {
-					tw.err = err
-				}
+	case sameRequestCompression && sameRequestCodec && !mustDecodeRequest:
+		// we do not need to decompress or decode; just transforming envelopes
+		op.request.Body = &envelopingReader{rw: rw, r: op.request.Body}
+	default:
+		tw := &transformingReader{rw: rw, msg: &reqMsg, r: op.request.Body}
+		op.request.Body = tw
+		if reqMsg.stage != stageEmpty {
+			if err := tw.prepareMessage(); err != nil {
+				tw.err = err
 			}
 		}
 	}
@@ -560,52 +559,27 @@ func (op *operation) readRequestMessage(rw *responseWriter, reader io.Reader, ms
 		if err != nil {
 			return err
 		}
-		env, err := op.clientEnveloper.decodeEnvelope(envBuf)
+		msgLen, compressed, err = op.processRequestEnvelope(envBuf)
 		if err != nil {
-			err = malformedRequestError(err)
 			if rw != nil {
 				rw.reportError(err)
 			}
 			return err
 		}
-		if env.trailer {
-			err := malformedRequestError(fmt.Errorf("client stream cannot include status/trailer message"))
-			if rw != nil {
-				rw.reportError(err)
-			}
-			return err
-		}
-		if limit := op.methodConf.maxMsgBufferSz; limit > 0 && env.length > limit {
-			err = bufferLimitError(int64(limit))
-			if rw != nil {
-				rw.reportError(err)
-			}
-			return err
-		}
-		msgLen, compressed = int(env.length), env.compressed
 	}
 
 	buffer := msg.reset(op.bufferPool, true, compressed)
 	var err error
-	if msgLen == -1 {
-		limit := int64(op.methodConf.maxMsgBufferSz)
-		if limit <= 0 {
-			limit = math.MaxUint32
-		}
-		makeError := bufferLimitError
-		if op.contentLen != -1 {
-			if op.contentLen > limit {
-				// content-length header tells us that entity is too large
-				err := bufferLimitError(limit)
-				if rw != nil {
-					rw.reportError(err)
-				}
-				return err
-			} else {
-				limit = op.contentLen
-				makeError = contentLengthError
+	if msgLen == -1 { //nolint:nestif
+		limit, grow, makeError, limitErr := op.determineReadLimit()
+		if limitErr != nil {
+			if rw != nil {
+				rw.reportError(limitErr)
 			}
-			buffer.Grow(int(op.contentLen))
+			return limitErr
+		}
+		if grow {
+			buffer.Grow(int(limit))
 		}
 		_, err = io.Copy(buffer, &hardLimitReader{r: reader, rw: rw, limit: limit, makeError: makeError})
 		if err == nil && buffer.Len() == 0 {
@@ -624,6 +598,36 @@ func (op *operation) readRequestMessage(rw *responseWriter, reader io.Reader, ms
 	}
 	msg.stage = stageRead
 	return nil
+}
+
+func (op *operation) processRequestEnvelope(envBuf envelopeBytes) (msgLen int, compressed bool, err error) {
+	env, err := op.clientEnveloper.decodeEnvelope(envBuf)
+	if err != nil {
+		return 0, false, malformedRequestError(err)
+	}
+	if env.trailer {
+		return 0, false, malformedRequestError(fmt.Errorf("client stream cannot include status/trailer message"))
+	}
+	if limit := op.methodConf.maxMsgBufferSz; limit > 0 && env.length > limit {
+		return 0, false, bufferLimitError(int64(limit))
+	}
+	return int(env.length), env.compressed, nil
+}
+
+func (op *operation) determineReadLimit() (limit int64, grow bool, makeError func(int64) error, err error) {
+	limit = int64(op.methodConf.maxMsgBufferSz)
+	if limit <= 0 {
+		limit = math.MaxUint32
+	}
+	if op.contentLen == -1 {
+		return limit, false, bufferLimitError, nil
+	}
+	if op.contentLen > limit {
+		// content-length header tells us that entity is too large
+		err := bufferLimitError(limit)
+		return 0, false, nil, err
+	}
+	return op.contentLen, true, contentLengthError, nil
 }
 
 func (op *operation) drainBody(body io.ReadCloser) {
@@ -2001,17 +2005,17 @@ func (f flusherNoError) Flush() {
 	_ = f.f.FlushError()
 }
 
-func asFlusher(rw http.ResponseWriter) http.Flusher {
+func asFlusher(respWriter http.ResponseWriter) http.Flusher {
 	// This is similar to how http.ResponseController.Flush works. But
 	// we can't use that since it isn't available prior to Go 1.21.
 	for {
-		switch t := rw.(type) {
+		switch typedWriter := respWriter.(type) {
 		case http.Flusher:
-			return t
+			return typedWriter
 		case errorFlusher:
-			return flusherNoError{f: t}
+			return flusherNoError{f: typedWriter}
 		case interface{ Unwrap() http.ResponseWriter }:
-			rw = t.Unwrap()
+			respWriter = typedWriter.Unwrap()
 		default:
 			return nil
 		}
