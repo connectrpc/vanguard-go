@@ -43,7 +43,8 @@ func TestMux_RESTxRPC(t *testing.T) {
 	}
 	protocols := []Protocol{
 		ProtocolGRPC,
-		// TODO: grpc-web & connect
+		ProtocolGRPCWeb,
+		ProtocolConnect,
 	}
 
 	var interceptor testInterceptor
@@ -96,9 +97,10 @@ func TestMux_RESTxRPC(t *testing.T) {
 		body   proto.Message
 		meta   http.Header
 	}
-	buildRequest := func(t *testing.T, input input, codec Codec, comp connect.Compressor) *http.Request {
+	buildRequest := func(t *testing.T, input input, codec Codec, comp *compressionPool) *http.Request {
 		t.Helper()
 
+		var isCompressed bool
 		var body io.Reader
 		if input.body != nil {
 			b, err := codec.MarshalAppend(nil, input.body)
@@ -108,11 +110,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 			buf := bytes.NewBuffer(b)
 			if comp != nil {
 				out := &bytes.Buffer{}
-				comp.Reset(out)
-				_, err := io.Copy(out, buf)
-				require.NoError(t, err)
-				require.NoError(t, comp.Close())
+				require.NoError(t, comp.compress(out, buf))
 				buf = out
+				isCompressed = true
 			}
 			body = buf
 		}
@@ -120,9 +120,14 @@ func TestMux_RESTxRPC(t *testing.T) {
 		for key, values := range input.meta {
 			req.Header[key] = values
 		}
-		for key, values := range input.values {
-			req.URL.Query()[key] = values
+		if isCompressed {
+			req.Header["Content-Encoding"] = []string{comp.Name()}
 		}
+		query := req.URL.Query()
+		for key, values := range input.values {
+			query[key] = values
+		}
+		req.URL.RawQuery = query.Encode()
 		return req
 	}
 	type output struct {
@@ -177,11 +182,6 @@ func TestMux_RESTxRPC(t *testing.T) {
 		output: output{
 			code:    http.StatusMethodNotAllowed,
 			rawBody: "Method Not Allowed\n",
-			// TODO: status?
-			// msg: &status.Status{
-			// 	Code:    int32(connect.CodeUnimplemented),
-			// 	Message: "method not allowed",
-			// },
 		},
 	}, {
 		name: "GetBook-Error",
@@ -213,90 +213,133 @@ func TestMux_RESTxRPC(t *testing.T) {
 				Message: "permission denied",
 			},
 		},
+	}, {
+		name: "CreateBook",
+		input: input{
+			method: http.MethodPost,
+			path:   "/v1/shelves/1/books",
+			values: url.Values{
+				"book_id":    []string{"1"},
+				"request_id": []string{"2"},
+			},
+			body: &testv1.Book{
+				Title:  "The Art of Computer Programming",
+				Author: "Donald E. Knuth",
+			},
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: testv1connect.LibraryServiceCreateBookProcedure,
+					msg: &testv1.CreateBookRequest{
+						Parent:    "shelves/1",
+						BookId:    "1",
+						RequestId: "2",
+						Book: &testv1.Book{
+							Title:  "The Art of Computer Programming",
+							Author: "Donald E. Knuth",
+						},
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{
+						Title:  "The Art of Computer Programming",
+						Author: "Donald E. Knuth",
+					},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{
+				Title:  "The Art of Computer Programming",
+				Author: "Donald E. Knuth",
+			},
+		},
 	}}
+	// TODO: test download and upload streaming of google.api.httpbody.
 
-	type testCase struct {
+	type testOpt struct {
 		name         string
-		req          testRequest
 		mux          testMux
+		comp         *compressionPool
 		compressor   connect.Compressor
 		decompressor connect.Decompressor
 	}
-	var testCases []testCase
-	for _, testRequest := range testRequests {
-		for _, compression := range compressions {
-			for _, mux := range muxes {
-				var comp connect.Compressor
-				var decomp connect.Decompressor
-				switch compression {
-				case CompressionGzip:
-					comp = DefaultGzipCompressor()
-					decomp = DefaultGzipDecompressor()
-				case CompressionIdentity:
-					// nil
-				default:
-					t.Fatalf("unknown compression %q", compression)
-				}
-
-				testCases = append(testCases, testCase{
-					name:         fmt.Sprintf("%s_%s/%s", testRequest.name, compression, mux.name),
-					req:          testRequest,
-					mux:          mux,
-					compressor:   comp,
-					decompressor: decomp,
-				})
+	var testOpts []testOpt
+	for _, compression := range compressions {
+		for _, mux := range muxes {
+			var comp *compressionPool
+			switch compression {
+			case CompressionGzip:
+				comp = newCompressionPool(
+					CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor,
+				)
+			case CompressionIdentity:
+				// nil
+			default:
+				t.Fatalf("unknown compression %q", compression)
 			}
+
+			testOpts = append(testOpts, testOpt{
+				name: fmt.Sprintf("%s/%s", compression, mux.name),
+				mux:  mux,
+				comp: comp,
+			})
 		}
 	}
-	for _, testCase := range testCases {
-		testCase := testCase
-		codec := DefaultJSONCodec(protoregistry.GlobalTypes)
-		t.Run(testCase.name, func(t *testing.T) {
+	codec := DefaultJSONCodec(protoregistry.GlobalTypes)
+	for _, opts := range testOpts {
+		opts := opts
+		t.Run(opts.name, func(t *testing.T) {
 			t.Parallel()
+			for _, testCase := range testRequests {
+				testCase := testCase
+				t.Run(testCase.name, func(t *testing.T) {
 
-			interceptor.set(t, testCase.req.stream)
-			defer interceptor.del(t)
+					interceptor.set(t, testCase.stream)
+					defer interceptor.del(t)
 
-			req := buildRequest(t, testCase.req.input, codec, testCase.compressor)
-			req.Header.Set("Test", t.Name()) // for interceptor
-			t.Log(req.Method, req.URL.String())
+					req := buildRequest(t, testCase.input, codec, opts.comp)
+					req.Header.Set("Test", t.Name()) // for interceptor
+					t.Log(req.Method, req.URL.String())
 
-			debug, _ := httputil.DumpRequest(req, true)
-			t.Log("req:", string(debug))
+					debug, _ := httputil.DumpRequest(req, true)
+					t.Log("req:", string(debug))
 
-			rsp := httptest.NewRecorder()
-			testCase.mux.mux.AsHandler().ServeHTTP(rsp, req)
+					rsp := httptest.NewRecorder()
+					opts.mux.mux.AsHandler().ServeHTTP(rsp, req)
 
-			result := rsp.Result()
-			defer result.Body.Close()
-			debug, _ = httputil.DumpResponse(result, true)
-			t.Log("rsp:", string(debug))
+					result := rsp.Result()
+					defer result.Body.Close()
+					debug, _ = httputil.DumpResponse(result, true)
+					t.Log("rsp:", string(debug))
 
-			// Check response
-			want := testCase.req.output
-			decomp := testCase.decompressor
+					// Check response
+					want := testCase.output
+					decomp := opts.comp
 
-			if !assert.Equal(t, want.code, rsp.Code, "status code") {
-				return
+					if !assert.Equal(t, want.code, rsp.Code, "status code") {
+						return
+					}
+					assert.Subset(t, rsp.Header(), want.meta, "headers")
+					if want.body == nil {
+						assert.Equal(t, want.rawBody, rsp.Body.String(), "body")
+						return
+					}
+					require.NotEmpty(t, rsp.Body.String(), "body")
+					body := rsp.Body
+					if decomp != nil && rsp.Header().Get("Content-Encoding") != "" {
+						out := &bytes.Buffer{}
+						require.NoError(t, decomp.decompress(out, body))
+						body = out
+					}
+					got := want.body.ProtoReflect().New().Interface()
+					require.NoError(t, codec.Unmarshal(body.Bytes(), got), "unmarshal body")
+					assert.Empty(t, cmp.Diff(want.body, got, protocmp.Transform()))
+
+				})
 			}
-			assert.Subset(t, rsp.Header(), want.meta, "headers")
-			if want.body == nil {
-				assert.Equal(t, want.rawBody, rsp.Body.String(), "body")
-				return
-			}
-			require.NotEmpty(t, rsp.Body.String(), "body")
-			body := rsp.Body
-			if decomp != nil && rsp.Header().Get("Content-Encoding") != "" {
-				out := &bytes.Buffer{}
-				require.NoError(t, decomp.Reset(body))
-				_, err := io.Copy(out, body)
-				require.NoError(t, err)
-				require.NoError(t, decomp.Close())
-				body = out
-			}
-			got := want.body.ProtoReflect().New().Interface()
-			require.NoError(t, codec.Unmarshal(body.Bytes(), got), "unmarshal body")
-			assert.Empty(t, cmp.Diff(want.body, got, protocmp.Transform()))
 		})
 	}
 }
