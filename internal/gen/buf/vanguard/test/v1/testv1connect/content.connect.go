@@ -12,7 +12,7 @@ import (
 	connect "connectrpc.com/connect"
 	context "context"
 	errors "errors"
-	v1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
+	v1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
 	httpbody "google.golang.org/genproto/googleapis/api/httpbody"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	http "net/http"

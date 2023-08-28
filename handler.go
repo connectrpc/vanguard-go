@@ -27,7 +27,7 @@ type handler struct {
 	canDecompress []string
 }
 
-func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) { //nolint:gocyclo
 	// Identify the protocol.
 	clientProtoHandler, originalContentType, queryVars := classifyRequest(request)
 	if clientProtoHandler == nil {
@@ -133,6 +133,12 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				break
 			}
 		}
+	}
+
+	// Now that we've ruled out the use of bidi streaming above, it's safe to simulate HTTP/2
+	// for the benefit of gRPC handlers, which require HTTP/2.
+	if op.server.protocol.protocol() == ProtocolGRPC {
+		request.Proto, request.ProtoMajor, request.ProtoMinor = "HTTP/2", 2, 0
 	}
 
 	if op.server.protocol.protocol() == ProtocolREST {

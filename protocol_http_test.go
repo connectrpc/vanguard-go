@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
+	testv1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
