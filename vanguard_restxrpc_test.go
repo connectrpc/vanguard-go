@@ -260,11 +260,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 	// TODO: test download and upload streaming of google.api.httpbody.
 
 	type testOpt struct {
-		name         string
-		mux          testMux
-		comp         *compressionPool
-		compressor   connect.Compressor
-		decompressor connect.Decompressor
+		name string
+		mux  testMux
+		comp *compressionPool
 	}
 	var testOpts []testOpt
 	for _, compression := range compressions {
@@ -296,6 +294,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			for _, testCase := range testRequests {
 				testCase := testCase
 				t.Run(testCase.name, func(t *testing.T) {
+					t.Parallel()
 
 					interceptor.set(t, testCase.stream)
 					defer interceptor.del(t)
@@ -337,7 +336,6 @@ func TestMux_RESTxRPC(t *testing.T) {
 					got := want.body.ProtoReflect().New().Interface()
 					require.NoError(t, codec.Unmarshal(body.Bytes(), got), "unmarshal body")
 					assert.Empty(t, cmp.Diff(want.body, got, protocmp.Transform()))
-
 				})
 			}
 		})
