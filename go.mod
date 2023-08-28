@@ -1,4 +1,4 @@
-module github.com/bufbuild/vanguard
+module github.com/bufbuild/vanguard-go
 
 go 1.19
 
