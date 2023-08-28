@@ -279,7 +279,7 @@ func (o *testInterceptor) restUnaryHandler(
 			return err
 		}
 		if comp != nil && acceptEncoding != "" {
-			assert.Equal(stream.T, comp.Name(), acceptEncoding, "expected gzip encoding")
+			assert.Equal(stream.T, comp.Name(), acceptEncoding, "expected encoding")
 			rsp.Header().Set("Content-Encoding", comp.Name())
 			var dst bytes.Buffer
 			if err := comp.compress(&dst, bytes.NewBuffer(body)); err != nil {
