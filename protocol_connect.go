@@ -389,10 +389,11 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	}
 
 	vals.Set("message", msgStr)
-	// TODO: Limit to how big query string is (or maybe query string + URI path?)
-	//       So if transformation enlarges the query string/URL from the original
-	//       request (particularly if we de-compress w/out re-compressing), we can
-	//       decide to use POST instead of GET.
+	queryString := vals.Encode()
+	if uint32(len(op.methodConf.methodPath)+len(queryString)+1) > op.methodConf.maxGetURLSz {
+		// URL is too big; fall back to POST
+		return op.methodConf.methodPath, "", http.MethodPost, true, nil
+	}
 	return op.methodConf.methodPath, vals.Encode(), http.MethodGet, false, nil
 }
 

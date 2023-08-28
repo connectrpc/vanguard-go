@@ -329,6 +329,7 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 	urlPath = path
 	queryParams = query.Encode()
 	includeBody = op.restTarget.requestBodyFields != nil // can be len(0) if body is '*'
+	// TODO: Should this return an error if URL (path + query string) is greater than op.methodConf.maxGetURLSz?
 	return urlPath, queryParams, op.restTarget.method, includeBody, nil
 }
 
