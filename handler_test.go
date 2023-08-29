@@ -536,12 +536,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromUnary(ctx, client.Index, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceIndexProcedure,
-						msg:    &testv1.IndexRequest{Page: "abcdef"},
+						msg: &testv1.IndexRequest{Page: "abcdef"},
 					}},
 					{out: &testMsgOut{
 						msg: &httpbody.HttpBody{
@@ -559,12 +559,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromUnary(ctx, client.Index, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceIndexProcedure,
-						msg:    &testv1.IndexRequest{Page: "xyz"},
+						msg: &testv1.IndexRequest{Page: "xyz"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
@@ -578,16 +578,15 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromClientStream(ctx, client.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &emptypb.Empty{},
@@ -602,16 +601,15 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromClientStream(ctx, client.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
@@ -625,12 +623,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromServerStream(ctx, client.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -666,12 +664,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromServerStream(ctx, client.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -693,12 +691,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -711,8 +709,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -729,12 +726,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{

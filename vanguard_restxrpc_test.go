@@ -171,6 +171,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			},
 		},
 		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
 			reqHeader: http.Header{
 				"Message": []string{"hello"},
 			},
@@ -179,8 +180,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			},
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: testv1connect.LibraryServiceGetBookProcedure,
-					msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 				}},
 				{out: &testMsgOut{
 					msg: &testv1.Book{Name: "shelves/1/books/1"},
@@ -212,10 +212,10 @@ func TestMux_RESTxRPC(t *testing.T) {
 			},
 		},
 		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: testv1connect.LibraryServiceGetBookProcedure,
-					msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 				}},
 				{out: &testMsgOut{
 					err: connect.NewError(
@@ -246,9 +246,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 			},
 		},
 		stream: testStream{
+			method: testv1connect.LibraryServiceCreateBookProcedure,
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: testv1connect.LibraryServiceCreateBookProcedure,
 					msg: &testv1.CreateBookRequest{
 						Parent:    "shelves/1",
 						BookId:    "1",
@@ -281,9 +281,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 			path:   "/index/page.html",
 		},
 		stream: testStream{
+			method: testv1connect.ContentServiceIndexProcedure,
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: testv1connect.ContentServiceIndexProcedure,
 					msg: &testv1.IndexRequest{
 						Page: "page.html",
 					},
@@ -314,9 +314,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 			},
 		},
 		stream: testStream{
+			method: testv1connect.ContentServiceUploadProcedure,
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: testv1connect.ContentServiceUploadProcedure,
 					msg: &testv1.UploadRequest{
 						Filename: "message.txt",
 						File: &httpbody.HttpBody{
@@ -341,9 +341,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 			path:   "/raw/message.txt",
 		},
 		stream: testStream{
+			method: testv1connect.ContentServiceDownloadProcedure,
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: testv1connect.ContentServiceDownloadProcedure,
 					msg: &testv1.DownloadRequest{
 						Filename: "message.txt",
 					},

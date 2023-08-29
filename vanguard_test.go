@@ -14,7 +14,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/go-cmp/cmp"
@@ -26,20 +28,13 @@ import (
 )
 
 type testStream struct {
+	method     string
 	reqHeader  http.Header // expected
 	rspHeader  http.Header // out
 	rspTrailer http.Header // out
 	msgs       []testMsg   // in, out
 }
 
-type testMsgIn struct {
-	method string
-	msg    proto.Message
-}
-type testMsgOut struct {
-	msg proto.Message
-	err *connect.Error
-}
 type testMsg struct {
 	in  *testMsgIn
 	out *testMsgOut
@@ -51,12 +46,14 @@ func (o *testMsg) getIn() (*testMsgIn, error) {
 	}
 	return o.in, nil
 }
+
 func (o *testMsg) getOut() (*testMsgOut, error) {
 	if o == nil || o.out == nil {
 		return nil, fmt.Errorf("missing output message")
 	}
 	return o.out, nil
 }
+
 func (o *testMsg) get() any {
 	if o.in != nil {
 		return o.in
@@ -67,62 +64,144 @@ func (o *testMsg) get() any {
 	return nil
 }
 
-type testInterceptor struct {
-	sync.Map
+type testMsgIn struct {
+	msg proto.Message
+	// An error on input means that the middleware should generate an error here.
+	// The msg is present so that runRPCTestCase knows what message to send, but
+	// if err != nil then the interceptor instead accepts the operation to be
+	// cancelled (and the middleware will send this error back to the clent).
+	err *connect.Error
+}
+
+type testMsgOut struct {
+	msg proto.Message
+	// If msg is nil, the interceptor will return this error instead of sending
+	// a message. But if both are non-nil, then the interceptor will send the
+	// message but expect an error doing so. So in that case, this error is
+	// expected by both the server handler and the client.
+	err *connect.Error
 }
 
 type ttStream struct {
 	*testing.T
 	testStream
+
+	started atomic.Bool
+	result  error
+	done    chan struct{}
 }
 
-func (o *testInterceptor) get(testName string) (ttStream, bool) {
-	val, ok := o.Load(testName)
-	if !ok {
-		return ttStream{}, false
+func (str *ttStream) start() {
+	// Called from the interceptor when it starts handling the stream
+	str.started.Store(true)
+}
+
+func (str *ttStream) finish(result error) {
+	// Called from the interceptor when it finishes handling the stream
+	str.result = result
+	close(str.done)
+}
+
+func (str *ttStream) await(t *testing.T, expectServerDone bool) error {
+	t.Helper()
+	// Called from test code to make sure server handler has completed.
+	// Returns any error that the interceptor finished with.
+	// Should only be called after the RPC appears to have completed in
+	// the test client.
+	if !str.started.Load() {
+		// Interceptor never started, so nothing to wait for.
+		return nil
 	}
-	stream, ok := val.(ttStream)
+	if expectServerDone {
+		select {
+		case <-str.done:
+			return str.result
+		default:
+			t.Fatal("expecting server to already be done but it's not")
+		}
+	}
+	select {
+	case <-str.done:
+		return str.result
+	case <-time.After(3 * time.Second):
+		return fmt.Errorf("timeout: interceptor still did not finish after 3 seconds")
+	}
+}
+
+type testInterceptor struct {
+	sync.Map
+}
+
+func (ti *testInterceptor) get(testName string) (*ttStream, bool) {
+	val, ok := ti.Load(testName)
+	if !ok {
+		return nil, false
+	}
+	stream, ok := val.(*ttStream)
 	return stream, ok
 }
-func (o *testInterceptor) set(t *testing.T, stream testStream) {
+
+func (ti *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) error {
 	t.Helper()
-	o.Store(t.Name(), ttStream{t, stream})
-}
-func (o *testInterceptor) del(t *testing.T) {
-	t.Helper()
-	o.Delete(t.Name())
+	str := &ttStream{
+		T:          t,
+		testStream: stream,
+		done:       make(chan struct{}),
+	}
+	ti.Store(t.Name(), str)
+	// The returned function can be used by test code to await server completion.
+	// (Useful in the event that middleware cancels the operation early, so client
+	// could see a completed response while server still running concurrently.)
+	return str.await
 }
 
-func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return connect.UnaryFunc(func(
+func (ti *testInterceptor) del(t *testing.T) {
+	t.Helper()
+	ti.Delete(t.Name())
+}
+
+func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(
 		ctx context.Context,
 		req connect.AnyRequest,
-	) (connect.AnyResponse, error) {
+	) (_ connect.AnyResponse, resultError error) {
 		val := req.Header().Get("test")
 		if val == "" {
 			return next(ctx, req)
 		}
-		stream, ok := o.get(val)
+		stream, ok := ti.get(val)
 		if !ok {
 			return nil, fmt.Errorf("invalid testCase header: %s", val)
+		}
+		stream.start()
+		defer func() {
+			stream.finish(resultError)
+		}()
+		if !assert.Equal(stream.T, stream.method, req.Spec().Procedure) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("expected %s, got %s", stream.method, req.Spec().Procedure))
 		}
 		assert.Subset(stream.T, req.Header(), stream.reqHeader)
 		if len(stream.msgs) != 2 {
 			err := fmt.Errorf("expected 2 messages, got %d", len(stream.msgs))
 			return nil, err
 		}
+
 		inn, err := stream.msgs[0].getIn()
 		if err != nil {
 			return nil, err
 		}
+		if inn.err != nil {
+			return nil, errors.New("testMsgIn should not have err field set for unary request")
+		}
+
 		out, err := stream.msgs[1].getOut()
 		if err != nil {
 			return nil, err
 		}
-		if inn.method != "" && req.Spec().Procedure != inn.method {
-			err := fmt.Errorf("expected %s, got %s", inn.method, req.Spec().Procedure)
-			return nil, err
+		if out.msg != nil && out.err != nil {
+			return nil, errors.New("testMsgOut should not have both msg and err fields set for unary request")
 		}
+
 		msg, ok := req.Any().(proto.Message)
 		if !ok {
 			return nil, fmt.Errorf("expected proto.Message, got %T", req.Any())
@@ -131,6 +210,7 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if diff != "" {
 			return nil, fmt.Errorf("message didn't match: %s", diff)
 		}
+
 		if out.err != nil {
 			err := out.err
 			if len(stream.rspHeader) > 0 {
@@ -155,23 +235,32 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 			rsp.Trailer()[key] = values
 		}
 		return rsp, nil
-	})
+	}
 }
-func (o *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+
+func (ti *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return next
 }
-func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return connect.StreamingHandlerFunc(func(
+
+func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
-	) error {
+	) (resultError error) {
 		val := conn.RequestHeader().Get("test")
 		if val == "" {
 			return next(ctx, conn)
 		}
-		stream, ok := o.get(val)
+		stream, ok := ti.get(val)
 		if !ok {
 			return fmt.Errorf("invalid testCase header: %s", val)
+		}
+		stream.start()
+		defer func() {
+			stream.finish(resultError)
+		}()
+		if !assert.Equal(stream.T, stream.method, conn.Spec().Procedure) {
+			return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("expected %s, got %s", stream.method, conn.Spec().Procedure))
 		}
 		stream.Log("WrapStreamingHandler", val)
 		assert.Subset(stream.T, conn.RequestHeader(), stream.reqHeader)
@@ -183,20 +272,38 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 			switch msg := msg.get().(type) {
 			case *testMsgIn:
 				got := proto.Clone(msg.msg)
-				if err := conn.Receive(got); err != nil {
+				err := conn.Receive(got)
+				switch {
+				case msg.err != nil:
+					// We're expecting an error at this point, which prevented this
+					// message from being delivered.
+					if err == nil {
+						err = errors.New("expecting an error receiving message but got none")
+					}
 					return err
-				}
-				diff := cmp.Diff(got, msg.msg, protocmp.Transform())
-				assert.Empty(stream.T, diff, "message didn't match")
-				if diff != "" {
-					return fmt.Errorf("message didn't match")
+				case err != nil:
+					return err // not expecting an error
+				default:
+					diff := cmp.Diff(got, msg.msg, protocmp.Transform())
+					assert.Empty(stream.T, diff, "message didn't match")
+					if diff != "" {
+						return fmt.Errorf("message didn't match: %s", diff)
+					}
 				}
 			case *testMsgOut:
-				if msg.err != nil {
-					return msg.err
-				}
-				if err := conn.Send(msg.msg); err != nil {
+				switch {
+				case msg.msg != nil && msg.err != nil:
+					err := conn.Send(msg.msg)
+					if err == nil {
+						err = errors.New("expecting an error sending message but got none")
+					}
 					return err
+				case msg.err != nil:
+					return msg.err
+				default:
+					if err := conn.Send(msg.msg); err != nil {
+						return err
+					}
 				}
 			default:
 				return fmt.Errorf("expected message")
@@ -206,16 +313,16 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 			conn.ResponseTrailer()[key] = vals
 		}
 		return nil
-	})
+	}
 }
 
-func (o *testInterceptor) restUnaryHandler(
+func (ti *testInterceptor) restUnaryHandler(
 	codec Codec, comp *compressionPool,
 ) http.HandlerFunc {
 	codecNames := map[string]string{
 		"application/json": "json",
 	}
-	handler := func(stream ttStream, rsp http.ResponseWriter, req *http.Request) error {
+	handler := func(stream *ttStream, rsp http.ResponseWriter, req *http.Request) error {
 		if len(stream.msgs) != 2 {
 			return fmt.Errorf("expected 2 messages, got %d", len(stream.msgs))
 		}
@@ -227,7 +334,7 @@ func (o *testInterceptor) restUnaryHandler(
 		if err != nil {
 			return err
 		}
-		assert.Equal(stream.T, inn.method, req.URL.String(), "url didn't match")
+		assert.Equal(stream.T, stream.method, req.URL.String(), "url didn't match")
 		assert.Subset(stream.T, req.Header, stream.reqHeader, "headers didn't match")
 		contentType := req.Header.Get("Content-Type")
 		encoding := req.Header.Get("Content-Encoding")
@@ -319,7 +426,7 @@ func (o *testInterceptor) restUnaryHandler(
 			http.Error(rsp, "missing test header", http.StatusInternalServerError)
 			return
 		}
-		stream, ok := o.get(val)
+		stream, ok := ti.get(val)
 		if !ok {
 			http.Error(rsp, "invalid test header", http.StatusInternalServerError)
 			return
@@ -631,7 +738,7 @@ func runRPCTestCase[Client any](
 	stream testStream,
 ) {
 	t.Helper()
-	interceptor.set(t, stream)
+	awaitServer := interceptor.set(t, stream)
 	defer interceptor.del(t)
 	reqHeaders := http.Header{}
 	reqHeaders.Set("Test", t.Name()) // test header
@@ -646,16 +753,32 @@ func runRPCTestCase[Client any](
 	}
 	headers, responses, trailers, err := invoke(client, reqHeaders, reqMsgs)
 	var expectedErr *connect.Error
+	expectServerDone := true
+	var expectServerCancel bool
 	for _, streamMsg := range stream.msgs {
+		if streamMsg.in != nil && streamMsg.in.err != nil {
+			expectedErr = streamMsg.in.err
+			expectServerDone = false
+			expectServerCancel = true
+			break
+		}
 		if streamMsg.out != nil && streamMsg.out.err != nil {
 			expectedErr = streamMsg.out.err
+			expectServerDone = streamMsg.out.msg == nil
 			break
 		}
 	}
-	if expectedErr == nil {
+	svrErr := awaitServer(t, expectServerDone)
+	switch {
+	case expectedErr == nil:
 		assert.NoError(t, err)
-	} else {
-		assert.Equal(t, expectedErr.Code(), connect.CodeOf(err))
+		assert.NoError(t, svrErr)
+	case expectServerCancel:
+		if !errors.Is(svrErr, context.Canceled) {
+			assert.Equal(t, connect.CodeCanceled, connect.CodeOf(svrErr))
+		}
+	default:
+		assert.Equal(t, expectedErr.Code(), connect.CodeOf(svrErr))
 	}
 	assert.Subset(t, headers, stream.rspHeader)
 	assert.Subset(t, trailers, stream.rspTrailer)

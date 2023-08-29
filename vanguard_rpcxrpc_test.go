@@ -143,12 +143,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromUnary(ctx, clients.libClient.GetBook, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.LibraryServiceGetBookProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.LibraryServiceGetBookProcedure,
-						msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+						msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.Book{Name: "shelves/1/books/1"},
@@ -165,15 +165,15 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromUnary(ctx, clients.libClient.GetBook, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.LibraryServiceGetBookProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.LibraryServiceGetBookProcedure,
-						msg:    &testv1.GetBookRequest{Name: strings.Repeat("foo/", 200) + "/1"},
+						msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 300) + "/1"},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.Book{Name: strings.Repeat("foo/", 200) + "/1"},
+						msg: &testv1.Book{Name: strings.Repeat("foo/", 300) + "/1"},
 					}},
 				},
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
@@ -185,12 +185,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromUnary(ctx, clients.libClient.GetBook, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.LibraryServiceGetBookProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.LibraryServiceGetBookProcedure,
-						msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+						msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeFailedPrecondition, errors.New("foo")),
@@ -204,16 +204,15 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromClientStream(ctx, clients.contentClient.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &emptypb.Empty{},
@@ -228,16 +227,15 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromClientStream(ctx, clients.contentClient.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
@@ -251,12 +249,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromServerStream(ctx, clients.contentClient.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -292,12 +290,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromServerStream(ctx, clients.contentClient.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -319,12 +317,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromBidiStream(ctx, clients.contentClient.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -337,8 +335,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 						},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -355,12 +352,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromBidiStream(ctx, clients.contentClient.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{

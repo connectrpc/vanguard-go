@@ -201,8 +201,14 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		}
 	}
 
-	if svcOpts.maxGetURLSz <= 0 {
+	switch {
+	case svcOpts.maxGetURLSz <= 0 && m.MaxGetURLSize > 0:
+		svcOpts.maxGetURLSz = m.MaxGetURLSize
+	case svcOpts.maxGetURLSz <= 0:
 		svcOpts.maxGetURLSz = DefaultMaxGetURLSize
+	}
+	if svcOpts.maxMsgBufferSz <= 0 && m.MaxMessageBufferSize > 0 {
+		svcOpts.maxMsgBufferSz = m.MaxMessageBufferSize
 	}
 
 	if svcOpts.resolver == nil {
