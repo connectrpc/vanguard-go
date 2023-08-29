@@ -38,13 +38,13 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	defer cancel()
 	request = request.WithContext(ctx)
 	op := operation{
-		muxConfig:     h.mux,
-		writer:        writer,
-		request:       request,
-		contentType:   originalContentType,
-		cancel:        cancel,
-		bufferPool:    h.bufferPool,
-		canDecompress: h.canDecompress,
+		muxConfig:      h.mux,
+		writer:         writer,
+		request:        request,
+		reqContentType: originalContentType,
+		cancel:         cancel,
+		bufferPool:     h.bufferPool,
+		canDecompress:  h.canDecompress,
 	}
 	op.client.protocol = clientProtoHandler
 	if queryVars != nil {
@@ -344,18 +344,19 @@ type httpError struct {
 // operation represents a single HTTP operation, which maps to an incoming HTTP request.
 // It tracks properties needed to implement protocol transformation.
 type operation struct {
-	muxConfig     *Mux
-	writer        http.ResponseWriter
-	request       *http.Request
-	queryVars     url.Values
-	contentType   string // original content-type in incoming request headers
-	contentLen    int64  // original content-length in incoming request headers or -1
-	reqMeta       requestMeta
-	cancel        context.CancelFunc
-	bufferPool    *bufferPool
-	delegate      http.Handler
-	resolver      TypeResolver
-	canDecompress []string
+	muxConfig      *Mux
+	writer         http.ResponseWriter
+	request        *http.Request
+	queryVars      url.Values
+	reqContentType string // original content-type in incoming request headers
+	rspContentType string // original content-type in outging response headers
+	contentLen     int64  // original content-length in incoming request headers or -1
+	reqMeta        requestMeta
+	cancel         context.CancelFunc
+	bufferPool     *bufferPool
+	delegate       http.Handler
+	resolver       TypeResolver
+	canDecompress  []string
 
 	method     protoreflect.MethodDescriptor
 	methodPath string
@@ -840,6 +841,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		rw.reportError(err)
 		return
 	}
+	rw.op.rspContentType = rw.Header().Get("Content-Type")
 	respMeta, processBody, err := rw.op.server.protocol.extractProtocolResponseHeaders(statusCode, rw.Header())
 	if err != nil {
 		rw.reportError(err)
@@ -1592,7 +1594,7 @@ func (m *message) reset(pool *bufferPool, isRequest, isCompressed bool) *bytes.B
 	return buffer1
 }
 
-func (m *message) advanceToStage(op *operation, newStage messageStage) (k error) {
+func (m *message) advanceToStage(op *operation, newStage messageStage) error {
 	if m.stage == stageEmpty {
 		return errors.New("message has not yet been read")
 	}

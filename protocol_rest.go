@@ -139,12 +139,9 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	}
 	if isSpecialHTTPBody(msg.Descriptor(), nil) {
 		fields := msg.Descriptor().Fields()
-		dataField := fields.ByName("data")
-		contentField := fields.ByName("content_type")
-		// TODO: get content-type from headers?
-		contentType := "text/plain"
-		msg.Set(contentField, protoreflect.ValueOfString(contentType))
-		msg.Set(dataField, protoreflect.ValueOfBytes(src))
+		contentType := op.reqContentType
+		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
+		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
 	} else if len(src) > 0 {
 		if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
 			return err
@@ -257,7 +254,7 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 			meta.codec = meta.codec[:n]
 		}
 	default:
-		meta.codec = contentType + "?"
+		meta.codec = ""
 	}
 	headers.Del("Content-Type")
 
@@ -290,6 +287,13 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 	for _, field := range op.restTarget.requestBodyFields {
 		msg = msg.Get(field).Message()
 	}
+	if requestIsSpecialHTTPBody(op) {
+		fields := msg.Descriptor().Fields()
+		contentType := msg.Get(fields.ByName("content_type")).String()
+		bytes := msg.Get(fields.ByName("data")).Bytes()
+		headers.Set("Content-Type", contentType)
+		return bytes, nil
+	}
 	return op.server.codec.MarshalAppend(base, msg.Interface())
 }
 
@@ -299,23 +303,16 @@ func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
-	if responseIsSpecialHTTPBody(op) {
-		msg := target.ProtoReflect()
-		for _, field := range op.restTarget.responseBodyFields {
-			msg = msg.Mutable(field).Message()
-		}
-		fields := msg.Descriptor().Fields()
-		dataField := fields.ByName("data")
-		contentField := fields.ByName("content_type")
-		// TODO: get content-type from headers?
-		contentType := op.writer.Header().Get("Content-Type")
-		msg.Set(contentField, protoreflect.ValueOfString(contentType))
-		msg.Set(dataField, protoreflect.ValueOfBytes(src))
-		return nil
-	}
 	msg := target.ProtoReflect()
 	for _, field := range op.restTarget.responseBodyFields {
 		msg = msg.Mutable(field).Message()
+	}
+	if responseIsSpecialHTTPBody(op) {
+		fields := msg.Descriptor().Fields()
+		contentType := op.rspContentType
+		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
+		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		return nil
 	}
 	return op.server.codec.Unmarshal(src, msg.Interface())
 }

@@ -7,39 +7,37 @@ syntax = "proto3";
 package buf.vanguard.test.v1;
 
 import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
-import "google/protobuf/empty.proto";
 
 service LibraryService {
   // Gets a book.
   rpc GetBook(GetBookRequest) returns (Book) {
-    option (google.api.http) = {
-      get : "/v1/{name=shelves/*/books/*}"
-    };
+    option (google.api.http) = {get: "/v1/{name=shelves/*/books/*}"};
     option idempotency_level = NO_SIDE_EFFECTS;
-  };
+  }
   // Creates a book, and returns the new Book.
   rpc CreateBook(CreateBookRequest) returns (Book) {
     option (google.api.http) = {
-      post : "/v1/{parent=shelves/*}/books"
-      body : "book"
+      post: "/v1/{parent=shelves/*}/books"
+      body: "book"
     };
-  };
+  }
   // Lists books in a shelf.
   rpc ListBooks(ListBooksRequest) returns (ListBooksResponse) {
     // List method maps to HTTP GET.
     option (google.api.http) = {
       // The `parent` captures the parent resource name, such as
       // "shelves/shelf1".
-      get : "/v1/{parent=shelves/*}/books"
+      get: "/v1/{parent=shelves/*}/books"
     };
   }
   // Creates a shelf.
   rpc CreateShelf(CreateShelfRequest) returns (Shelf) {
     option (google.api.http) = {
-      post : "/v1/shelves"
-      body : "shelf"
+      post: "/v1/shelves"
+      body: "shelf"
     };
   }
   // Updates a book.
@@ -49,8 +47,8 @@ service LibraryService {
     option (google.api.http) = {
       // Note the URL template variable which captures the resource name of the
       // book to update.
-      patch : "/v1/{book.name=shelves/*/books/*}"
-      body : "book"
+      patch: "/v1/{book.name=shelves/*/books/*}"
+      body: "book"
     };
   }
   // Deletes a book.
@@ -60,15 +58,13 @@ service LibraryService {
     option (google.api.http) = {
       // Note the URL template variable capturing the multi-segment name of the
       // book resource to be deleted, such as "shelves/shelf1/books/book2"
-      delete : "/v1/{name=shelves/*/books/*}"
+      delete: "/v1/{name=shelves/*/books/*}"
     };
   }
   // Search books in a shelf.
   rpc SearchBooks(SearchBooksRequest) returns (SearchBooksResponse) {
     // Search over a multiple shelves with "shelves/-" wildcard.
-    option (google.api.http) = {
-      get : "/v2/{parent=shelves/*}/books:search"
-    };
+    option (google.api.http) = {get: "/v2/{parent=shelves/*}/books:search"};
     option idempotency_level = NO_SIDE_EFFECTS;
   }
 }
@@ -131,7 +127,9 @@ message ListBooksResponse {
 
 message Shelf {}
 
-message CreateShelfRequest { Shelf shelf = 1; }
+message CreateShelfRequest {
+  Shelf shelf = 1;
+}
 
 message UpdateBookRequest {
   // The book resource which replaces the resource on the server.
