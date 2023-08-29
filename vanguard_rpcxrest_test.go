@@ -17,10 +17,12 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestMux_RPCxREST(t *testing.T) {
@@ -29,6 +31,7 @@ func TestMux_RPCxREST(t *testing.T) {
 	var interceptor testInterceptor
 	services := []protoreflect.FullName{
 		testv1connect.LibraryServiceName,
+		testv1connect.ContentServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -115,7 +118,8 @@ func TestMux_RPCxREST(t *testing.T) {
 
 	ctx := context.Background()
 	type testClients struct {
-		libClient testv1connect.LibraryServiceClient
+		contentClient testv1connect.ContentServiceClient
+		libClient     testv1connect.LibraryServiceClient
 	}
 	type output struct {
 		header   http.Header
@@ -223,13 +227,106 @@ func TestMux_RPCxREST(t *testing.T) {
 				Author: "Donald E. Knuth",
 			}},
 		},
+	}, {
+		name: "Index",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.IndexRequest{Page: "page.html"},
+			}
+			return outputFromUnary(ctx, clients.contentClient.Index, hdr, msgs)
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: "/index/page.html",
+					msg:    nil, // GET request.
+				}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "text/html",
+						Data:        []byte("<html>hello</html>"),
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&httpbody.HttpBody{
+				ContentType: "text/html",
+				Data:        []byte("<html>hello</html>"),
+			}},
+		},
+	}, {
+		name: "Upload",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.UploadRequest{
+					Filename: "message.txt",
+					File: &httpbody.HttpBody{
+						ContentType: "text/plain",
+						Data:        []byte("hello"),
+					},
+				},
+				&testv1.UploadRequest{
+					File: &httpbody.HttpBody{
+						Data: []byte(" world"),
+					},
+				},
+			}
+			return outputFromClientStream(ctx, clients.contentClient.Upload, hdr, msgs)
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: "/raw/message.txt",
+					msg: &httpbody.HttpBody{
+						ContentType: "text/plain",
+						Data:        []byte("hello world"),
+					},
+				}},
+				{out: &testMsgOut{msg: &emptypb.Empty{}}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&emptypb.Empty{}},
+		},
+	}, {
+		name: "Download",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.DownloadRequest{Filename: "message.txt"},
+			}
+			return outputFromServerStream(ctx, clients.contentClient.Download, hdr, msgs)
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: "/raw/message.txt",
+				}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "text/plain",
+						Data:        []byte("hello world"),
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&testv1.DownloadResponse{
+				File: &httpbody.HttpBody{
+					ContentType: "text/plain",
+					Data:        []byte("hello world"),
+				},
+			}},
+		},
 	}}
-	// TODO: test download and upload streaming of google.api.httpbody.
 
 	for _, opts := range testOpts {
 		opts := opts
 		clients := testClients{
 			libClient: testv1connect.NewLibraryServiceClient(
+				opts.svr.Client(), opts.svr.URL, opts.opts...,
+			),
+			contentClient: testv1connect.NewContentServiceClient(
 				opts.svr.Client(), opts.svr.URL, opts.opts...,
 			),
 		}
@@ -249,6 +346,8 @@ func TestMux_RPCxREST(t *testing.T) {
 					header, messages, trailer, err := req.input(clients, reqHdr)
 					if req.output.wantErr != nil {
 						assert.Equal(t, req.output.wantErr.Code(), connect.CodeOf(err))
+					} else {
+						assert.NoError(t, err)
 					}
 					assert.Subset(t, header, req.output.header)
 					assert.Subset(t, trailer, req.output.trailer)
