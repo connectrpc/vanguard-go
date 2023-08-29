@@ -16,7 +16,6 @@ service ContentService {
   // Index returns a html index page at the given path.
   rpc Index(IndexRequest) returns (google.api.HttpBody) {
     option (google.api.http) = {get: "/index/{page=**}"};
-    option idempotency_level = NO_SIDE_EFFECTS;
   }
   // Upload a file to the given path.
   rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
