@@ -319,8 +319,10 @@ func (c connectUnaryServerProtocol) requestNeedsPrep(op *operation) bool {
 }
 
 func (c connectUnaryServerProtocol) useGet(op *operation) bool {
+	methodOptions, _ := op.method.Options().(*descriptorpb.MethodOptions)
 	_, isStable := op.server.codec.(StableCodec)
-	return op.request.Method == http.MethodGet && isStable
+	return op.request.Method == http.MethodGet && isStable &&
+		methodOptions.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
 }
 
 func (c connectUnaryServerProtocol) prepareMarshalledRequest(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
@@ -344,8 +346,7 @@ func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(op *oper
 }
 
 func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
-	stableMarshaler, isStable := op.server.codec.(StableCodec)
-	if op.request.Method != http.MethodGet || !isStable {
+	if !c.useGet(op) {
 		return op.methodPath, "", http.MethodPost, true, nil
 	}
 	vals := make(url.Values, 5)
@@ -353,6 +354,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 
 	vals.Set("encoding", op.server.codec.Name())
 	buf := op.bufferPool.Get()
+	stableMarshaler := op.server.codec.(StableCodec) //nolint:forcetypeassert,errcheck // c.useGet called above already checked this
 	data, err := stableMarshaler.MarshalAppendStable(buf.Bytes(), msg)
 	if err != nil {
 		op.bufferPool.Put(buf)
