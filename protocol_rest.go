@@ -34,10 +34,10 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 	case connect.StreamTypeUnary:
 		return true
 	case connect.StreamTypeClient:
-		return requestIsSpecialHTTPBody(op)
+		return restHTTPBodyRequest(op)
 	case connect.StreamTypeServer:
 		// TODO: support server streams even when body is not google.api.HttpBody
-		return responseIsSpecialHTTPBody(op)
+		return restHTTPBodyResponse(op)
 	default:
 		return false
 	}
@@ -64,7 +64,7 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	if contentType != "" &&
 		contentType != "application/json" &&
 		contentType != "application/json; charset=utf-8" &&
-		!requestIsSpecialHTTPBody(op) {
+		!restHTTPBodyRequest(op) {
 		// invalid content-type
 		reqMeta.codec = contentType + "?"
 	}
@@ -129,7 +129,7 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 	return len(op.restTarget.vars) != 0 ||
 		len(op.request.URL.Query()) != 0 ||
 		op.restTarget.requestBodyFields != nil ||
-		requestIsSpecialHTTPBody(op)
+		restHTTPBodyRequest(op)
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
@@ -137,7 +137,7 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	for _, field := range op.restTarget.requestBodyFields {
 		msg = msg.Mutable(field).Message()
 	}
-	if isSpecialHTTPBody(msg.Descriptor(), nil) {
+	if restIsHTTPBody(msg.Descriptor(), nil) {
 		fields := msg.Descriptor().Fields()
 		contentType := op.reqContentType
 		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
@@ -170,11 +170,11 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 
 func (r restClientProtocol) responseNeedsPrep(op *operation) bool {
 	return len(op.restTarget.responseBodyFields) != 0 ||
-		responseIsSpecialHTTPBody(op)
+		restHTTPBodyResponse(op)
 }
 
 func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	if responseIsSpecialHTTPBody(op) {
+	if restHTTPBodyResponse(op) {
 		msg := src.ProtoReflect()
 		for _, field := range op.restTarget.responseBodyFields {
 			msg = msg.Get(field).Message()
@@ -287,7 +287,7 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 	for _, field := range op.restTarget.requestBodyFields {
 		msg = msg.Get(field).Message()
 	}
-	if requestIsSpecialHTTPBody(op) {
+	if restHTTPBodyRequest(op) {
 		fields := msg.Descriptor().Fields()
 		contentType := msg.Get(fields.ByName("content_type")).String()
 		bytes := msg.Get(fields.ByName("data")).Bytes()
@@ -299,7 +299,7 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 
 func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
 	return len(op.restTarget.responseBodyFieldPath) != 0 ||
-		responseIsSpecialHTTPBody(op)
+		restHTTPBodyResponse(op)
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
@@ -307,7 +307,7 @@ func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byt
 	for _, field := range op.restTarget.responseBodyFields {
 		msg = msg.Mutable(field).Message()
 	}
-	if responseIsSpecialHTTPBody(op) {
+	if restHTTPBodyResponse(op) {
 		fields := msg.Descriptor().Fields()
 		contentType := op.rspContentType
 		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
@@ -336,15 +336,15 @@ func (r restServerProtocol) String() string {
 	return protocolNameREST
 }
 
-func requestIsSpecialHTTPBody(op *operation) bool {
-	return isSpecialHTTPBody(op.method.Input(), op.restTarget.requestBodyFields)
+func restHTTPBodyRequest(op *operation) bool {
+	return restIsHTTPBody(op.method.Input(), op.restTarget.requestBodyFields)
 }
 
-func responseIsSpecialHTTPBody(op *operation) bool {
-	return isSpecialHTTPBody(op.method.Output(), op.restTarget.responseBodyFields)
+func restHTTPBodyResponse(op *operation) bool {
+	return restIsHTTPBody(op.method.Output(), op.restTarget.responseBodyFields)
 }
 
-func isSpecialHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
+func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
 	if len(bodyPath) > 0 {
 		field := bodyPath[len(bodyPath)-1]
 		msg = field.Message()

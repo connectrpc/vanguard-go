@@ -865,7 +865,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		}
 	}
 	if respMeta.codec != "" && respMeta.codec != rw.op.server.codec.Name() &&
-		!responseIsSpecialHTTPBody(rw.op) {
+		!restHTTPBodyResponse(rw.op) {
 		// unexpected content-type for reply
 		rw.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", rw.op.server.codec.Name(), respMeta.codec))
 		return

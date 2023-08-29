@@ -248,7 +248,7 @@ func (o *testInterceptor) restUnaryHandler(
 
 		got := proto.Clone(inn.msg)
 		if len(body) > 0 { //nolint:nestif
-			if isSpecialHTTPBody(got.ProtoReflect().Descriptor(), nil) {
+			if restIsHTTPBody(got.ProtoReflect().Descriptor(), nil) {
 				got, _ := got.(*httpbody.HttpBody)
 				got.ContentType = contentType
 				got.Data = body
@@ -282,7 +282,7 @@ func (o *testInterceptor) restUnaryHandler(
 		// Write body.
 		rsp.Header().Set("Content-Type", contentType)
 		rsp.Header().Set("Content-Encoding", "identity")
-		if isSpecialHTTPBody(out.msg.ProtoReflect().Descriptor(), nil) { //nolint:nestif
+		if restIsHTTPBody(out.msg.ProtoReflect().Descriptor(), nil) { //nolint:nestif
 			msg, _ := out.msg.(*httpbody.HttpBody)
 			rsp.Header().Set("Content-Type", msg.ContentType)
 			_, err = rsp.Write(msg.Data)

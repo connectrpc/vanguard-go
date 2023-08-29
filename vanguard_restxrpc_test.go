@@ -111,7 +111,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		var isCompressed bool
 		var body io.Reader
 		if input.body != nil { //nolint:nestif
-			if isSpecialHTTPBody(input.body.ProtoReflect().Descriptor(), nil) {
+			if restIsHTTPBody(input.body.ProtoReflect().Descriptor(), nil) {
 				msg, _ := input.body.(*httpbody.HttpBody)
 				body = bytes.NewReader(msg.GetData())
 				contentType = msg.GetContentType()
