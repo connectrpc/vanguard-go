@@ -20,6 +20,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 )
@@ -186,8 +187,9 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 					return err
 				}
 				diff := cmp.Diff(got, msg.msg, protocmp.Transform())
+				assert.Empty(stream.T, diff, "message didn't match")
 				if diff != "" {
-					return fmt.Errorf("message didn't match: %s", diff)
+					return fmt.Errorf("message didn't match")
 				}
 			case *testMsgOut:
 				if msg.err != nil {
@@ -245,13 +247,19 @@ func (o *testInterceptor) restUnaryHandler(
 		}
 
 		got := proto.Clone(inn.msg)
-		if len(body) > 0 {
-			codecName := codecNames[contentType]
-			if !assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match") {
-				return fmt.Errorf("codec didn't match")
-			}
-			if err := codec.Unmarshal(body, got); err != nil {
-				return err
+		if len(body) > 0 { //nolint:nestif
+			if isSpecialHTTPBody(got.ProtoReflect().Descriptor(), nil) {
+				got, _ := got.(*httpbody.HttpBody)
+				got.ContentType = contentType
+				got.Data = body
+			} else {
+				codecName := codecNames[contentType]
+				if !assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match") {
+					return fmt.Errorf("codec didn't match")
+				}
+				if err := codec.Unmarshal(body, got); err != nil {
+					return err
+				}
 			}
 		}
 		diff := cmp.Diff(got, inn.msg, protocmp.Transform())
@@ -274,21 +282,28 @@ func (o *testInterceptor) restUnaryHandler(
 		// Write body.
 		rsp.Header().Set("Content-Type", contentType)
 		rsp.Header().Set("Content-Encoding", "identity")
-		body, err = codec.MarshalAppend(nil, out.msg)
-		if err != nil {
-			return err
-		}
-		if comp != nil && acceptEncoding != "" {
-			assert.Equal(stream.T, comp.Name(), acceptEncoding, "expected encoding")
-			rsp.Header().Set("Content-Encoding", comp.Name())
-			var dst bytes.Buffer
-			if err := comp.compress(&dst, bytes.NewBuffer(body)); err != nil {
+		if isSpecialHTTPBody(out.msg.ProtoReflect().Descriptor(), nil) { //nolint:nestif
+			msg, _ := out.msg.(*httpbody.HttpBody)
+			rsp.Header().Set("Content-Type", msg.ContentType)
+			_, err = rsp.Write(msg.Data)
+			assert.NoError(stream.T, err, "failed to write response")
+		} else {
+			body, err = codec.MarshalAppend(nil, out.msg)
+			if err != nil {
 				return err
 			}
-			body = dst.Bytes()
+			if comp != nil && acceptEncoding != "" {
+				assert.Equal(stream.T, comp.Name(), acceptEncoding, "expected encoding")
+				rsp.Header().Set("Content-Encoding", comp.Name())
+				var dst bytes.Buffer
+				if err := comp.compress(&dst, bytes.NewBuffer(body)); err != nil {
+					return err
+				}
+				body = dst.Bytes()
+			}
+			_, err = rsp.Write(body)
+			assert.NoError(stream.T, err, "failed to write response")
 		}
-		_, err = rsp.Write(body)
-		assert.NoError(stream.T, err, "failed to write response")
 
 		// Write trailers.
 		for key, values := range stream.rspTrailer {

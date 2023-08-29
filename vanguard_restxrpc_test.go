@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestMux_RESTxRPC(t *testing.T) {
@@ -106,21 +107,29 @@ func TestMux_RESTxRPC(t *testing.T) {
 	buildRequest := func(t *testing.T, input input, codec Codec, comp *compressionPool) *http.Request {
 		t.Helper()
 
+		var contentType string
 		var isCompressed bool
 		var body io.Reader
-		if input.body != nil {
-			b, err := codec.MarshalAppend(nil, input.body)
-			if err != nil {
-				t.Fatal(err)
+		if input.body != nil { //nolint:nestif
+			if isSpecialHTTPBody(input.body.ProtoReflect().Descriptor(), nil) {
+				msg, _ := input.body.(*httpbody.HttpBody)
+				body = bytes.NewReader(msg.GetData())
+				contentType = msg.GetContentType()
+			} else {
+				b, err := codec.MarshalAppend(nil, input.body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				buf := bytes.NewBuffer(b)
+				if comp != nil {
+					out := &bytes.Buffer{}
+					require.NoError(t, comp.compress(out, buf))
+					buf = out
+					isCompressed = true
+				}
+				body = buf
+				contentType = "application/" + codec.Name() // JSON
 			}
-			buf := bytes.NewBuffer(b)
-			if comp != nil {
-				out := &bytes.Buffer{}
-				require.NoError(t, comp.compress(out, buf))
-				buf = out
-				isCompressed = true
-			}
-			body = buf
 		}
 		req := httptest.NewRequest(input.method, input.path, body)
 		for key, values := range input.meta {
@@ -128,6 +137,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 		}
 		if isCompressed {
 			req.Header["Content-Encoding"] = []string{comp.Name()}
+		}
+		if contentType != "" {
+			req.Header["Content-Type"] = []string{contentType}
 		}
 		query := req.URL.Query()
 		for key, values := range input.values {
@@ -291,8 +303,76 @@ func TestMux_RESTxRPC(t *testing.T) {
 				"Content-Type": []string{"text/html"},
 			},
 		},
+	}, {
+		name: "Upload",
+		input: input{
+			method: http.MethodPost,
+			path:   "/raw/message.txt",
+			body: &httpbody.HttpBody{
+				ContentType: "text/plain",
+				Data:        []byte("hello"),
+			},
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: testv1connect.ContentServiceUploadProcedure,
+					msg: &testv1.UploadRequest{
+						Filename: "message.txt",
+						File: &httpbody.HttpBody{
+							ContentType: "text/plain",
+							Data:        []byte("hello"),
+						},
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &emptypb.Empty{},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &emptypb.Empty{},
+		},
+	}, {
+		name: "Download",
+		input: input{
+			method: http.MethodGet,
+			path:   "/raw/message.txt",
+		},
+		stream: testStream{
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					method: testv1connect.ContentServiceDownloadProcedure,
+					msg: &testv1.DownloadRequest{
+						Filename: "message.txt",
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.DownloadResponse{
+						File: &httpbody.HttpBody{
+							ContentType: "text/plain",
+							Data:        []byte("hello"),
+						},
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.DownloadResponse{
+						File: &httpbody.HttpBody{
+							Data: []byte(" world"),
+						},
+					},
+				}},
+			},
+		},
+		output: output{
+			code:    http.StatusOK,
+			rawBody: `hello world`,
+			meta: http.Header{
+				"Content-Type": []string{"text/plain"},
+			},
+		},
 	}}
-	// TODO: test download and upload streaming of google.api.httpbody.
 
 	type testOpt struct {
 		name string

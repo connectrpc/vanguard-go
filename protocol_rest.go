@@ -125,10 +125,11 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 	return nil
 }
 
-func (r restClientProtocol) requestNeedsPrep(o *operation) bool {
-	return len(o.restTarget.vars) != 0 ||
-		len(o.request.URL.Query()) != 0 ||
-		o.restTarget.requestBodyFields != nil
+func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
+	return len(op.restTarget.vars) != 0 ||
+		len(op.request.URL.Query()) != 0 ||
+		op.restTarget.requestBodyFields != nil ||
+		requestIsSpecialHTTPBody(op)
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
@@ -136,7 +137,15 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	for _, field := range op.restTarget.requestBodyFields {
 		msg = msg.Mutable(field).Message()
 	}
-	if len(src) > 0 {
+	if isSpecialHTTPBody(msg.Descriptor(), nil) {
+		fields := msg.Descriptor().Fields()
+		dataField := fields.ByName("data")
+		contentField := fields.ByName("content_type")
+		// TODO: get content-type from headers?
+		contentType := "text/plain"
+		msg.Set(contentField, protoreflect.ValueOfString(contentType))
+		msg.Set(dataField, protoreflect.ValueOfBytes(src))
+	} else if len(src) > 0 {
 		if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
 			return err
 		}
@@ -172,6 +181,9 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 		msg := src.ProtoReflect()
 		for _, field := range op.restTarget.responseBodyFields {
 			msg = msg.Get(field).Message()
+		}
+		if !msg.IsValid() {
+			return base, nil
 		}
 		desc := msg.Descriptor()
 		dataField := desc.Fields().ByName("data")
@@ -282,10 +294,25 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 }
 
 func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
-	return len(op.restTarget.responseBodyFieldPath) != 0
+	return len(op.restTarget.responseBodyFieldPath) != 0 ||
+		responseIsSpecialHTTPBody(op)
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
+	if responseIsSpecialHTTPBody(op) {
+		msg := target.ProtoReflect()
+		for _, field := range op.restTarget.responseBodyFields {
+			msg = msg.Mutable(field).Message()
+		}
+		fields := msg.Descriptor().Fields()
+		dataField := fields.ByName("data")
+		contentField := fields.ByName("content_type")
+		// TODO: get content-type from headers?
+		contentType := op.writer.Header().Get("Content-Type")
+		msg.Set(contentField, protoreflect.ValueOfString(contentType))
+		msg.Set(dataField, protoreflect.ValueOfBytes(src))
+		return nil
+	}
 	msg := target.ProtoReflect()
 	for _, field := range op.restTarget.responseBodyFields {
 		msg = msg.Mutable(field).Message()
