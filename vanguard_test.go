@@ -33,6 +33,10 @@ type testStream struct {
 	rspHeader  http.Header // out
 	rspTrailer http.Header // out
 	msgs       []testMsg   // in, out
+
+	// If set, the error that a client expects, overriding any other error
+	// (or lack thereof) in msgs.
+	err *connect.Error
 }
 
 type testMsg struct {
@@ -102,7 +106,7 @@ func (str *ttStream) finish(result error) {
 	close(str.done)
 }
 
-func (str *ttStream) await(t *testing.T, expectServerDone bool) error {
+func (str *ttStream) await(t *testing.T, expectServerDone bool) (svrInvoked bool, svrErr error) {
 	t.Helper()
 	// Called from test code to make sure server handler has completed.
 	// Returns any error that the interceptor finished with.
@@ -110,21 +114,21 @@ func (str *ttStream) await(t *testing.T, expectServerDone bool) error {
 	// the test client.
 	if !str.started.Load() {
 		// Interceptor never started, so nothing to wait for.
-		return nil
+		return false, nil
 	}
 	if expectServerDone {
 		select {
 		case <-str.done:
-			return str.result
+			return true, str.result
 		default:
 			t.Fatal("expecting server to already be done but it's not")
 		}
 	}
 	select {
 	case <-str.done:
-		return str.result
+		return true, str.result
 	case <-time.After(3 * time.Second):
-		return fmt.Errorf("timeout: interceptor still did not finish after 3 seconds")
+		return true, fmt.Errorf("timeout: interceptor still did not finish after 3 seconds")
 	}
 }
 
@@ -141,7 +145,7 @@ func (ti *testInterceptor) get(testName string) (*ttStream, bool) {
 	return stream, ok
 }
 
-func (ti *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) error {
+func (ti *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) (bool, error) {
 	t.Helper()
 	str := &ttStream{
 		T:          t,
@@ -752,6 +756,9 @@ func runRPCTestCase[Client any](
 		}
 	}
 	headers, responses, trailers, err := invoke(client, reqHeaders, reqMsgs)
+	if err != nil {
+		t.Logf("RPC error: %v", err)
+	}
 	var expectedErr *connect.Error
 	expectServerDone := true
 	var expectServerCancel bool
@@ -768,29 +775,58 @@ func runRPCTestCase[Client any](
 			break
 		}
 	}
-	svrErr := awaitServer(t, expectServerDone)
+	svrInvoked, svrErr := awaitServer(t, expectServerDone)
+	// Verify the error received by the client.
+	receivedErr := expectedErr
+	if stream.err != nil {
+		receivedErr = stream.err
+	}
+	if receivedErr == nil {
+		assert.NoError(t, err)
+	} else {
+		assert.Equal(t, receivedErr.Code(), connect.CodeOf(err))
+	}
+	// Also check the error observed by the server.
 	switch {
 	case expectedErr == nil:
-		assert.NoError(t, err)
 		assert.NoError(t, svrErr)
 	case expectServerCancel:
-		if !errors.Is(svrErr, context.Canceled) {
-			assert.Equal(t, connect.CodeCanceled, connect.CodeOf(svrErr))
+		if svrInvoked && svrErr != nil {
+			// We expect the server to either have seen the same error or it later
+			// observed a cancel error (since the middleware cancels the request
+			// after it aborts the operation).
+			if connect.CodeOf(svrErr) != connect.CodeOf(expectedErr) && !errors.Is(svrErr, context.Canceled) {
+				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(svrErr))
+			}
 		}
 	default:
+		assert.Error(t, svrErr)
 		assert.Equal(t, expectedErr.Code(), connect.CodeOf(svrErr))
 	}
 	assert.Subset(t, headers, stream.rspHeader)
-	assert.Subset(t, trailers, stream.rspTrailer)
+	if stream.err == nil {
+		// if middleware created the error, trailers may not come across
+		assert.Subset(t, trailers, stream.rspTrailer)
+	}
 	var expectedResponses []proto.Message
 	for _, streamMsg := range stream.msgs {
-		if streamMsg.out != nil && streamMsg.out.msg != nil {
+		if streamMsg.out != nil && streamMsg.out.msg != nil && streamMsg.out.err == nil {
 			expectedResponses = append(expectedResponses, streamMsg.out.msg)
 		}
+	}
+	// If we expect an error from the middleware, the last response
+	// may not have been delivered.
+	if stream.err != nil && len(responses) < len(expectedResponses) {
+		expectedResponses = expectedResponses[:len(expectedResponses)-1]
 	}
 	require.Len(t, responses, len(expectedResponses))
 	for i, msg := range responses {
 		want := expectedResponses[i]
 		assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
 	}
+}
+
+func disableCompression(svr *httptest.Server) {
+	transport := svr.Client().Transport.(*http.Transport) //nolint:errcheck,forcetypeassert
+	transport.DisableCompression = true
 }

@@ -80,8 +80,8 @@ func TestMux_RPCxREST(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		server := httptest.NewUnstartedServer(mux.AsHandler())
-		server.Start()
+		server := httptest.NewServer(mux.AsHandler())
+		disableCompression(server)
 		t.Cleanup(server.Close)
 		return testServer{name: name, svr: server}
 	}

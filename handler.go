@@ -721,18 +721,19 @@ func (er *envelopingReader) prepareNext() error {
 			env.length = uint32(er.rw.op.contentLen)
 		} else {
 			// Oof. We have to buffer entire request in order to measure it.
-			buf := er.rw.op.bufferPool.Get()
-			er.mustReleaseCurrent = true
 			limit := int64(er.rw.op.methodConf.maxMsgBufferSz)
 			if limit <= 0 {
 				limit = math.MaxUint32
 			}
+			buf := er.rw.op.bufferPool.Get()
 			_, err := io.Copy(buf, &hardLimitReader{r: er.r, rw: er.rw, limit: limit})
 			if err != nil {
+				er.rw.op.bufferPool.Put(buf)
 				er.err = err
 				return err
 			}
 			er.current = buf
+			er.mustReleaseCurrent = true
 			env.length = uint32(buf.Len())
 		}
 	default: // clientEnveloper != nil
@@ -1154,7 +1155,11 @@ func (ew *envelopingWriter) Write(data []byte) (int, error) {
 		return 0, ew.err
 	}
 	if ew.remainingBytes == -1 {
-		return ew.current.Write(data)
+		n, err := ew.current.Write(data)
+		if err != nil {
+			ew.err = err
+		}
+		return n, err
 	}
 
 	var written int
@@ -1263,7 +1268,7 @@ func (ew *envelopingWriter) Close() error {
 		}
 		defer ew.rw.op.bufferPool.Put(buf)
 	}
-	if ew.remainingBytes == -1 && ew.mustReleaseCurrent {
+	if ew.remainingBytes == -1 && ew.mustReleaseCurrent && ew.err == nil {
 		// We were buffering in order to measure size and create envelope,
 		// so do that now.
 		env := envelope{compressed: ew.rw.op.respCompression != nil, length: uint32(buf.Len())}
@@ -1598,11 +1603,13 @@ type limitWriter struct {
 	rw    *responseWriter
 }
 
-func (l *limitWriter) Write(p []byte) (n int, err error) {
-	if uint32(l.buf.Len()+len(p)) > l.limit {
-		return 0, bufferLimitError(int64(l.limit))
+func (l *limitWriter) Write(data []byte) (n int, err error) {
+	if uint32(l.buf.Len()+len(data)) > l.limit {
+		err := bufferLimitError(int64(l.limit))
+		l.rw.reportError(err)
+		return 0, err
 	}
-	return l.buf.Write(p)
+	return l.buf.Write(data)
 }
 
 type hardLimitReader struct {
