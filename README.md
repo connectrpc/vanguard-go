@@ -12,25 +12,38 @@ and it can also translate to/from REST if your Protobuf services are annotated w
 [HTTP transcoding options](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L44).
 
 There are a handful of key use cases for such middleware:
-1. If your organization is in the process of migrating from gRPC to Connect, you can use
+1. Using the above mentioned HTTP transcoding annotations allows you to support REST
+   clients. This can be particularly useful when migrating from a REST API to a schema-driven
+   RPC API. With the right annotations, existing REST clients can continue to access
+   your API, even after the server implementations have been migrated to Protobuf and RPC.
+
+   So this middleware can effectively replace the use of [gRPC-Gateway](https://github.com/grpc-ecosystem/grpc-gateway#readme)
+   when it's used in-process in a Go server. In particular, this middleware is compatible
+   with Connect RPC handlers, whereas gRPC-Gateway requires the use of gRPC handlers and
+   the gRPC protobuf plugin. Also, this middleware does not require any additional code
+   generation.
+
+   Since it does not rely on code generation, Vanguard can be used in dynamic situations,
+   where service definitions are loaded from configuration, a schema registry, or via
+   [gRPC Server Reflection](https://github.com/grpc/grpc/blob/master/doc/server-reflection.md).
+   This allows it to be used in proxies without needing to recompile and redeploy the proxy
+   whenever an RPC service schema is changed.
+
+2. The HTTP transcoding annotations also allow you to support legacy REST API servers
+   from clients that are use Protobuf RPC. This allows you to adopt RPC in some teams,
+   like for web or mobile clients, without having to first migrate all of the backend
+   API services.
+
+3. If your organization is in the process of migrating from gRPC to Connect, you can use
    this middleware to bridge the protocols. This allows you to use your existing gRPC
-   service handlers with Connect clients. (The reverse works without any middleware: Connect
-   servers can natively handle gRPC clients.)
+   service handlers with Connect clients. (The reverse works without any middleware:
+   Connect servers can natively handle gRPC clients.)
 
    This is particularly valuable since a big draw of the Connect protocol over gRPC is its
    usability and inspectability with web browser and mobile device clients. So this
    middleware allows you to migrate clients to Connect without having to first migrate
    your server handler logic.
 
-2. Using the above mentioned HTTP transcoding annotations allows you to support REST
-   clients. This can be particularly useful when migrating from a REST API to a schema-driven
-   RPC API. With the right annotations, existing REST clients can continue to access
-   your API, even after the server implementations have been migrated to Protobuf and RPC.
-
-3. The HTTP transcoding annotations also allow you to support legacy REST API servers
-   from clients that are use Protobuf RPC. This allows you to adopt RPC in some teams,
-   like for web or mobile clients, without having to first migrate all of the backend
-   API services.
 
 ## Usage
 
@@ -50,7 +63,10 @@ kinds of HTTP handlers you'll typically be wrapping are:
 
 The middleware takes the form of a `Mux`. All handlers to be decorated with the
 middleware are registered with the `Mux`. When the `Mux` is instantiated, you can
-provide configuration:
+provide configuration by setting exported fields on the `Mux`. These fields control
+how requests are received by the wrapped handler. The `Mux` itself can receive
+requests in a wide variety of flavors (Connect, gRPC, gRPC-Web, REST), and it then
+transforms the requests to be compatible with the handler.
 ```go
 vanguardMux := &vanguard.Mux{
 	// The wrapped handler expects the gRPC protocol.
@@ -87,7 +103,7 @@ this can be easily accomplished by referencing the generated service name consta
 
 ```go
 // Here's an example using a Connect handler.
-svcPath, svcHandler := myservicev1connect.NewMyServiceHandler(&myServiceImpl{})
+_, svcHandler := myservicev1connect.NewMyServiceHandler(&myServiceImpl{})
 err := vanguardMux.RegisterServiceByName(
 	svcHandler,
 	myservicev1.MyServiceName,
@@ -121,6 +137,7 @@ with the vanguard Mux, specifying a different service name each time.
 When specifying a service name, the actual schema for the service is loaded from
 the Protobuf runtime library. The runtime library contains the schemas for all
 Protobuf services for which generated code has been linked into your program.
+
 For more dynamic use cases, you can instead use the `RegisterService` method and
 supply a `protoreflect.ServiceDescriptor`, which is a full description of the
 service's schema. (Such a descriptor could be loaded from a configuration file
@@ -138,25 +155,23 @@ err := http.Serve(listener, vanguardMux.AsHandler())
 // Or it can be used alongside other handlers, all registered with
 // the same http.ServeMux.
 mux := http.NewServeMux()
-mux.Handle(svcPath, vanguardMux.AsHandler())
+mux.Handle("/", vanguardMux.AsHandler())
 err := http.Serve(listener, mux)
 ```
-The above example references the `svcPath` (defined in the Connect example
-above).
+The above example registers the handler for the root path. This is useful
+to support REST requests for the service, which could have very different
+path URLs from those used for Connect and gRPC. Using a pattern this broad
+means the vanguard Mux can handle all paths that might correspond to a method,
+without having to explicitly configure it for the various paths named in HTTP
+transcoding annotations.
 
-By using this path, the handler will only be used for requests with a URL
-path that matches a given method's name. To support REST requests for this
-service, which could have very different URL paths, we would instead use
-`"/"` as the handler path. That way, the vanguard Mux will be able to handle
-all paths that might correspond to a method, without having to explicitly
-configure it for the various paths named in HTTP transcoding annotations.
-
-For this reason, it is best to use a single vanguard Mux, even if your
+For the same reason, it is best to use a single vanguard Mux, even if your
 service supports many exposed RPC services, so that the Mux can handle
 dispatch to the correct service based on the request. You can register many
 services with the same vanguard Mux. And if any need different configuration,
-that can be handled by overriding the configuration when the service is
+that can be handled by providing override options when the service is
 registered.
+
 
 ## Status: Alpha
 
