@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -259,22 +258,15 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	return path, query, nil
 }
 
-func httpExtractTrailers(headers http.Header) http.Header {
-	expectedTrailerSet := make(map[string]struct{})
-	for _, vals := range headers.Values("Trailer") {
-		for _, val := range strings.Split(vals, ",") {
-			val = textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(val))
-			expectedTrailerSet[val] = struct{}{}
-		}
-	}
-	trailers := make(http.Header, len(expectedTrailerSet))
+func httpExtractTrailers(headers http.Header, knownTrailerKeys map[string]struct{}) http.Header {
+	trailers := make(http.Header, len(knownTrailerKeys))
 	for key, vals := range headers {
 		if strings.HasPrefix(key, http.TrailerPrefix) {
 			trailers[strings.TrimPrefix(key, http.TrailerPrefix)] = vals
 			delete(headers, key)
 			continue
 		}
-		if _, expected := expectedTrailerSet[key]; expected {
+		if _, expected := knownTrailerKeys[strings.ToLower(key)]; expected {
 			trailers[key] = vals
 			delete(headers, key)
 			continue

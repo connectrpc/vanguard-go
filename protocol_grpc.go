@@ -22,6 +22,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -77,26 +78,27 @@ func (g grpcClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType
 }
 
 func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
-	// TODO: if headers has "Te: trailers", should we remove it?
+	headers.Del("Te") // no need to propagate "te: trailers" to requests in different protocols
 	return grpcExtractRequestMeta("application/grpc", "application/grpc+", headers)
 }
 
 func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	statusCode := grpcAddResponseMeta("application/grpc+", meta, headers)
-	trailingKeys := parseMultiHeader(headers.Values("Trailer"))
-	var hasStatus, hasMessage bool
-	for _, k := range trailingKeys {
-		if strings.ToLower(k) == "grpc-status" {
-			hasStatus = true
+	if len(meta.pendingTrailers) > 0 {
+		if meta.pendingTrailerKeys == nil {
+			meta.pendingTrailerKeys = make(map[string]struct{}, len(meta.pendingTrailers))
 		}
-		if strings.ToLower(k) == "grpc-message" {
-			hasMessage = true
+		for k := range meta.pendingTrailers {
+			meta.pendingTrailerKeys[strings.ToLower(k)] = struct{}{}
 		}
 	}
-	if !hasStatus {
+	for k := range meta.pendingTrailerKeys {
+		headers.Add("Trailer", textproto.CanonicalMIMEHeaderKey(k))
+	}
+	if _, hasStatus := meta.pendingTrailerKeys["grpc-status"]; !hasStatus {
 		headers.Add("Trailer", "Grpc-Status")
 	}
-	if !hasMessage {
+	if _, hasMessage := meta.pendingTrailerKeys["grpc-message"]; !hasMessage {
 		headers.Add("Trailer", "Grpc-Message")
 	}
 	return statusCode

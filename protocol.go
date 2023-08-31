@@ -345,11 +345,12 @@ type requestMeta struct {
 // responseMeta represents the metadata found in response headers that are
 // protocol-specific.
 type responseMeta struct {
-	end               *responseEnd
-	codec             string
-	compression       string
-	acceptCompression []string
-	pendingTrailers   http.Header
+	end                *responseEnd
+	codec              string
+	compression        string
+	acceptCompression  []string
+	pendingTrailers    http.Header
+	pendingTrailerKeys map[string]struct{}
 }
 
 // responseEnd is a protocol-agnostic representation of the disposition
