@@ -16,6 +16,8 @@
 package vanguard
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -144,8 +146,20 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
 	msg := target.ProtoReflect()
-	for _, field := range op.restTarget.requestBodyFields {
-		msg = msg.Mutable(field).Message()
+	var leafField protoreflect.FieldDescriptor
+	for i, field := range op.restTarget.responseBodyFields {
+		if field.Cardinality() != protoreflect.Repeated {
+			msg = msg.Mutable(field).Message()
+			continue
+		}
+		if i != len(op.restTarget.responseBodyFields)-1 {
+			actual := "list"
+			if field.IsMap() {
+				actual = "map"
+			}
+			return fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
+		}
+		leafField = field
 	}
 	if restIsHTTPBody(msg.Descriptor(), nil) {
 		fields := msg.Descriptor().Fields()
@@ -153,6 +167,12 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
 		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
 	} else if len(src) > 0 {
+		if leafField != nil {
+			buf := op.bufferPool.Get()
+			defer op.bufferPool.Put(buf)
+			_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
+			src = buf.Bytes()
+		}
 		if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
 			return err
 		}
@@ -204,10 +224,34 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 	}
 
 	msg := src.ProtoReflect()
-	for _, field := range op.restTarget.responseBodyFields {
-		msg = msg.Get(field).Message()
+	var leafField protoreflect.FieldDescriptor
+	for i, field := range op.restTarget.requestBodyFields {
+		if field.Cardinality() != protoreflect.Repeated {
+			msg = msg.Get(field).Message()
+			continue
+		}
+		if i != len(op.restTarget.responseBodyFields)-1 {
+			actual := "list"
+			if field.IsMap() {
+				actual = "map"
+			}
+			return nil, fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
+		}
+		leafField = field
 	}
-	return op.client.codec.MarshalAppend(base, msg.Interface())
+	result, err := op.client.codec.MarshalAppend(base, msg.Interface())
+	if err != nil {
+		return nil, err
+	}
+	if leafField == nil {
+		return result, nil
+	}
+	// We have to dig a repeated field out of the message we just marshaled.
+	var val map[string]json.RawMessage
+	if err := json.Unmarshal(result, &val); err != nil {
+		return nil, err
+	}
+	return val[leafField.JSONName()], nil
 }
 
 func (r restClientProtocol) String() string {
@@ -294,8 +338,20 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 		return base, nil
 	}
 	msg := src.ProtoReflect()
-	for _, field := range op.restTarget.requestBodyFields {
-		msg = msg.Get(field).Message()
+	var leafField protoreflect.FieldDescriptor
+	for i, field := range op.restTarget.requestBodyFields {
+		if field.Cardinality() != protoreflect.Repeated {
+			msg = msg.Get(field).Message()
+			continue
+		}
+		if i != len(op.restTarget.responseBodyFields)-1 {
+			actual := "list"
+			if field.IsMap() {
+				actual = "map"
+			}
+			return nil, fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
+		}
+		leafField = field
 	}
 	if restHTTPBodyRequest(op) {
 		fields := msg.Descriptor().Fields()
@@ -304,7 +360,19 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 		headers.Set("Content-Type", contentType)
 		return bytes, nil
 	}
-	return op.server.codec.MarshalAppend(base, msg.Interface())
+	result, err := op.server.codec.MarshalAppend(base, msg.Interface())
+	if err != nil {
+		return nil, err
+	}
+	if leafField == nil {
+		return result, nil
+	}
+	// We have to dig a repeated field out of the message we just marshaled.
+	var val map[string]json.RawMessage
+	if err := json.Unmarshal(result, &val); err != nil {
+		return nil, err
+	}
+	return val[leafField.JSONName()], nil
 }
 
 func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
@@ -314,8 +382,26 @@ func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
 	msg := target.ProtoReflect()
-	for _, field := range op.restTarget.responseBodyFields {
-		msg = msg.Mutable(field).Message()
+	var leafField protoreflect.FieldDescriptor
+	for i, field := range op.restTarget.responseBodyFields {
+		if field.Cardinality() != protoreflect.Repeated {
+			msg = msg.Mutable(field).Message()
+			continue
+		}
+		if i != len(op.restTarget.responseBodyFields)-1 {
+			actual := "list"
+			if field.IsMap() {
+				actual = "map"
+			}
+			return fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
+		}
+		leafField = field
+	}
+	if leafField != nil {
+		buf := op.bufferPool.Get()
+		defer op.bufferPool.Put(buf)
+		_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
+		src = buf.Bytes()
 	}
 	if restHTTPBodyResponse(op) {
 		fields := msg.Descriptor().Fields()
@@ -358,6 +444,9 @@ func restHTTPBodyResponse(op *operation) bool {
 func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
 	if len(bodyPath) > 0 {
 		field := bodyPath[len(bodyPath)-1]
+		if field.IsList() || field.IsMap() {
+			return false
+		}
 		msg = field.Message()
 	}
 	return msg != nil && msg.FullName() == "google.api.HttpBody"
