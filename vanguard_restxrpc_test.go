@@ -288,7 +288,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		name: "Index",
 		input: input{
 			method: http.MethodGet,
-			path:   "/index/page.html",
+			path:   "/page.html",
 		},
 		stream: testStream{
 			method: testv1connect.ContentServiceIndexProcedure,
@@ -317,7 +317,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		name: "Upload",
 		input: input{
 			method: http.MethodPost,
-			path:   "/raw/message.txt",
+			path:   "/message.txt:upload",
 			body: &httpbody.HttpBody{
 				ContentType: "text/plain",
 				Data:        []byte("hello"),
@@ -348,7 +348,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		name: "Download",
 		input: input{
 			method: http.MethodGet,
-			path:   "/raw/message.txt",
+			path:   "/message.txt:download",
 		},
 		stream: testStream{
 			method: testv1connect.ContentServiceDownloadProcedure,

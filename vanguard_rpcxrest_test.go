@@ -246,7 +246,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromUnary(ctx, clients.contentClient.Index, hdr, msgs)
 		},
 		stream: testStream{
-			method: "/index/page.html",
+			method: "/page.html",
 			msgs: []testMsg{
 				{in: &testMsgIn{
 					msg: nil, // GET request.
@@ -285,7 +285,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromClientStream(ctx, clients.contentClient.Upload, hdr, msgs)
 		},
 		stream: testStream{
-			method: "/raw/message.txt",
+			method: "/message.txt:upload",
 			msgs: []testMsg{
 				{in: &testMsgIn{
 					msg: &httpbody.HttpBody{
@@ -308,7 +308,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromServerStream(ctx, clients.contentClient.Download, hdr, msgs)
 		},
 		stream: testStream{
-			method: "/raw/message.txt",
+			method: "/message.txt:download",
 			msgs: []testMsg{
 				{in: &testMsgIn{}},
 				{out: &testMsgOut{
