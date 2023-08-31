@@ -390,13 +390,13 @@ func parseMultiHeader(vals []string) []string {
 			pos := strings.IndexByte(val, ',')
 			if pos == -1 {
 				if val != "" {
-					result = append(result, val)
+					result = append(result, strings.TrimSpace(val))
 				}
 				break
 			}
 			item := val[:pos]
 			if item != "" {
-				result = append(result, item)
+				result = append(result, strings.TrimSpace(item))
 			}
 			val = val[pos+1:]
 		}
