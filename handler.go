@@ -328,32 +328,6 @@ func newCodecMap(methodConfigs map[string]*methodConfig, codecs map[string]func(
 	return result
 }
 
-type httpError struct {
-	code    int
-	headers func(header http.Header)
-	err     error
-}
-
-func (e *httpError) Error() string {
-	return e.err.Error()
-}
-
-func (e *httpError) Unwrap() error {
-	return e.err
-}
-
-func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
-	var httpErr *httpError
-	if errors.As(err, &httpErr) {
-		return httpErr.code, httpErr.headers
-	}
-	var connErr *connect.Error
-	if errors.As(err, &connErr) {
-		return httpStatusCodeFromRPC(connErr.Code()), nil
-	}
-	return http.StatusInternalServerError, nil
-}
-
 // operation represents a single HTTP operation, which maps to an incoming HTTP request.
 // It tracks properties needed to implement protocol transformation.
 type operation struct {
