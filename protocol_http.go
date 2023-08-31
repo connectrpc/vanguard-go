@@ -52,7 +52,7 @@ func httpWriteError(rsp http.ResponseWriter, err error) {
 	codec := protojson.MarshalOptions{
 		EmitUnpopulated: true,
 	}
-	cerr := asError(err)
+	cerr := asConnectError(err)
 	statusCode := httpStatusCodeFromRPC(cerr.Code())
 	stat := grpcStatusFromError(cerr)
 

@@ -390,7 +390,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 
 	vals.Set("message", msgStr)
 	queryString := vals.Encode()
-	if uint32(len(op.methodConf.methodPath)+len(queryString)+1) > op.methodConf.maxGetURLSz {
+	if uint32(len(op.methodConf.methodPath)+len(queryString)+1) > op.methodConf.maxGetURLBytes {
 		// URL is too big; fall back to POST
 		return op.methodConf.methodPath, "", http.MethodPost, true, nil
 	}

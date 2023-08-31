@@ -11,7 +11,7 @@ import (
 	"connectrpc.com/connect"
 )
 
-func asError(err error) *connect.Error {
+func asConnectError(err error) *connect.Error {
 	var ce *connect.Error
 	if errors.As(err, &ce) {
 		return ce

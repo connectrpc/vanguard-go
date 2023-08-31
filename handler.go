@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -66,7 +65,6 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	op.methodConf = methodConf
-	op.delegate = methodConf.handler
 	if !op.client.protocol.acceptsStreamType(&op, methodConf.streamType) {
 		http.Error(
 			writer,
@@ -356,14 +354,6 @@ func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
 	return http.StatusInternalServerError, nil
 }
 
-func connectError(err error) *connect.Error {
-	var connErr *connect.Error
-	if errors.As(err, &connErr) {
-		return connErr
-	}
-	return connect.NewError(connect.CodeInternal, err)
-}
-
 // operation represents a single HTTP operation, which maps to an incoming HTTP request.
 // It tracks properties needed to implement protocol transformation.
 type operation struct {
@@ -377,7 +367,6 @@ type operation struct {
 	reqMeta        requestMeta
 	cancel         context.CancelFunc
 	bufferPool     *bufferPool
-	delegate       http.Handler
 	canDecompress  []string
 
 	methodConf *methodConfig
@@ -525,7 +514,7 @@ func (op *operation) handle() {
 		}
 	}
 
-	op.delegate.ServeHTTP(op.writer, op.request)
+	op.methodConf.handler.ServeHTTP(op.writer, op.request)
 }
 
 // reportError handles an error that occurs while setting up the operation. It should not be used
@@ -542,7 +531,7 @@ func (op *operation) reportError(err error) {
 	if headerFunc != nil {
 		headerFunc(op.writer.Header())
 	}
-	connErr := connectError(err)
+	connErr := asConnectError(err)
 	end := &responseEnd{err: connErr, httpCode: code}
 	code = op.client.protocol.addProtocolResponseHeaders(responseMeta{end: end}, op.writer.Header())
 	op.writer.WriteHeader(code)
@@ -608,17 +597,14 @@ func (op *operation) processRequestEnvelope(envBuf envelopeBytes) (msgLen int, c
 	if env.trailer {
 		return 0, false, malformedRequestError(fmt.Errorf("client stream cannot include status/trailer message"))
 	}
-	if limit := op.methodConf.maxMsgBufferSz; limit > 0 && env.length > limit {
+	if limit := op.methodConf.maxMsgBufferBytes; env.length > limit {
 		return 0, false, bufferLimitError(int64(limit))
 	}
 	return int(env.length), env.compressed, nil
 }
 
 func (op *operation) determineReadLimit() (limit int64, grow bool, makeError func(int64) error, err error) {
-	limit = int64(op.methodConf.maxMsgBufferSz)
-	if limit <= 0 {
-		limit = math.MaxUint32
-	}
+	limit = int64(op.methodConf.maxMsgBufferBytes)
 	if op.contentLen == -1 {
 		return limit, false, bufferLimitError, nil
 	}
@@ -721,10 +707,7 @@ func (er *envelopingReader) prepareNext() error {
 			env.length = uint32(er.rw.op.contentLen)
 		} else {
 			// Oof. We have to buffer entire request in order to measure it.
-			limit := int64(er.rw.op.methodConf.maxMsgBufferSz)
-			if limit <= 0 {
-				limit = math.MaxUint32
-			}
+			limit := int64(er.rw.op.methodConf.maxMsgBufferBytes)
 			buf := er.rw.op.bufferPool.Get()
 			_, err := io.Copy(buf, &hardLimitReader{r: er.r, rw: er.rw, limit: limit})
 			if err != nil {
@@ -984,11 +967,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		// We must await the end before we can write headers, which means we have to
 		// buffer the entire response.
 		rw.buf = rw.op.bufferPool.Get()
-		if limit := rw.op.methodConf.maxMsgBufferSz; limit > 0 {
-			delegate = &limitWriter{buf: rw.buf, limit: limit, rw: rw}
-		} else {
-			delegate = rw.buf
-		}
+		delegate = &limitWriter{buf: rw.buf, limit: rw.op.methodConf.maxMsgBufferBytes, rw: rw}
 	} else {
 		// We can go ahead and flush headers now.
 		rw.flushHeaders()
@@ -1225,7 +1204,7 @@ func (ew *envelopingWriter) handleEnvelopeWritten() error {
 	}
 	if env.trailer {
 		// buffer final message, so we can transform it to a responseEnd
-		if limit := ew.rw.op.methodConf.maxMsgBufferSz; limit > 0 && env.length > limit {
+		if limit := ew.rw.op.methodConf.maxMsgBufferBytes; env.length > limit {
 			err := bufferLimitError(int64(limit))
 			ew.rw.reportError(err)
 			return err
@@ -1324,11 +1303,7 @@ func (ew *envelopingWriter) maybeInit() {
 		// to construct an envelope.
 		ew.remainingBytes = -1
 		buf := ew.rw.op.bufferPool.Get()
-		if limit := ew.rw.op.methodConf.maxMsgBufferSz; limit > 0 {
-			ew.current = &limitWriter{buf: buf, limit: limit, rw: ew.rw}
-		} else {
-			ew.current = buf
-		}
+		ew.current = &limitWriter{buf: buf, limit: ew.rw.op.methodConf.maxMsgBufferBytes, rw: ew.rw}
 		ew.mustReleaseCurrent = true
 		return
 	}
@@ -1399,8 +1374,8 @@ func (tw *transformingWriter) Write(data []byte) (int, error) {
 		tw.reset()
 	}
 	if tw.expectingBytes == -1 {
-		if limit := tw.rw.op.methodConf.maxMsgBufferSz; limit > 0 && uint32(len(data)+tw.buffer.Len()) > limit {
-			err := bufferLimitError(int64(limit))
+		if limit := int64(tw.rw.op.methodConf.maxMsgBufferBytes); int64(len(data))+int64(tw.buffer.Len()) > limit {
+			err := bufferLimitError(limit)
 			tw.rw.reportError(err)
 			return 0, err
 		}
@@ -1435,7 +1410,7 @@ func (tw *transformingWriter) Write(data []byte) (int, error) {
 				tw.rw.reportError(err)
 				return written, err
 			}
-			if limit := tw.rw.op.methodConf.maxMsgBufferSz; limit > 0 && tw.latestEnvelope.length > limit {
+			if limit := tw.rw.op.methodConf.maxMsgBufferBytes; tw.latestEnvelope.length > limit {
 				err = bufferLimitError(int64(limit))
 				tw.rw.reportError(err)
 				return written, err
@@ -1548,8 +1523,8 @@ func (ew *errorWriter) Write(data []byte) (int, error) {
 	if ew.buffer == nil {
 		return 0, errors.New("writer already closed")
 	}
-	if limit := ew.rw.op.methodConf.maxMsgBufferSz; limit > 0 && uint32(len(data)+ew.buffer.Len()) > limit {
-		err := bufferLimitError(int64(limit))
+	if limit := int64(ew.rw.op.methodConf.maxMsgBufferBytes); int64(len(data))+int64(ew.buffer.Len()) > limit {
+		err := bufferLimitError(limit)
 		ew.rw.reportError(err)
 		return 0, err
 	}
