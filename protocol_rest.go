@@ -145,39 +145,34 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	msg := target.ProtoReflect()
-	var leafField protoreflect.FieldDescriptor
-	for i, field := range op.restTarget.requestBodyFields {
-		if field.Cardinality() != protoreflect.Repeated {
-			msg = msg.Mutable(field).Message()
-			continue
+	if op.restTarget.requestBodyFields == nil { //nolint:nestif // TODO: improve control flow
+		if len(src) > 0 {
+			return fmt.Errorf("request should have no body; instead got %d bytes", len(src))
 		}
-		if i != len(op.restTarget.requestBodyFields)-1 {
-			actual := "list"
-			if field.IsMap() {
-				actual = "map"
-			}
-			return fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
-		}
-		leafField = field
-	}
-	if restIsHTTPBody(msg.Descriptor(), nil) {
-		fields := msg.Descriptor().Fields()
-		contentType := op.reqContentType
-		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
-		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
-	} else if len(src) > 0 {
-		if leafField != nil {
-			buf := op.bufferPool.Get()
-			defer op.bufferPool.Put(buf)
-			_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
-			src = buf.Bytes()
-		}
-		if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
+	} else {
+		msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, target.ProtoReflect(), true)
+		if err != nil {
 			return err
 		}
+		if restIsHTTPBody(msg.Descriptor(), nil) {
+			fields := msg.Descriptor().Fields()
+			contentType := op.reqContentType
+			msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
+			msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		} else if len(src) > 0 {
+			if leafField != nil {
+				buf := op.bufferPool.Get()
+				defer op.bufferPool.Put(buf)
+				_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
+				src = buf.Bytes()
+			}
+			if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
+				return err
+			}
+		}
 	}
-	msg = target.ProtoReflect()
+
+	msg := target.ProtoReflect()
 	for i := len(op.restVars) - 1; i >= 0; i-- {
 		variable := op.restVars[i]
 		if err := setParameter(msg, variable.fields, variable.value); err != nil {
@@ -223,21 +218,9 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 		return bytes, nil
 	}
 
-	msg := src.ProtoReflect()
-	var leafField protoreflect.FieldDescriptor
-	for i, field := range op.restTarget.responseBodyFields {
-		if field.Cardinality() != protoreflect.Repeated {
-			msg = msg.Get(field).Message()
-			continue
-		}
-		if i != len(op.restTarget.responseBodyFields)-1 {
-			actual := "list"
-			if field.IsMap() {
-				actual = "map"
-			}
-			return nil, fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
-		}
-		leafField = field
+	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), false)
+	if err != nil {
+		return nil, err
 	}
 	result, err := op.client.codec.MarshalAppend(base, msg.Interface())
 	if err != nil {
@@ -337,21 +320,9 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 	if op.restTarget.requestBodyFields == nil {
 		return base, nil
 	}
-	msg := src.ProtoReflect()
-	var leafField protoreflect.FieldDescriptor
-	for i, field := range op.restTarget.requestBodyFields {
-		if field.Cardinality() != protoreflect.Repeated {
-			msg = msg.Get(field).Message()
-			continue
-		}
-		if i != len(op.restTarget.requestBodyFields)-1 {
-			actual := "list"
-			if field.IsMap() {
-				actual = "map"
-			}
-			return nil, fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
-		}
-		leafField = field
+	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), false)
+	if err != nil {
+		return nil, err
 	}
 	if restHTTPBodyRequest(op) {
 		fields := msg.Descriptor().Fields()
@@ -381,27 +352,9 @@ func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
-	msg := target.ProtoReflect()
-	var leafField protoreflect.FieldDescriptor
-	for i, field := range op.restTarget.responseBodyFields {
-		if field.Cardinality() != protoreflect.Repeated {
-			msg = msg.Mutable(field).Message()
-			continue
-		}
-		if i != len(op.restTarget.responseBodyFields)-1 {
-			actual := "list"
-			if field.IsMap() {
-				actual = "map"
-			}
-			return fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
-		}
-		leafField = field
-	}
-	if leafField != nil {
-		buf := op.bufferPool.Get()
-		defer op.bufferPool.Put(buf)
-		_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
-		src = buf.Bytes()
+	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, target.ProtoReflect(), true)
+	if err != nil {
+		return err
 	}
 	if restHTTPBodyResponse(op) {
 		fields := msg.Descriptor().Fields()
@@ -409,6 +362,12 @@ func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byt
 		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
 		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
 		return nil
+	}
+	if leafField != nil {
+		buf := op.bufferPool.Get()
+		defer op.bufferPool.Put(buf)
+		_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
+		src = buf.Bytes()
 	}
 	return op.server.codec.Unmarshal(src, msg.Interface())
 }
@@ -450,4 +409,28 @@ func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.
 		msg = field.Message()
 	}
 	return msg != nil && msg.FullName() == "google.api.HttpBody"
+}
+
+func getBodyField(fields []protoreflect.FieldDescriptor, root protoreflect.Message, mutable bool) (protoreflect.Message, protoreflect.FieldDescriptor, error) {
+	msg := root
+	var leafField protoreflect.FieldDescriptor
+	for i, field := range fields {
+		if field.Cardinality() != protoreflect.Repeated {
+			if mutable {
+				msg = msg.Mutable(field).Message()
+			} else {
+				msg = msg.Get(field).Message()
+			}
+			continue
+		}
+		if i != len(fields)-1 {
+			actual := "list"
+			if field.IsMap() {
+				actual = "map"
+			}
+			return nil, nil, fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
+		}
+		leafField = field
+	}
+	return msg, leafField, nil
 }
