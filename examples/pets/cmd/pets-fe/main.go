@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"connectrpc.com/grpcreflect"
 	"github.com/bufbuild/vanguard-go"
 	"github.com/bufbuild/vanguard-go/examples/pets/internal"
 	"github.com/bufbuild/vanguard-go/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
@@ -62,9 +63,12 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		serveMux := http.NewServeMux()
+		serveMux.Handle("/", internal.TraceHandler(mux.AsHandler()))
+		serveMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(petstorev2connect.PetServiceName)))
 		svrs[i] = &http.Server{
 			Addr:    ":http",
-			Handler: h2c.NewHandler(internal.TraceHandler(mux.AsHandler()), &http2.Server{}),
+			Handler: h2c.NewHandler(serveMux, &http2.Server{}),
 		}
 	}
 

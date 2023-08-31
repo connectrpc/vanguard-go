@@ -22,7 +22,9 @@ func TraceHandler(handler http.Handler) http.Handler {
 		traceRequest(tr, r)
 		r.Body = &traceReader{r: r.Body, trace: tr.traceReq}
 		r = r.WithContext(context.WithValue(r.Context(), traceRequestId{}, reqId))
-		handler.ServeHTTP(&traceWriter{w: w, trace: tr.traceResp}, r)
+		tw := &traceWriter{w: w, trace: tr.traceResp}
+		defer tw.traceTrailers()
+		handler.ServeHTTP(tw, r)
 	})
 }
 
@@ -139,12 +141,7 @@ func (t *traceWriter) Write(bytes []byte) (n int, err error) {
 	}
 	if err != nil && !t.done {
 		t.done = true
-		if errors.Is(err, io.EOF) {
-			t.trace("(EOF)")
-			t.traceTrailers()
-		} else {
-			t.trace("(%v!)", err)
-		}
+		t.trace("(%v!)", err)
 	}
 	return n, err
 }
@@ -168,6 +165,9 @@ func (t *traceWriter) WriteHeader(statusCode int) {
 }
 
 func (t *traceWriter) traceTrailers() {
+	if t.done {
+		return
+	}
 	trailers := http.Header{}
 	for k, v := range t.Header() {
 		if strings.HasPrefix(k, http.TrailerPrefix) {
