@@ -17,10 +17,10 @@ There are a handful of key use cases for such middleware:
    RPC API. With the right annotations, existing REST clients can continue to access
    your API, even after the server implementations have been migrated to Protobuf and RPC.
 
-   So this middleware can effectively replace the use of [gRPC-Gateway](https://github.com/grpc-ecosystem/grpc-gateway#readme)
+   This middleware can effectively replace the use of [gRPC-Gateway](https://github.com/grpc-ecosystem/grpc-gateway#readme)
    when it's used in-process in a Go server. In particular, this middleware is compatible
    with Connect RPC handlers, whereas gRPC-Gateway requires the use of gRPC handlers and
-   the gRPC protobuf plugin. Also, this middleware does not require any additional code
+   the `protoc-gen-grpc-gateway` Protobuf plugin. Unlike gRPC-Gateway, this middleware does not require any additional code
    generation.
 
    Since it does not rely on code generation, Vanguard can be used in dynamic situations,
@@ -40,7 +40,7 @@ There are a handful of key use cases for such middleware:
    Connect servers can natively handle gRPC clients.)
 
    This is particularly valuable since a big draw of the Connect protocol over gRPC is its
-   usability and inspectability with web browser and mobile device clients. So this
+   usability and inspectability with web browser and mobile device clients, and this
    middleware allows you to migrate clients to Connect without having to first migrate
    your server handler logic.
 
