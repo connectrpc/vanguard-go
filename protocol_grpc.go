@@ -82,7 +82,24 @@ func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers 
 }
 
 func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	return grpcAddResponseMeta("application/grpc+", meta, headers)
+	statusCode := grpcAddResponseMeta("application/grpc+", meta, headers)
+	trailingKeys := parseMultiHeader(headers.Values("Trailer"))
+	var hasStatus, hasMessage bool
+	for _, k := range trailingKeys {
+		if strings.ToLower(k) == "grpc-status" {
+			hasStatus = true
+		}
+		if strings.ToLower(k) == "grpc-message" {
+			hasMessage = true
+		}
+	}
+	if !hasStatus {
+		headers.Add("Trailer", "Grpc-Status")
+	}
+	if !hasMessage {
+		headers.Add("Trailer", "Grpc-Message")
+	}
+	return statusCode
 }
 
 func (g grpcClientProtocol) encodeEnd(_ *operation, end *responseEnd, _ io.Writer, wasInHeaders bool) http.Header {
@@ -386,22 +403,6 @@ func grpcAddResponseMeta(contentTypePrefix string, meta responseMeta, headers ht
 	}
 	if len(meta.acceptCompression) > 0 {
 		headers.Set("Grpc-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
-	}
-	trailingKeys := parseMultiHeader(headers.Values("Trailer"))
-	var hasStatus, hasMessage bool
-	for _, k := range trailingKeys {
-		if strings.ToLower(k) == "grpc-status" {
-			hasStatus = true
-		}
-		if strings.ToLower(k) == "grpc-message" {
-			hasMessage = true
-		}
-	}
-	if !hasStatus {
-		headers.Add("Trailer", "Grpc-Status")
-	}
-	if !hasMessage {
-		headers.Add("Trailer", "Grpc-Message")
 	}
 	return http.StatusOK
 }

@@ -339,6 +339,7 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 	urlPath = path
 	queryParams = query.Encode()
 	includeBody = op.restTarget.requestBodyFields != nil // can be len(0) if body is '*'
+	// TODO: Should this return an error if URL (path + query string) is greater than op.methodConf.maxGetURLSz?
 	return urlPath, queryParams, op.restTarget.method, includeBody, nil
 }
 
@@ -347,11 +348,11 @@ func (r restServerProtocol) String() string {
 }
 
 func restHTTPBodyRequest(op *operation) bool {
-	return restIsHTTPBody(op.method.Input(), op.restTarget.requestBodyFields)
+	return restIsHTTPBody(op.methodConf.descriptor.Input(), op.restTarget.requestBodyFields)
 }
 
 func restHTTPBodyResponse(op *operation) bool {
-	return restIsHTTPBody(op.method.Output(), op.restTarget.responseBodyFields)
+	return restIsHTTPBody(op.methodConf.descriptor.Output(), op.restTarget.responseBodyFields)
 }
 
 func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {

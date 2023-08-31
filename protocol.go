@@ -93,7 +93,7 @@ func (p Protocol) String() string {
 func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
 	switch p {
 	case ProtocolConnect:
-		if op.streamType == connect.StreamTypeUnary {
+		if op.methodConf.streamType == connect.StreamTypeUnary {
 			return connectUnaryServerProtocol{}
 		}
 		return connectStreamServerProtocol{}

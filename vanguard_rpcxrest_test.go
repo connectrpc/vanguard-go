@@ -90,8 +90,8 @@ func TestMux_RPCxREST(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		server := httptest.NewUnstartedServer(mux.AsHandler())
-		server.Start()
+		server := httptest.NewServer(mux.AsHandler())
+		disableCompression(server)
 		t.Cleanup(server.Close)
 		return testServer{name: name, svr: server}
 	}
@@ -153,12 +153,12 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromUnary(ctx, clients.libClient.GetBook, hdr, msgs)
 		},
 		stream: testStream{
+			method:    "/v1/shelves/1/books/1",
 			reqHeader: http.Header{"Message": []string{"hello"}},
 			rspHeader: http.Header{"Message": []string{"world"}},
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: "/v1/shelves/1/books/1",
-					msg:    nil, // GET request.
+					msg: nil, // GET request.
 				}},
 				{out: &testMsgOut{
 					msg: &testv1.Book{Name: "shelves/1/books/1"},
@@ -181,10 +181,10 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromUnary(ctx, clients.libClient.GetBook, hdr, msgs)
 		},
 		stream: testStream{
+			method: "/v1/shelves/1/books/1",
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: "/v1/shelves/1/books/1",
-					msg:    nil, // GET request.
+					msg: nil, // GET request.
 				}},
 				{out: &testMsgOut{
 					err: connect.NewError(
@@ -215,9 +215,9 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromUnary(ctx, clients.libClient.CreateBook, hdr, msgs)
 		},
 		stream: testStream{
+			method: "/v1/shelves/1/books?book_id=1&request_id=2",
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: "/v1/shelves/1/books?book_id=1&request_id=2",
 					msg: &testv1.Book{
 						Title:  "The Art of Computer Programming",
 						Author: "Donald E. Knuth",
@@ -246,10 +246,10 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromUnary(ctx, clients.contentClient.Index, hdr, msgs)
 		},
 		stream: testStream{
+			method: "/index/page.html",
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: "/index/page.html",
-					msg:    nil, // GET request.
+					msg: nil, // GET request.
 				}},
 				{out: &testMsgOut{
 					msg: &httpbody.HttpBody{
@@ -285,9 +285,9 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromClientStream(ctx, clients.contentClient.Upload, hdr, msgs)
 		},
 		stream: testStream{
+			method: "/raw/message.txt",
 			msgs: []testMsg{
 				{in: &testMsgIn{
-					method: "/raw/message.txt",
 					msg: &httpbody.HttpBody{
 						ContentType: "text/plain",
 						Data:        []byte("hello world"),
@@ -308,10 +308,9 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromServerStream(ctx, clients.contentClient.Download, hdr, msgs)
 		},
 		stream: testStream{
+			method: "/raw/message.txt",
 			msgs: []testMsg{
-				{in: &testMsgIn{
-					method: "/raw/message.txt",
-				}},
+				{in: &testMsgIn{}},
 				{out: &testMsgOut{
 					msg: &httpbody.HttpBody{
 						ContentType: "text/plain",

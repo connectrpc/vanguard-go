@@ -24,9 +24,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
+	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
+	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1/testv1connect"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,21 +39,629 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 )
 
+//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
+func TestMux_BufferTooLargeFails(t *testing.T) {
+	t.Parallel()
+
+	// Cases where we buffer:
+	// 1. Using envelopingReader for request (same codec and compression, no body prep) where
+	//    client protocol is not enveloped, request does not include content-length header,
+	//    and server protocol is enveloped. In this case, we must buffer the request to measure
+	//    its size, so we can create an envelope to send to the server.
+	// 2. Similar to above, but reversed roles, using envelopingWriter for response.
+	// 3. Using envelopingWriter for response, but with gRPC-Web or Connect streaming protocols,
+	//    where we must buffer the final special message.
+	// 4. Using transformingReader for request (different codec and/or compression or body prep).
+	//    We must buffer request messages in all cases.
+	// 5. Similar to above, but reversed roles, using transformingWriter for response. This
+	//    includes buffering of final special message for gRPC-Web and Connect streaming protocols.
+	// 6. Using errorWriter for response (failed unary RPC in Connect or REST protocol). The
+	//    entire body must be buffered to construct the RPC error.
+
+	var interceptor testInterceptor
+	serveMux := http.NewServeMux()
+	serveMux.Handle(testv1connect.NewLibraryServiceHandler(
+		testv1connect.UnimplementedLibraryServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	))
+	serveMux.Handle(testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	))
+
+	type testClients struct {
+		contentClient testv1connect.ContentServiceClient
+		libClient     testv1connect.LibraryServiceClient
+	}
+	type testRequest struct {
+		name            string
+		clientOptions   []connect.ClientOption
+		muxWithSettings *Mux            // Does not need to configure MaxMessageBufferSize
+		muxSvcOpts      []ServiceOption // Does not need to include WithMaxMessageBufferBytes
+		invoke          func(testClients, http.Header, []proto.Message) (http.Header, []proto.Message, http.Header, error)
+		stream          testStream
+	}
+	ctx := context.Background()
+	testCases := []struct {
+		name        string
+		expectation func(*testing.T, http.ResponseWriter, *http.Request)
+		reqs        []testRequest
+	}{
+		{
+			name: "enveloping_reader",
+			expectation: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				_, ok := req.Body.(*envelopingReader)
+				assert.True(t, ok, "request body should be *envelopingReader")
+			},
+			reqs: []testRequest{
+				{
+					// Connect unary request; gRPC server
+					name:            "must_buffer_request",
+					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolGRPC}},
+					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolGRPC)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{{in: &testMsgIn{
+							msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 1000)},
+							err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						}}},
+					},
+				},
+			},
+		},
+		{
+			name: "enveloping_writer",
+			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				rw, ok := rsp.(*responseWriter)
+				require.True(t, ok, "response writer should be *responseWriter")
+				_, ok = rw.w.(*envelopingWriter)
+				assert.True(t, ok, "response body should be *envelopingWriter")
+			},
+			reqs: []testRequest{
+				{
+					// gRPC unary request; Connect server
+					name:            "must_buffer_response",
+					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
+					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
+					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: strings.Repeat("foo/", 1000)},
+							}},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					// gRPC-Web response with trailers too large
+					name:            "buffer_grpcweb_endstream_trailers",
+					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolGRPCWeb}},
+					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: "foo/bar"},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					// gRPC-Web response with error too large
+					name:            "buffer_grpcweb_endstream_error",
+					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolGRPCWeb}},
+					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+							}},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:            "buffer_connect_endstream_trailers",
+					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
+					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
+					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:            "buffer_connect_endstream_trailers",
+					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
+					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
+					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+							}},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+			},
+		},
+		{
+			name: "transforming_reader",
+			expectation: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				_, ok := req.Body.(*transformingReader)
+				assert.True(t, ok, "request body should be *transformingReader")
+			},
+			reqs: []testRequest{
+				{
+					// Proto request transformed to JSON
+					name:            "must_buffer_request_unary",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{{in: &testMsgIn{
+							msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 1000)},
+							err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						}}},
+					},
+				},
+				{
+					name:            "must_buffer_request_stream",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromClientStream(ctx, clients.contentClient.Upload, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceUploadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.UploadRequest{Filename: "foo/bar"},
+							}},
+							{in: &testMsgIn{
+								msg: &testv1.UploadRequest{File: &httpbody.HttpBody{Data: bytes.Repeat([]byte{0, 1, 2, 3}, 1000)}},
+								err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "transforming_writer",
+			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				rw, ok := rsp.(*responseWriter)
+				require.True(t, ok, "response writer should be *responseWriter")
+				_, ok = rw.w.(*transformingWriter)
+				assert.True(t, ok, "response body should be *transformingWriter")
+			},
+			reqs: []testRequest{
+				{
+					// Proto response transformed to JSON
+					name:            "must_buffer_response_unary",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: strings.Repeat("foo/", 1000)},
+							}},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					name:            "must_buffer_response_stream",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{Data: []byte{0, 1, 2, 3}}},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{Data: bytes.Repeat([]byte{0, 1, 2, 3}, 1000)}},
+								err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+							}},
+						},
+					},
+				},
+				{
+					// gRPC-Web response with trailers too large
+					name:            "buffer_grpcweb_endstream_trailers",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolGRPCWeb}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: "foo/bar"},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					// gRPC-Web response with error too large
+					name:            "buffer_grpcweb_endstream_error",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolGRPCWeb}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+							}},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:            "buffer_connect_endstream_trailers",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolConnect}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:            "buffer_connect_endstream_trailers",
+					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolConnect}},
+					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+							}},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+			},
+		},
+		{
+			name: "error_writer",
+			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				rw, ok := rsp.(*responseWriter)
+				require.True(t, ok, "response writer should be *responseWriter")
+				_, ok = rw.w.(*errorWriter)
+				assert.True(t, ok, "response body should be *errorWriter")
+			},
+			reqs: []testRequest{
+				{
+					// gRPC request; Connect unary response with error
+					name:            "must_buffer_error_response",
+					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
+					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
+					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+							}},
+						},
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+					},
+				},
+			},
+		},
+	}
+	muxTestModes := []struct {
+		name    string
+		makeMux func(*testRequest) (*Mux, []ServiceOption)
+	}{
+		{
+			name: "mux_settings",
+			makeMux: func(req *testRequest) (*Mux, []ServiceOption) {
+				mux := req.muxWithSettings
+				mux.MaxMessageBufferBytes = 1024
+				return mux, nil
+			},
+		},
+		{
+			name: "mux_svc_options",
+			makeMux: func(req *testRequest) (*Mux, []ServiceOption) {
+				return &Mux{}, append(req.muxSvcOpts, WithMaxMessageBufferBytes(1024))
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			for i := range testCase.reqs {
+				testReq := &testCase.reqs[i]
+				t.Run(testReq.name, func(t *testing.T) {
+					t.Parallel()
+					for _, mode := range muxTestModes {
+						mode := mode
+						t.Run(mode.name, func(t *testing.T) {
+							t.Parallel()
+
+							var expectationChecked atomic.Bool
+							hdlr := http.HandlerFunc(func(respWriter http.ResponseWriter, req *http.Request) {
+								serveMux.ServeHTTP(respWriter, req)
+								defer expectationChecked.Store(true)
+								testCase.expectation(t, respWriter, req)
+							})
+
+							mux, svcOpts := mode.makeMux(testReq)
+							err := mux.RegisterServiceByName(hdlr, testv1connect.LibraryServiceName, svcOpts...)
+							require.NoError(t, err)
+							err = mux.RegisterServiceByName(hdlr, testv1connect.ContentServiceName, svcOpts...)
+							require.NoError(t, err)
+							server := httptest.NewUnstartedServer(mux.AsHandler())
+							server.EnableHTTP2 = true
+							server.StartTLS()
+							disableCompression(server)
+							t.Cleanup(server.Close)
+
+							var clients testClients
+							// remove support for gzip, so we don't have to worry about compression
+							// getting in the way of our too-large test payloads
+							opts := make([]connect.ClientOption, 0, len(testReq.clientOptions)+1)
+							opts = append(opts, testReq.clientOptions...)
+							opts = append(opts, connect.WithAcceptCompression("gzip", nil, nil))
+							clients.libClient = testv1connect.NewLibraryServiceClient(server.Client(), server.URL, opts...)
+							clients.contentClient = testv1connect.NewContentServiceClient(server.Client(), server.URL, opts...)
+
+							runRPCTestCase(t, &interceptor, clients, testReq.invoke, testReq.stream)
+							assert.True(t, expectationChecked.Load())
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
+	t.Parallel()
+
+	var interceptor testInterceptor
+	_, hdlr := testv1connect.NewLibraryServiceHandler(
+		testv1connect.UnimplementedLibraryServiceHandler{},
+		connect.WithInterceptors(
+			connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+				return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+					if req.HTTPMethod() != http.MethodPost {
+						return nil, fmt.Errorf("server should only see POST; instead got %s", req.HTTPMethod())
+					}
+					return next(ctx, req)
+				}
+			}),
+			&interceptor,
+		),
+	)
+
+	muxWithSetting := &Mux{MaxGetURLBytes: 512, Compressors: []string{}}
+	err := muxWithSetting.RegisterServiceByName(hdlr, testv1connect.LibraryServiceName)
+	require.NoError(t, err)
+	serverWithSetting := httptest.NewServer(muxWithSetting.AsHandler())
+	disableCompression(serverWithSetting)
+	t.Cleanup(serverWithSetting.Close)
+
+	muxWithSvcOption := &Mux{}
+	err = muxWithSvcOption.RegisterServiceByName(
+		hdlr,
+		testv1connect.LibraryServiceName,
+		WithMaxGetURLBytes(512),
+		WithNoCompression(),
+	)
+	require.NoError(t, err)
+	serverWithSvcOption := httptest.NewServer(muxWithSvcOption.AsHandler())
+	disableCompression(serverWithSvcOption)
+	t.Cleanup(serverWithSvcOption.Close)
+
+	testCases := []struct {
+		name string
+		svr  *httptest.Server
+	}{
+		{
+			name: "with_mux_setting",
+			svr:  serverWithSetting,
+		},
+		{
+			name: "with_svc_option",
+			svr:  serverWithSvcOption,
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			largeRequest := &testv1.GetBookRequest{Name: strings.Repeat("foo/", 300) + "1"}
+			interceptor.set(t, testStream{
+				method: testv1connect.LibraryServiceGetBookProcedure,
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: largeRequest,
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.Book{Name: strings.Repeat("foo/", 300) + "1"},
+					}},
+				},
+			})
+			defer interceptor.del(t)
+
+			client := testv1connect.NewLibraryServiceClient(
+				testCase.svr.Client(),
+				testCase.svr.URL,
+				connect.WithHTTPGet(),
+				connect.WithHTTPGetMaxURLSize(512, false),
+				connect.WithSendGzip(),
+			)
+			req := connect.NewRequest(largeRequest)
+			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
+			_, err := client.GetBook(context.Background(), req)
+			// No error means it made through above interceptor unscathed
+			// (so server handler got a POST).
+			require.NoError(t, err)
+			// But the client should have sent a GET, and the middleware should
+			// have changed to POST because the request URL was too large.
+			assert.Equal(t, http.MethodGet, req.HTTPMethod())
+
+			// Sanity check that an RPC with a small request fails due to the above interceptor requiring POST
+			// (Just to confirm that the above function is indeed intercepting the request).
+			//
+			// NB: We don't need to reset the stream for the test interceptor to match the small request
+			//     because that interceptor won't see it. The other interceptor function should fail the
+			//     request before it gets that far.
+			req = connect.NewRequest(&testv1.GetBookRequest{Name: "foo/bar"})
+			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
+			_, err = client.GetBook(context.Background(), req)
+			require.ErrorContains(t, err, "server should only see POST; instead got GET")
+		})
+	}
+}
+
 type testStream struct {
+	method     string
 	reqHeader  http.Header // expected
 	rspHeader  http.Header // out
 	rspTrailer http.Header // out
 	msgs       []testMsg   // in, out
-}
 
-type testMsgIn struct {
-	method string
-	msg    proto.Message
-}
-type testMsgOut struct {
-	msg proto.Message
+	// If set, the error that a client expects, overriding any other error
+	// (or lack thereof) in msgs.
 	err *connect.Error
 }
+
 type testMsg struct {
 	in  *testMsgIn
 	out *testMsgOut
@@ -61,12 +673,14 @@ func (o *testMsg) getIn() (*testMsgIn, error) {
 	}
 	return o.in, nil
 }
+
 func (o *testMsg) getOut() (*testMsgOut, error) {
 	if o == nil || o.out == nil {
 		return nil, fmt.Errorf("missing output message")
 	}
 	return o.out, nil
 }
+
 func (o *testMsg) get() any {
 	if o.in != nil {
 		return o.in
@@ -77,62 +691,144 @@ func (o *testMsg) get() any {
 	return nil
 }
 
-type testInterceptor struct {
-	sync.Map
+type testMsgIn struct {
+	msg proto.Message
+	// An error on input means that the middleware should generate an error here.
+	// The msg is present so that runRPCTestCase knows what message to send, but
+	// if err != nil then the interceptor instead accepts the operation to be
+	// cancelled (and the middleware will send this error back to the clent).
+	err *connect.Error
+}
+
+type testMsgOut struct {
+	msg proto.Message
+	// If msg is nil, the interceptor will return this error instead of sending
+	// a message. But if both are non-nil, then the interceptor will send the
+	// message but expect an error doing so. So in that case, this error is
+	// expected by both the server handler and the client.
+	err *connect.Error
 }
 
 type ttStream struct {
 	*testing.T
 	testStream
+
+	started atomic.Bool
+	result  error
+	done    chan struct{}
 }
 
-func (o *testInterceptor) get(testName string) (ttStream, bool) {
-	val, ok := o.Load(testName)
-	if !ok {
-		return ttStream{}, false
+func (str *ttStream) start() {
+	// Called from the interceptor when it starts handling the stream
+	str.started.Store(true)
+}
+
+func (str *ttStream) finish(result error) {
+	// Called from the interceptor when it finishes handling the stream
+	str.result = result
+	close(str.done)
+}
+
+func (str *ttStream) await(t *testing.T, expectServerDone bool) (svrInvoked bool, svrErr error) {
+	t.Helper()
+	// Called from test code to make sure server handler has completed.
+	// Returns any error that the interceptor finished with.
+	// Should only be called after the RPC appears to have completed in
+	// the test client.
+	if !str.started.Load() {
+		// Interceptor never started, so nothing to wait for.
+		return false, nil
 	}
-	stream, ok := val.(ttStream)
+	if expectServerDone {
+		select {
+		case <-str.done:
+			return true, str.result
+		default:
+			t.Fatal("expecting server to already be done but it's not")
+		}
+	}
+	select {
+	case <-str.done:
+		return true, str.result
+	case <-time.After(3 * time.Second):
+		return true, fmt.Errorf("timeout: interceptor still did not finish after 3 seconds")
+	}
+}
+
+type testInterceptor struct {
+	sync.Map
+}
+
+func (ti *testInterceptor) get(testName string) (*ttStream, bool) {
+	val, ok := ti.Load(testName)
+	if !ok {
+		return nil, false
+	}
+	stream, ok := val.(*ttStream)
 	return stream, ok
 }
-func (o *testInterceptor) set(t *testing.T, stream testStream) {
+
+func (ti *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) (bool, error) {
 	t.Helper()
-	o.Store(t.Name(), ttStream{t, stream})
-}
-func (o *testInterceptor) del(t *testing.T) {
-	t.Helper()
-	o.Delete(t.Name())
+	str := &ttStream{
+		T:          t,
+		testStream: stream,
+		done:       make(chan struct{}),
+	}
+	ti.Store(t.Name(), str)
+	// The returned function can be used by test code to await server completion.
+	// (Useful in the event that middleware cancels the operation early, so client
+	// could see a completed response while server still running concurrently.)
+	return str.await
 }
 
-func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return connect.UnaryFunc(func(
+func (ti *testInterceptor) del(t *testing.T) {
+	t.Helper()
+	ti.Delete(t.Name())
+}
+
+func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(
 		ctx context.Context,
 		req connect.AnyRequest,
-	) (connect.AnyResponse, error) {
+	) (_ connect.AnyResponse, resultError error) {
 		val := req.Header().Get("test")
 		if val == "" {
 			return next(ctx, req)
 		}
-		stream, ok := o.get(val)
+		stream, ok := ti.get(val)
 		if !ok {
 			return nil, fmt.Errorf("invalid testCase header: %s", val)
+		}
+		stream.start()
+		defer func() {
+			stream.finish(resultError)
+		}()
+		if !assert.Equal(stream.T, stream.method, req.Spec().Procedure) {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("expected %s, got %s", stream.method, req.Spec().Procedure))
 		}
 		assert.Subset(stream.T, req.Header(), stream.reqHeader)
 		if len(stream.msgs) != 2 {
 			err := fmt.Errorf("expected 2 messages, got %d", len(stream.msgs))
 			return nil, err
 		}
+
 		inn, err := stream.msgs[0].getIn()
 		if err != nil {
 			return nil, err
 		}
+		if inn.err != nil {
+			return nil, errors.New("testMsgIn should not have err field set for unary request")
+		}
+
 		out, err := stream.msgs[1].getOut()
 		if err != nil {
 			return nil, err
 		}
-		if inn.method != "" && req.Spec().Procedure != inn.method {
-			err := fmt.Errorf("expected %s, got %s", inn.method, req.Spec().Procedure)
-			return nil, err
+		if out.msg != nil && out.err != nil {
+			return nil, errors.New("testMsgOut should not have both msg and err fields set for unary request")
 		}
+
 		msg, ok := req.Any().(proto.Message)
 		if !ok {
 			return nil, fmt.Errorf("expected proto.Message, got %T", req.Any())
@@ -141,6 +837,7 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if diff != "" {
 			return nil, fmt.Errorf("message didn't match: %s", diff)
 		}
+
 		if out.err != nil {
 			err := out.err
 			if len(stream.rspHeader) > 0 {
@@ -165,23 +862,32 @@ func (o *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 			rsp.Trailer()[key] = values
 		}
 		return rsp, nil
-	})
+	}
 }
-func (o *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+
+func (ti *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return next
 }
-func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return connect.StreamingHandlerFunc(func(
+
+func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
-	) error {
+	) (resultError error) {
 		val := conn.RequestHeader().Get("test")
 		if val == "" {
 			return next(ctx, conn)
 		}
-		stream, ok := o.get(val)
+		stream, ok := ti.get(val)
 		if !ok {
 			return fmt.Errorf("invalid testCase header: %s", val)
+		}
+		stream.start()
+		defer func() {
+			stream.finish(resultError)
+		}()
+		if !assert.Equal(stream.T, stream.method, conn.Spec().Procedure) {
+			return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("expected %s, got %s", stream.method, conn.Spec().Procedure))
 		}
 		stream.Log("WrapStreamingHandler", val)
 		assert.Subset(stream.T, conn.RequestHeader(), stream.reqHeader)
@@ -193,20 +899,38 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 			switch msg := msg.get().(type) {
 			case *testMsgIn:
 				got := proto.Clone(msg.msg)
-				if err := conn.Receive(got); err != nil {
+				err := conn.Receive(got)
+				switch {
+				case msg.err != nil:
+					// We're expecting an error at this point, which prevented this
+					// message from being delivered.
+					if err == nil {
+						err = errors.New("expecting an error receiving message but got none")
+					}
 					return err
-				}
-				diff := cmp.Diff(got, msg.msg, protocmp.Transform())
-				assert.Empty(stream.T, diff, "message didn't match")
-				if diff != "" {
-					return fmt.Errorf("message didn't match")
+				case err != nil:
+					return err // not expecting an error
+				default:
+					diff := cmp.Diff(got, msg.msg, protocmp.Transform())
+					assert.Empty(stream.T, diff, "message didn't match")
+					if diff != "" {
+						return fmt.Errorf("message didn't match: %s", diff)
+					}
 				}
 			case *testMsgOut:
-				if msg.err != nil {
-					return msg.err
-				}
-				if err := conn.Send(msg.msg); err != nil {
+				switch {
+				case msg.msg != nil && msg.err != nil:
+					err := conn.Send(msg.msg)
+					if err == nil {
+						err = errors.New("expecting an error sending message but got none")
+					}
 					return err
+				case msg.err != nil:
+					return msg.err
+				default:
+					if err := conn.Send(msg.msg); err != nil {
+						return err
+					}
 				}
 			default:
 				return fmt.Errorf("expected message")
@@ -216,16 +940,16 @@ func (o *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 			conn.ResponseTrailer()[key] = vals
 		}
 		return nil
-	})
+	}
 }
 
-func (o *testInterceptor) restUnaryHandler(
+func (ti *testInterceptor) restUnaryHandler(
 	codec Codec, comp *compressionPool,
 ) http.HandlerFunc {
 	codecNames := map[string]string{
 		"application/json": "json",
 	}
-	handler := func(stream ttStream, rsp http.ResponseWriter, req *http.Request) error {
+	handler := func(stream *ttStream, rsp http.ResponseWriter, req *http.Request) error {
 		if len(stream.msgs) != 2 {
 			return fmt.Errorf("expected 2 messages, got %d", len(stream.msgs))
 		}
@@ -237,7 +961,7 @@ func (o *testInterceptor) restUnaryHandler(
 		if err != nil {
 			return err
 		}
-		assert.Equal(stream.T, inn.method, req.URL.String(), "url didn't match")
+		assert.Equal(stream.T, stream.method, req.URL.String(), "url didn't match")
 		assert.Subset(stream.T, req.Header, stream.reqHeader, "headers didn't match")
 		contentType := req.Header.Get("Content-Type")
 		encoding := req.Header.Get("Content-Encoding")
@@ -329,7 +1053,7 @@ func (o *testInterceptor) restUnaryHandler(
 			http.Error(rsp, "missing test header", http.StatusInternalServerError)
 			return
 		}
-		stream, ok := o.get(val)
+		stream, ok := ti.get(val)
 		if !ok {
 			http.Error(rsp, "invalid test header", http.StatusInternalServerError)
 			return
@@ -641,7 +1365,7 @@ func runRPCTestCase[Client any](
 	stream testStream,
 ) {
 	t.Helper()
-	interceptor.set(t, stream)
+	awaitServer := interceptor.set(t, stream)
 	defer interceptor.del(t)
 	reqHeaders := http.Header{}
 	reqHeaders.Set("Test", t.Name()) // test header
@@ -655,29 +1379,77 @@ func runRPCTestCase[Client any](
 		}
 	}
 	headers, responses, trailers, err := invoke(client, reqHeaders, reqMsgs)
+	if err != nil {
+		t.Logf("RPC error: %v", err)
+	}
 	var expectedErr *connect.Error
+	expectServerDone := true
+	var expectServerCancel bool
 	for _, streamMsg := range stream.msgs {
+		if streamMsg.in != nil && streamMsg.in.err != nil {
+			expectedErr = streamMsg.in.err
+			expectServerDone = false
+			expectServerCancel = true
+			break
+		}
 		if streamMsg.out != nil && streamMsg.out.err != nil {
 			expectedErr = streamMsg.out.err
+			expectServerDone = streamMsg.out.msg == nil
 			break
 		}
 	}
-	if expectedErr == nil {
+	svrInvoked, svrErr := awaitServer(t, expectServerDone)
+	// Verify the error received by the client.
+	receivedErr := expectedErr
+	if stream.err != nil {
+		receivedErr = stream.err
+	}
+	if receivedErr == nil {
 		assert.NoError(t, err)
 	} else {
-		assert.Equal(t, expectedErr.Code(), connect.CodeOf(err))
+		assert.Equal(t, receivedErr.Code(), connect.CodeOf(err))
+	}
+	// Also check the error observed by the server.
+	switch {
+	case expectedErr == nil:
+		assert.NoError(t, svrErr)
+	case expectServerCancel:
+		if svrInvoked && svrErr != nil {
+			// We expect the server to either have seen the same error or it later
+			// observed a cancel error (since the middleware cancels the request
+			// after it aborts the operation).
+			if connect.CodeOf(svrErr) != connect.CodeOf(expectedErr) && !errors.Is(svrErr, context.Canceled) {
+				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(svrErr))
+			}
+		}
+	default:
+		assert.Error(t, svrErr)
+		assert.Equal(t, expectedErr.Code(), connect.CodeOf(svrErr))
 	}
 	assert.Subset(t, headers, stream.rspHeader)
-	assert.Subset(t, trailers, stream.rspTrailer)
+	if stream.err == nil {
+		// if middleware created the error, trailers may not come across
+		assert.Subset(t, trailers, stream.rspTrailer)
+	}
 	var expectedResponses []proto.Message
 	for _, streamMsg := range stream.msgs {
-		if streamMsg.out != nil && streamMsg.out.msg != nil {
+		if streamMsg.out != nil && streamMsg.out.msg != nil && streamMsg.out.err == nil {
 			expectedResponses = append(expectedResponses, streamMsg.out.msg)
 		}
+	}
+	// If we expect an error from the middleware, the last response
+	// may not have been delivered.
+	if stream.err != nil && len(responses) < len(expectedResponses) {
+		expectedResponses = expectedResponses[:len(expectedResponses)-1]
 	}
 	require.Len(t, responses, len(expectedResponses))
 	for i, msg := range responses {
 		want := expectedResponses[i]
 		assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
 	}
+}
+
+func disableCompression(svr *httptest.Server) {
+	transport := svr.Client().Transport.(*http.Transport) //nolint:errcheck,forcetypeassert
+	transport.DisableCompression = true
 }

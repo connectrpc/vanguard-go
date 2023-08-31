@@ -229,7 +229,7 @@ func (c connectUnaryPostClientProtocol) encodeEnd(op *operation, end *responseEn
 	if end.err == nil {
 		return nil
 	}
-	wireErr := connectErrorToWireError(end.err, op.resolver)
+	wireErr := connectErrorToWireError(end.err, op.methodConf.resolver)
 	data, err := json.Marshal(wireErr)
 	if err != nil {
 		data = ([]byte)(`{"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}`)
@@ -329,7 +329,7 @@ func (c connectUnaryServerProtocol) requestNeedsPrep(op *operation) bool {
 }
 
 func (c connectUnaryServerProtocol) useGet(op *operation) bool {
-	methodOptions, _ := op.method.Options().(*descriptorpb.MethodOptions)
+	methodOptions, _ := op.methodConf.descriptor.Options().(*descriptorpb.MethodOptions)
 	_, isStable := op.server.codec.(StableCodec)
 	return op.request.Method == http.MethodGet && isStable &&
 		methodOptions.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
@@ -357,7 +357,7 @@ func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(op *oper
 
 func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
 	if !c.useGet(op) {
-		return op.methodPath, "", http.MethodPost, true, nil
+		return op.methodConf.methodPath, "", http.MethodPost, true, nil
 	}
 	vals := make(url.Values, 5)
 	vals.Set("connect", "v1")
@@ -399,11 +399,12 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	}
 
 	vals.Set("message", msgStr)
-	// TODO: Limit to how big query string is (or maybe query string + URI path?)
-	//       So if transformation enlarges the query string/URL from the original
-	//       request (particularly if we de-compress w/out re-compressing), we can
-	//       decide to use POST instead of GET.
-	return op.methodPath, vals.Encode(), http.MethodGet, false, nil
+	queryString := vals.Encode()
+	if uint32(len(op.methodConf.methodPath)+len(queryString)+1) > op.methodConf.maxGetURLBytes {
+		// URL is too big; fall back to POST
+		return op.methodConf.methodPath, "", http.MethodPost, true, nil
+	}
+	return op.methodConf.methodPath, vals.Encode(), http.MethodGet, false, nil
 }
 
 func (c connectUnaryServerProtocol) String() string {
@@ -453,7 +454,7 @@ func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMet
 func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, _ bool) http.Header {
 	streamEnd := &connectStreamEnd{Metadata: end.trailers}
 	if end.err != nil {
-		streamEnd.Error = connectErrorToWireError(end.err, op.resolver)
+		streamEnd.Error = connectErrorToWireError(end.err, op.methodConf.resolver)
 	}
 	buffer := op.bufferPool.Get()
 	defer op.bufferPool.Put(buffer)
