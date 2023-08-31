@@ -55,7 +55,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	request.ContentLength = -1 // transforming it will likely change it
 
 	// Identify the method being invoked.
-	methodConf, err := h.findMethod(&op)
+	err := op.resolveMethod(h.mux)
 	if err != nil {
 		code, headerFunc := httpCodeFromError(err)
 		if headerFunc != nil {
@@ -64,15 +64,14 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, http.StatusText(code), code)
 		return
 	}
-	op.methodConf = methodConf
-	if !op.client.protocol.acceptsStreamType(&op, methodConf.streamType) {
+	if !op.client.protocol.acceptsStreamType(&op, op.methodConf.streamType) {
 		http.Error(
 			writer,
-			fmt.Sprintf("stream type %s not supported with %s protocol", methodConf.streamType, op.client.protocol),
+			fmt.Sprintf("stream type %s not supported with %s protocol", op.methodConf.streamType, op.client.protocol),
 			http.StatusUnsupportedMediaType)
 		return
 	}
-	if methodConf.streamType == connect.StreamTypeBidi && request.ProtoMajor < 2 {
+	if op.methodConf.streamType == connect.StreamTypeBidi && request.ProtoMajor < 2 {
 		http.Error(writer, "bidi streams require HTTP/2", http.StatusHTTPVersionNotSupported)
 		return
 	}
@@ -109,18 +108,18 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			cannotDecompressRequest = true
 		}
 	}
-	op.client.codec = h.codecs[codecKey{res: methodConf.resolver, name: reqMeta.codec}]
+	op.client.codec = h.codecs[codecKey{res: op.methodConf.resolver, name: reqMeta.codec}]
 	if op.client.codec == nil {
 		http.Error(writer, fmt.Sprintf("%q sub-format not supported", reqMeta.codec), http.StatusUnsupportedMediaType)
 		return
 	}
 
 	// Now we can determine the destination protocol details
-	if _, supportsProtocol := methodConf.protocols[clientProtoHandler.protocol()]; supportsProtocol {
+	if _, supportsProtocol := op.methodConf.protocols[clientProtoHandler.protocol()]; supportsProtocol {
 		op.server.protocol = clientProtoHandler.protocol().serverHandler(&op)
 	} else {
 		for protocol := protocolMin; protocol <= protocolMax; protocol++ {
-			if _, supportsProtocol := methodConf.protocols[protocol]; supportsProtocol {
+			if _, supportsProtocol := op.methodConf.protocols[protocol]; supportsProtocol {
 				op.server.protocol = protocol.serverHandler(&op)
 				break
 			}
@@ -140,15 +139,15 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		// NB: This is fine to set even if a custom content-type is used via
 		//     the use of google.api.HttpBody. The actual content-type and body
 		//     data will be written via serverBodyPreparer implementation.
-		op.server.codec = h.mux.codecImpls[CodecJSON](methodConf.resolver)
-	} else if _, supportsCodec := methodConf.codecNames[reqMeta.codec]; supportsCodec {
+		op.server.codec = h.mux.codecImpls[CodecJSON](op.methodConf.resolver)
+	} else if _, supportsCodec := op.methodConf.codecNames[reqMeta.codec]; supportsCodec {
 		op.server.codec = op.client.codec
 	} else {
-		op.server.codec = h.codecs[codecKey{res: methodConf.resolver, name: methodConf.preferredCodec}]
+		op.server.codec = h.codecs[codecKey{res: op.methodConf.resolver, name: op.methodConf.preferredCodec}]
 	}
 
 	if reqMeta.compression != "" && !cannotDecompressRequest {
-		if _, supportsCompression := methodConf.compressorNames[reqMeta.compression]; supportsCompression {
+		if _, supportsCompression := op.methodConf.compressorNames[reqMeta.compression]; supportsCompression {
 			op.server.reqCompression = op.client.reqCompression
 		}
 		// else: we'll just decompress and not recompress
@@ -162,7 +161,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		// No transformation needed. But we do  need to restore the original headers first
 		// since extracting request metadata may have removed keys.
 		request.Header = originalHeaders
-		methodConf.handler.ServeHTTP(writer, request)
+		op.methodConf.handler.ServeHTTP(writer, request)
 		return
 	}
 
@@ -174,68 +173,6 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	op.handle()
-}
-
-func (h *handler) findMethod(op *operation) (*methodConfig, error) {
-	uriPath := op.request.URL.Path
-	switch op.client.protocol.protocol() {
-	case ProtocolREST:
-		var methods routeMethods
-		op.restTarget, op.restVars, methods = h.mux.restRoutes.match(uriPath, op.request.Method)
-		if op.restTarget != nil {
-			return op.restTarget.config, nil
-		}
-		if len(methods) == 0 {
-			return nil, &httpError{code: http.StatusNotFound}
-		}
-		var sb strings.Builder
-		for method := range methods {
-			if sb.Len() > 0 {
-				sb.WriteByte(',')
-			}
-			sb.WriteString(method)
-		}
-		return nil, &httpError{
-			code: http.StatusMethodNotAllowed,
-			headers: func(hdrs http.Header) {
-				hdrs.Set("Allow", sb.String())
-			},
-		}
-	default:
-		// The other protocols just use the URI path as the method name and don't allow query params
-		if len(uriPath) == 0 || uriPath[0] != '/' {
-			// no starting slash? won't match any known route
-			return nil, &httpError{code: http.StatusNotFound}
-		}
-		methodConf := h.mux.methods[uriPath[1:]]
-		if methodConf == nil {
-			// TODO: if the service is known, but the method is not, we should send to the client
-			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
-			return nil, &httpError{code: http.StatusNotFound}
-		}
-		op.restTarget = methodConf.httpRule
-		if op.request.Method != http.MethodPost {
-			mayAllowGet, ok := op.client.protocol.(clientProtocolAllowsGet)
-			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
-			if !allowsGet {
-				return nil, &httpError{
-					code: http.StatusMethodNotAllowed,
-					headers: func(hdrs http.Header) {
-						hdrs.Set("Allow", http.MethodPost)
-					},
-				}
-			}
-			if allowsGet && op.request.Method != http.MethodGet {
-				return nil, &httpError{
-					code: http.StatusMethodNotAllowed,
-					headers: func(hdrs http.Header) {
-						hdrs.Set("Allow", http.MethodGet+","+http.MethodPost)
-					},
-				}
-			}
-		}
-		return methodConf, nil
-	}
 }
 
 type clientProtocolDetails struct {
@@ -489,6 +426,70 @@ func (op *operation) handle() {
 	}
 
 	op.methodConf.handler.ServeHTTP(op.writer, op.request)
+}
+
+func (op *operation) resolveMethod(mux *Mux) error {
+	uriPath := op.request.URL.Path
+	switch op.client.protocol.protocol() {
+	case ProtocolREST:
+		var methods routeMethods
+		op.restTarget, op.restVars, methods = mux.restRoutes.match(uriPath, op.request.Method)
+		if op.restTarget != nil {
+			op.methodConf = op.restTarget.config
+			return nil
+		}
+		if len(methods) == 0 {
+			return &httpError{code: http.StatusNotFound}
+		}
+		var sb strings.Builder
+		for method := range methods {
+			if sb.Len() > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(method)
+		}
+		return &httpError{
+			code: http.StatusMethodNotAllowed,
+			headers: func(hdrs http.Header) {
+				hdrs.Set("Allow", sb.String())
+			},
+		}
+	default:
+		// The other protocols just use the URI path as the method name and don't allow query params
+		if len(uriPath) == 0 || uriPath[0] != '/' {
+			// no starting slash? won't match any known route
+			return &httpError{code: http.StatusNotFound}
+		}
+		methodConf := mux.methods[uriPath[1:]]
+		if methodConf == nil {
+			// TODO: if the service is known, but the method is not, we should send to the client
+			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
+			return &httpError{code: http.StatusNotFound}
+		}
+		op.restTarget = methodConf.httpRule
+		if op.request.Method != http.MethodPost {
+			mayAllowGet, ok := op.client.protocol.(clientProtocolAllowsGet)
+			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
+			if !allowsGet {
+				return &httpError{
+					code: http.StatusMethodNotAllowed,
+					headers: func(hdrs http.Header) {
+						hdrs.Set("Allow", http.MethodPost)
+					},
+				}
+			}
+			if allowsGet && op.request.Method != http.MethodGet {
+				return &httpError{
+					code: http.StatusMethodNotAllowed,
+					headers: func(hdrs http.Header) {
+						hdrs.Set("Allow", http.MethodGet+","+http.MethodPost)
+					},
+				}
+			}
+		}
+		op.methodConf = methodConf
+		return nil
+	}
 }
 
 // reportError handles an error that occurs while setting up the operation. It should not be used
