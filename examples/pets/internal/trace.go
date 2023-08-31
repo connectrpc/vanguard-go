@@ -171,11 +171,14 @@ func (t *traceWriter) traceTrailers() {
 	trailers := http.Header{}
 	for k, v := range t.Header() {
 		if strings.HasPrefix(k, http.TrailerPrefix) {
-			trailers[k] = v
+			trailers[strings.TrimPrefix(k, http.TrailerPrefix)] = v
 		}
 	}
 	for _, k := range t.trailersSnapshot {
-		trailers[k] = t.Header().Values(k)
+		vals := t.Header().Values(k)
+		if len(vals) > 0 {
+			trailers[k] = vals
+		}
 	}
 	traceTrailers(t.trace, trailers)
 }
