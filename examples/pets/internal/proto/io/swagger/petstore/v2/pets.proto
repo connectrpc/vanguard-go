@@ -31,10 +31,12 @@ service PetService {
   }
   rpc FindPetsByTag(TagReq) returns (Pets) {
     option (google.api.http).get = "/pet/findByTags";
+    option (google.api.http).response_body = "pets";
     option idempotency_level = NO_SIDE_EFFECTS;
   }
   rpc FindPetsByStatus(StatusReq) returns (Pets) {
     option (google.api.http).get = "/pet/findByStatus";
+    option (google.api.http).response_body = "pets";
     option idempotency_level = NO_SIDE_EFFECTS;
   }
 }

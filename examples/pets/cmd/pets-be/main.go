@@ -16,6 +16,8 @@ import (
 	"github.com/bufbuild/vanguard-go"
 	"github.com/bufbuild/vanguard-go/examples/pets/internal"
 	"github.com/bufbuild/vanguard-go/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 func main() {
@@ -38,7 +40,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	svr := &http.Server{Handler: internal.TraceHandler(mux.AsHandler())}
+	svr := &http.Server{
+		Addr:    ":http",
+		Handler: h2c.NewHandler(internal.TraceHandler(mux.AsHandler()), &http2.Server{}),
+	}
 
 	signals := make(chan os.Signal)
 	go func() {

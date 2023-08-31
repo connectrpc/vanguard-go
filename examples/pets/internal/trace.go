@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ func TraceHandler(handler http.Handler) http.Handler {
 		}
 		traceRequest(tr, r)
 		r.Body = &traceReader{r: r.Body, trace: tr.traceReq}
+		r = r.WithContext(context.WithValue(r.Context(), traceRequestId{}, reqId))
 		handler.ServeHTTP(&traceWriter{w: w, trace: tr.traceResp}, r)
 	})
 }
@@ -32,8 +34,13 @@ type traceTransport struct {
 	transport http.RoundTripper
 }
 
+type traceRequestId struct{}
+
 func (t traceTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	reqId := id.Add(1)
+	reqId, ok := request.Context().Value(traceRequestId{}).(int64)
+	if !ok {
+		reqId = id.Add(1)
+	}
 	tr := &tracer{reqId: reqId, prefix: "    "}
 	traceRequest(tr, request)
 	request.Body = &traceReader{r: request.Body, trace: tr.traceReq}
@@ -46,7 +53,7 @@ func (t traceTransport) RoundTrip(request *http.Request) (*http.Response, error)
 	traceHeaders(tr.traceResp, resp.Header)
 	resp.Body = &traceReader{
 		r:     resp.Body,
-		trace: tr.traceReq,
+		trace: tr.traceResp,
 		onEnd: func() {
 			traceTrailers(tr.traceResp, resp.Trailer)
 		},

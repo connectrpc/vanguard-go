@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -17,6 +18,8 @@ import (
 	"github.com/bufbuild/vanguard-go"
 	"github.com/bufbuild/vanguard-go/examples/pets/internal"
 	"github.com/bufbuild/vanguard-go/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -27,15 +30,29 @@ func main() {
 		},
 		{
 			Protocols: []vanguard.Protocol{vanguard.ProtocolGRPC},
+			Codecs:    []string{vanguard.CodecProto},
 		},
 		{
 			Protocols: []vanguard.Protocol{vanguard.ProtocolGRPCWeb},
+			Codecs:    []string{vanguard.CodecProto},
 		},
 	}
 	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:30304"})
 	listeners := make([]net.Listener, len(muxes))
 	svrs := make([]*http.Server, len(muxes))
 	for i, mux := range muxes {
+		proxy := proxy
+		if i == 1 {
+			// HACK: for the gRPC one, make sure the proxy uses h2c to talk to gRPC server.
+			clone := *proxy
+			proxy.Transport = &http2.Transport{
+				AllowHTTP: true,
+				DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, network, addr)
+				},
+			}
+			proxy = &clone
+		}
 		err := mux.RegisterServiceByName(proxy, petstorev2connect.PetServiceName)
 		if err != nil {
 			log.Fatal(err)
@@ -45,7 +62,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		svrs[i] = &http.Server{Handler: internal.TraceHandler(mux.AsHandler())}
+		svrs[i] = &http.Server{
+			Addr:    ":http",
+			Handler: h2c.NewHandler(internal.TraceHandler(mux.AsHandler()), &http2.Server{}),
+		}
 	}
 
 	signals := make(chan os.Signal)
