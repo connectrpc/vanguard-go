@@ -329,7 +329,8 @@ func (m *Mux) maybeInit() {
 			CodecJSON:  DefaultJSONCodec,
 		}
 		m.compressionPools = map[string]*compressionPool{
-			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
+			CompressionGzip:     newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
+			CompressionIdentity: nil,
 		}
 		m.methods = map[string]*methodConfig{}
 	})
@@ -468,7 +469,7 @@ var (
 		ProtocolGRPCWeb: {},
 	}
 	defaultCodecs      = map[string]struct{}{CodecProto: {}, CodecJSON: {}}
-	defaultCompressors = map[string]struct{}{CompressionGzip: {}}
+	defaultCompressors = map[string]struct{}{CompressionGzip: {}, CompressionIdentity: {}}
 )
 
 type serviceOptionFunc func(*serviceOptions)
