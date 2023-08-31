@@ -147,12 +147,12 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
 	msg := target.ProtoReflect()
 	var leafField protoreflect.FieldDescriptor
-	for i, field := range op.restTarget.responseBodyFields {
+	for i, field := range op.restTarget.requestBodyFields {
 		if field.Cardinality() != protoreflect.Repeated {
 			msg = msg.Mutable(field).Message()
 			continue
 		}
-		if i != len(op.restTarget.responseBodyFields)-1 {
+		if i != len(op.restTarget.requestBodyFields)-1 {
 			actual := "list"
 			if field.IsMap() {
 				actual = "map"
@@ -225,7 +225,7 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 
 	msg := src.ProtoReflect()
 	var leafField protoreflect.FieldDescriptor
-	for i, field := range op.restTarget.requestBodyFields {
+	for i, field := range op.restTarget.responseBodyFields {
 		if field.Cardinality() != protoreflect.Repeated {
 			msg = msg.Get(field).Message()
 			continue
@@ -344,7 +344,7 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 			msg = msg.Get(field).Message()
 			continue
 		}
-		if i != len(op.restTarget.responseBodyFields)-1 {
+		if i != len(op.restTarget.requestBodyFields)-1 {
 			actual := "list"
 			if field.IsMap() {
 				actual = "map"
