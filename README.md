@@ -19,9 +19,10 @@ There are a handful of key use cases for such middleware:
 
    This middleware can effectively replace the use of [gRPC-Gateway](https://github.com/grpc-ecosystem/grpc-gateway#readme)
    when it's used in-process in a Go server. In particular, this middleware is compatible
-   with Connect RPC handlers, whereas gRPC-Gateway requires the use of gRPC handlers and
-   the `protoc-gen-grpc-gateway` Protobuf plugin. Unlike gRPC-Gateway, this middleware does not require any additional code
-   generation.
+   with _all_ kinds of handlers -- Connect RPC, gRPC, etc. gRPC-Gateway, on the other hand,
+   requires the use of gRPC handlers and both the [gRPC Protobuf plugin](https://pkg.go.dev/google.golang.org/grpc/cmd/protoc-gen-go-grpc)
+   as well as a bespoke [gRPC-Gateway Protobuf plugin](https://pkg.go.dev/github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway).
+   Unlike gRPC-Gateway, this middleware does not require any additional code generation.
 
    Since it does not rely on code generation, Vanguard can be used in dynamic situations,
    where service definitions are loaded from configuration, a schema registry, or via
@@ -117,7 +118,7 @@ if err != nil {
 If not using Connect code generation, these constants may not be available and
 the service names may instead need to be hard-coded.
 ```go
-// And here's one using a gRPC handler.
+// And here's an example using a gRPC handler.
 svr := grpc.NewServer()
 myservicev1.RegisterMyServiceServer(svr, &myServiceImpl{})
 err := vanguardMux.RegisterServiceByName(
@@ -128,6 +129,20 @@ err := vanguardMux.RegisterServiceByName(
 )
 if err != nil {
 	panic(err)
+}
+
+// As an alternative to above: If all services registered with the
+// gRPC server use the same configuration, you can use a loop to
+// register all of them without needing hard-coded service names:
+for name := range svr.GetServiceInfo() {
+	err := vanguardMux.RegisterServiceByName(
+		svr,
+		name,
+		vanguard.WithMaxMessageBufferSize(16*1024*1024),
+	)
+	if err != nil {
+		panic(err)
+	}
 }
 ```
 
