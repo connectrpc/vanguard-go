@@ -68,6 +68,21 @@ const (
 	// LibraryServiceSearchBooksProcedure is the fully-qualified name of the LibraryService's
 	// SearchBooks RPC.
 	LibraryServiceSearchBooksProcedure = "/buf.vanguard.test.v1.LibraryService/SearchBooks"
+	// LibraryServiceMoveBooksProcedure is the fully-qualified name of the LibraryService's MoveBooks
+	// RPC.
+	LibraryServiceMoveBooksProcedure = "/buf.vanguard.test.v1.LibraryService/MoveBooks"
+	// LibraryServiceCheckoutBooksProcedure is the fully-qualified name of the LibraryService's
+	// CheckoutBooks RPC.
+	LibraryServiceCheckoutBooksProcedure = "/buf.vanguard.test.v1.LibraryService/CheckoutBooks"
+	// LibraryServiceReturnBooksProcedure is the fully-qualified name of the LibraryService's
+	// ReturnBooks RPC.
+	LibraryServiceReturnBooksProcedure = "/buf.vanguard.test.v1.LibraryService/ReturnBooks"
+	// LibraryServiceGetCheckoutProcedure is the fully-qualified name of the LibraryService's
+	// GetCheckout RPC.
+	LibraryServiceGetCheckoutProcedure = "/buf.vanguard.test.v1.LibraryService/GetCheckout"
+	// LibraryServiceListCheckoutsProcedure is the fully-qualified name of the LibraryService's
+	// ListCheckouts RPC.
+	LibraryServiceListCheckoutsProcedure = "/buf.vanguard.test.v1.LibraryService/ListCheckouts"
 )
 
 // LibraryServiceClient is a client for the buf.vanguard.test.v1.LibraryService service.
@@ -86,6 +101,11 @@ type LibraryServiceClient interface {
 	DeleteBook(context.Context, *connect.Request[v1.DeleteBookRequest]) (*connect.Response[emptypb.Empty], error)
 	// Search books in a shelf.
 	SearchBooks(context.Context, *connect.Request[v1.SearchBooksRequest]) (*connect.Response[v1.SearchBooksResponse], error)
+	MoveBooks(context.Context, *connect.Request[v1.MoveBooksRequest]) (*connect.Response[v1.MoveBooksResponse], error)
+	CheckoutBooks(context.Context, *connect.Request[v1.CheckoutBooksRequest]) (*connect.Response[v1.Checkout], error)
+	ReturnBooks(context.Context, *connect.Request[v1.ReturnBooksRequest]) (*connect.Response[emptypb.Empty], error)
+	GetCheckout(context.Context, *connect.Request[v1.GetCheckoutRequest]) (*connect.Response[v1.Checkout], error)
+	ListCheckouts(context.Context, *connect.Request[v1.ListCheckoutsRequest]) (*connect.Response[v1.ListCheckoutsResponse], error)
 }
 
 // NewLibraryServiceClient constructs a client for the buf.vanguard.test.v1.LibraryService service.
@@ -135,18 +155,50 @@ func NewLibraryServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
+		moveBooks: connect.NewClient[v1.MoveBooksRequest, v1.MoveBooksResponse](
+			httpClient,
+			baseURL+LibraryServiceMoveBooksProcedure,
+			opts...,
+		),
+		checkoutBooks: connect.NewClient[v1.CheckoutBooksRequest, v1.Checkout](
+			httpClient,
+			baseURL+LibraryServiceCheckoutBooksProcedure,
+			opts...,
+		),
+		returnBooks: connect.NewClient[v1.ReturnBooksRequest, emptypb.Empty](
+			httpClient,
+			baseURL+LibraryServiceReturnBooksProcedure,
+			opts...,
+		),
+		getCheckout: connect.NewClient[v1.GetCheckoutRequest, v1.Checkout](
+			httpClient,
+			baseURL+LibraryServiceGetCheckoutProcedure,
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
+		listCheckouts: connect.NewClient[v1.ListCheckoutsRequest, v1.ListCheckoutsResponse](
+			httpClient,
+			baseURL+LibraryServiceListCheckoutsProcedure,
+			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // libraryServiceClient implements LibraryServiceClient.
 type libraryServiceClient struct {
-	getBook     *connect.Client[v1.GetBookRequest, v1.Book]
-	createBook  *connect.Client[v1.CreateBookRequest, v1.Book]
-	listBooks   *connect.Client[v1.ListBooksRequest, v1.ListBooksResponse]
-	createShelf *connect.Client[v1.CreateShelfRequest, v1.Shelf]
-	updateBook  *connect.Client[v1.UpdateBookRequest, v1.Book]
-	deleteBook  *connect.Client[v1.DeleteBookRequest, emptypb.Empty]
-	searchBooks *connect.Client[v1.SearchBooksRequest, v1.SearchBooksResponse]
+	getBook       *connect.Client[v1.GetBookRequest, v1.Book]
+	createBook    *connect.Client[v1.CreateBookRequest, v1.Book]
+	listBooks     *connect.Client[v1.ListBooksRequest, v1.ListBooksResponse]
+	createShelf   *connect.Client[v1.CreateShelfRequest, v1.Shelf]
+	updateBook    *connect.Client[v1.UpdateBookRequest, v1.Book]
+	deleteBook    *connect.Client[v1.DeleteBookRequest, emptypb.Empty]
+	searchBooks   *connect.Client[v1.SearchBooksRequest, v1.SearchBooksResponse]
+	moveBooks     *connect.Client[v1.MoveBooksRequest, v1.MoveBooksResponse]
+	checkoutBooks *connect.Client[v1.CheckoutBooksRequest, v1.Checkout]
+	returnBooks   *connect.Client[v1.ReturnBooksRequest, emptypb.Empty]
+	getCheckout   *connect.Client[v1.GetCheckoutRequest, v1.Checkout]
+	listCheckouts *connect.Client[v1.ListCheckoutsRequest, v1.ListCheckoutsResponse]
 }
 
 // GetBook calls buf.vanguard.test.v1.LibraryService.GetBook.
@@ -184,6 +236,31 @@ func (c *libraryServiceClient) SearchBooks(ctx context.Context, req *connect.Req
 	return c.searchBooks.CallUnary(ctx, req)
 }
 
+// MoveBooks calls buf.vanguard.test.v1.LibraryService.MoveBooks.
+func (c *libraryServiceClient) MoveBooks(ctx context.Context, req *connect.Request[v1.MoveBooksRequest]) (*connect.Response[v1.MoveBooksResponse], error) {
+	return c.moveBooks.CallUnary(ctx, req)
+}
+
+// CheckoutBooks calls buf.vanguard.test.v1.LibraryService.CheckoutBooks.
+func (c *libraryServiceClient) CheckoutBooks(ctx context.Context, req *connect.Request[v1.CheckoutBooksRequest]) (*connect.Response[v1.Checkout], error) {
+	return c.checkoutBooks.CallUnary(ctx, req)
+}
+
+// ReturnBooks calls buf.vanguard.test.v1.LibraryService.ReturnBooks.
+func (c *libraryServiceClient) ReturnBooks(ctx context.Context, req *connect.Request[v1.ReturnBooksRequest]) (*connect.Response[emptypb.Empty], error) {
+	return c.returnBooks.CallUnary(ctx, req)
+}
+
+// GetCheckout calls buf.vanguard.test.v1.LibraryService.GetCheckout.
+func (c *libraryServiceClient) GetCheckout(ctx context.Context, req *connect.Request[v1.GetCheckoutRequest]) (*connect.Response[v1.Checkout], error) {
+	return c.getCheckout.CallUnary(ctx, req)
+}
+
+// ListCheckouts calls buf.vanguard.test.v1.LibraryService.ListCheckouts.
+func (c *libraryServiceClient) ListCheckouts(ctx context.Context, req *connect.Request[v1.ListCheckoutsRequest]) (*connect.Response[v1.ListCheckoutsResponse], error) {
+	return c.listCheckouts.CallUnary(ctx, req)
+}
+
 // LibraryServiceHandler is an implementation of the buf.vanguard.test.v1.LibraryService service.
 type LibraryServiceHandler interface {
 	// Gets a book.
@@ -200,6 +277,11 @@ type LibraryServiceHandler interface {
 	DeleteBook(context.Context, *connect.Request[v1.DeleteBookRequest]) (*connect.Response[emptypb.Empty], error)
 	// Search books in a shelf.
 	SearchBooks(context.Context, *connect.Request[v1.SearchBooksRequest]) (*connect.Response[v1.SearchBooksResponse], error)
+	MoveBooks(context.Context, *connect.Request[v1.MoveBooksRequest]) (*connect.Response[v1.MoveBooksResponse], error)
+	CheckoutBooks(context.Context, *connect.Request[v1.CheckoutBooksRequest]) (*connect.Response[v1.Checkout], error)
+	ReturnBooks(context.Context, *connect.Request[v1.ReturnBooksRequest]) (*connect.Response[emptypb.Empty], error)
+	GetCheckout(context.Context, *connect.Request[v1.GetCheckoutRequest]) (*connect.Response[v1.Checkout], error)
+	ListCheckouts(context.Context, *connect.Request[v1.ListCheckoutsRequest]) (*connect.Response[v1.ListCheckoutsResponse], error)
 }
 
 // NewLibraryServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -245,6 +327,33 @@ func NewLibraryServiceHandler(svc LibraryServiceHandler, opts ...connect.Handler
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
+	libraryServiceMoveBooksHandler := connect.NewUnaryHandler(
+		LibraryServiceMoveBooksProcedure,
+		svc.MoveBooks,
+		opts...,
+	)
+	libraryServiceCheckoutBooksHandler := connect.NewUnaryHandler(
+		LibraryServiceCheckoutBooksProcedure,
+		svc.CheckoutBooks,
+		opts...,
+	)
+	libraryServiceReturnBooksHandler := connect.NewUnaryHandler(
+		LibraryServiceReturnBooksProcedure,
+		svc.ReturnBooks,
+		opts...,
+	)
+	libraryServiceGetCheckoutHandler := connect.NewUnaryHandler(
+		LibraryServiceGetCheckoutProcedure,
+		svc.GetCheckout,
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
+	libraryServiceListCheckoutsHandler := connect.NewUnaryHandler(
+		LibraryServiceListCheckoutsProcedure,
+		svc.ListCheckouts,
+		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/buf.vanguard.test.v1.LibraryService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case LibraryServiceGetBookProcedure:
@@ -261,6 +370,16 @@ func NewLibraryServiceHandler(svc LibraryServiceHandler, opts ...connect.Handler
 			libraryServiceDeleteBookHandler.ServeHTTP(w, r)
 		case LibraryServiceSearchBooksProcedure:
 			libraryServiceSearchBooksHandler.ServeHTTP(w, r)
+		case LibraryServiceMoveBooksProcedure:
+			libraryServiceMoveBooksHandler.ServeHTTP(w, r)
+		case LibraryServiceCheckoutBooksProcedure:
+			libraryServiceCheckoutBooksHandler.ServeHTTP(w, r)
+		case LibraryServiceReturnBooksProcedure:
+			libraryServiceReturnBooksHandler.ServeHTTP(w, r)
+		case LibraryServiceGetCheckoutProcedure:
+			libraryServiceGetCheckoutHandler.ServeHTTP(w, r)
+		case LibraryServiceListCheckoutsProcedure:
+			libraryServiceListCheckoutsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -296,4 +415,24 @@ func (UnimplementedLibraryServiceHandler) DeleteBook(context.Context, *connect.R
 
 func (UnimplementedLibraryServiceHandler) SearchBooks(context.Context, *connect.Request[v1.SearchBooksRequest]) (*connect.Response[v1.SearchBooksResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.LibraryService.SearchBooks is not implemented"))
+}
+
+func (UnimplementedLibraryServiceHandler) MoveBooks(context.Context, *connect.Request[v1.MoveBooksRequest]) (*connect.Response[v1.MoveBooksResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.LibraryService.MoveBooks is not implemented"))
+}
+
+func (UnimplementedLibraryServiceHandler) CheckoutBooks(context.Context, *connect.Request[v1.CheckoutBooksRequest]) (*connect.Response[v1.Checkout], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.LibraryService.CheckoutBooks is not implemented"))
+}
+
+func (UnimplementedLibraryServiceHandler) ReturnBooks(context.Context, *connect.Request[v1.ReturnBooksRequest]) (*connect.Response[emptypb.Empty], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.LibraryService.ReturnBooks is not implemented"))
+}
+
+func (UnimplementedLibraryServiceHandler) GetCheckout(context.Context, *connect.Request[v1.GetCheckoutRequest]) (*connect.Response[v1.Checkout], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.LibraryService.GetCheckout is not implemented"))
+}
+
+func (UnimplementedLibraryServiceHandler) ListCheckouts(context.Context, *connect.Request[v1.ListCheckoutsRequest]) (*connect.Response[v1.ListCheckoutsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("buf.vanguard.test.v1.LibraryService.ListCheckouts is not implemented"))
 }
