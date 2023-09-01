@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -1296,9 +1297,10 @@ func BenchmarkServeHTTP(b *testing.B) {
 		Parent: "shelves/456",
 		BookId: "123",
 		Book: &testv1.Book{
-			CreateTime: timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
-			Title:      "Do Androids Dream of Electric Sheep?",
-			Author:     "Philip K. Dick",
+			CreateTime:  timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
+			Title:       "Lorem ipsum dolor sit amet",
+			Author:      "Lorem ipsum",
+			Description: strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit. ", 100),
 		},
 		RequestId: "abc",
 	}
@@ -1310,10 +1312,11 @@ func BenchmarkServeHTTP(b *testing.B) {
 	rspMsg := &testv1.Book{
 		Name:        "books/123",
 		Parent:      "shelves/456",
-		CreateTime:  timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
-		Title:       "Do Androids Dream of Electric Sheep?",
-		Author:      "Philip K. Dick",
-		Description: "Have you seen Blade Runner?",
+		CreateTime:  reqMsg.Book.CreateTime,
+		UpdateTime:  timestamppb.New(time.Date(2023, 9, 1, 0, 0, 0, 0, time.UTC)),
+		Title:       reqMsg.Book.Title,
+		Author:      reqMsg.Book.Author,
+		Description: reqMsg.Book.Description,
 		Labels: map[string]string{
 			"genre": "science fiction",
 		},
