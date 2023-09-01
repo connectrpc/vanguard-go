@@ -148,7 +148,9 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	if op.server.protocol.protocol() == ProtocolREST {
 		// REST always uses JSON.
-		// TODO: allow non-JSON encodings with REST? Would require registering content-types with codecs.
+		// TODO: Allow non-JSON encodings with REST? Would require registering content-types with codecs.
+		//       Would also require figuring out how to (un)marshal things other than messages when a body
+		//       path indicates a non-message field (do-able with JSON, but maybe non-starter with proto?)
 		//
 		// NB: This is fine to set even if a custom content-type is used via
 		//     the use of google.api.HttpBody. The actual content-type and body
@@ -169,7 +171,8 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	// Now we know enough to handle the request.
-	if op.client.protocol.protocol() == op.server.protocol.protocol() &&
+	if op.methodConf.requestHook == nil && op.methodConf.responseHook == nil &&
+		op.client.protocol.protocol() == op.server.protocol.protocol() &&
 		op.client.codec.Name() == op.server.codec.Name() &&
 		(cannotDecompressRequest || op.client.reqCompression.Name() == op.server.reqCompression.Name()) {
 		// No transformation needed. But we do  need to restore the original headers first
@@ -186,7 +189,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	op.handle()
+	op.handle() //nolint:contextcheck
 }
 
 type clientProtocolDetails struct {
@@ -349,7 +352,7 @@ func (op *operation) handle() {
 	// even if body encoding uses same content type, we can't treat them as the same
 	// (which means re-using encoded data) if either side needs to prep the data first
 	sameRequestCodec := sameCodec && !op.clientReqNeedsPrep && !op.serverReqNeedsPrep
-	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine
+	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine || op.methodConf.requestHook != nil
 
 	reqMsg := message{
 		sameCompression: sameRequestCompression,
@@ -366,23 +369,32 @@ func (op *operation) handle() {
 		reqMsg.msg = messageType.New().Interface()
 	}
 
-	var skipBody bool
-	if serverRequestBuilder != nil { //nolint:nestif
-		if requireMessageForRequestLine {
-			if err := op.readRequestMessage(nil, op.request.Body, &reqMsg); err != nil {
-				if errors.Is(err, io.EOF) {
-					// okay for the first message: means empty message data
-					reqMsg.stage = stageRead
-				} else {
-					op.reportError(err)
-					return
-				}
-			}
-			if err := reqMsg.advanceToStage(op, stageDecoded); err != nil {
+	if (op.methodConf.requestHook != nil && op.methodConf.streamType == connect.StreamTypeUnary) ||
+		requireMessageForRequestLine {
+		// Go ahead and process first request message
+		switch err := op.readRequestMessage(nil, op.request.Body, &reqMsg); {
+		case errors.Is(err, io.EOF):
+			// okay for the first message: means empty message data
+			reqMsg.stage = stageRead
+		case err != nil:
+			op.reportError(err)
+			return
+		}
+		if err := reqMsg.advanceToStage(op, stageDecoded); err != nil {
+			op.reportError(err)
+			return
+		}
+		if op.methodConf.requestHook != nil {
+			err := op.methodConf.requestHook(op.request.Context(), reqMsg.msg)
+			if err != nil {
 				op.reportError(err)
 				return
 			}
 		}
+	}
+
+	var skipBody bool
+	if serverRequestBuilder != nil {
 		var hasBody bool
 		var err error
 		op.request.URL.Path, op.request.URL.RawQuery, op.request.Method, hasBody, err =
@@ -754,44 +766,56 @@ func (tr *transformingReader) Read(data []byte) (n int, err error) {
 	if tr.err != nil {
 		return 0, tr.err
 	}
-	if tr.buffer != nil {
-		n, err := tr.buffer.Read(data)
-		if n > 0 {
-			return n, err
+
+	for {
+		if len(data) < tr.envRemain {
+			copy(data, tr.env[envelopeLen-tr.envRemain:])
+			tr.envRemain -= len(data)
+			return len(data), nil
 		}
-		// otherwise EOF, fall through
-	}
-	if err := tr.rw.op.readRequestMessage(tr.rw, tr.r, tr.msg); err != nil {
-		// If this is the first request message, the error is EOF, and there's a body
-		// preparer, we'll allow it and let the preparer produce a message from zero
-		// request bytes.
-		if !tr.consumedFirst && errors.Is(err, io.EOF) && tr.rw.op.clientReqNeedsPrep {
-			tr.msg.stage = stageRead
-		} else {
+		var offset int
+		if tr.envRemain > 0 {
+			copy(data, tr.env[envelopeLen-tr.envRemain:])
+			offset = tr.envRemain
+			tr.envRemain = 0
+		}
+		var err error
+		if len(data) > offset && tr.buffer != nil {
+			n, err = tr.buffer.Read(data[offset:])
+		}
+		if offset+n > 0 {
+			return offset + n, err
+		}
+
+		// If we get here, there was nothing in tr.buffer to read, so
+		// we need to prepare the next message and try again.
+
+		if err := tr.rw.op.readRequestMessage(tr.rw, tr.r, tr.msg); err != nil {
+			// If this is the first request message, the error is EOF, and there's a body
+			// preparer, we'll allow it and let the preparer produce a message from zero
+			// request bytes.
+			if !tr.consumedFirst && errors.Is(err, io.EOF) && tr.rw.op.clientReqNeedsPrep {
+				tr.msg.stage = stageRead
+			} else {
+				tr.err = err
+				return 0, err
+			}
+		}
+		if tr.rw.op.methodConf.requestHook != nil {
+			if err := tr.msg.advanceToStage(tr.rw.op, stageDecoded); err != nil {
+				tr.err = err
+				return 0, err
+			}
+			if err := tr.rw.op.methodConf.requestHook(tr.rw.op.request.Context(), tr.msg.msg); err != nil {
+				tr.rw.reportError(err)
+				return 0, context.Canceled
+			}
+		}
+		if err := tr.prepareMessage(); err != nil {
 			tr.err = err
 			return 0, err
 		}
 	}
-	if err := tr.prepareMessage(); err != nil {
-		tr.err = err
-		return 0, err
-	}
-
-	if len(data) < tr.envRemain {
-		copy(data, tr.env[envelopeLen-tr.envRemain:])
-		tr.envRemain -= len(data)
-		return len(data), nil
-	}
-	var offset int
-	if tr.envRemain > 0 {
-		copy(data, tr.env[envelopeLen-tr.envRemain:])
-		offset = tr.envRemain
-		tr.envRemain = 0
-	}
-	if len(data) > offset {
-		n, err = tr.buffer.Read(data[offset:])
-	}
-	return offset + n, err
 }
 
 func (tr *transformingReader) Close() error {
@@ -943,10 +967,11 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	// even if body encoding uses same content type, we can't treat them as the same
 	// (which means re-using encoded data) if either side needs to prep the data first
 	sameResponseCodec := sameCodec && !rw.op.clientRespNeedsPrep && !rw.op.serverRespNeedsPrep
+	mustDecodeResponse := !sameResponseCodec || rw.op.methodConf.responseHook != nil
 
 	respMsg := message{sameCompression: true, sameCodec: sameResponseCodec}
 
-	if !sameResponseCodec {
+	if mustDecodeResponse {
 		// We will have to decode and re-encode, so we need the message type.
 		messageType, err := rw.op.methodConf.resolver.FindMessageByName(rw.op.methodConf.descriptor.Output().FullName())
 		if err != nil {
@@ -973,7 +998,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	}
 
 	// Now we can define the transformed response body.
-	if sameResponseCodec {
+	if sameResponseCodec && !mustDecodeResponse {
 		// we do not need to decompress or decode
 		rw.w = &envelopingWriter{rw: rw, w: delegate}
 	} else {
@@ -1472,6 +1497,14 @@ func (tw *transformingWriter) flushMessage() error {
 
 	// We've finished reading the message, so we can manually set the stage
 	tw.msg.stage = stageRead
+	if tw.rw.op.methodConf.responseHook != nil {
+		if err := tw.msg.advanceToStage(tw.rw.op, stageDecoded); err != nil {
+			return err
+		}
+		if err := tw.rw.op.methodConf.responseHook(tw.rw.op.request.Context(), tw.msg.msg); err != nil {
+			return err
+		}
+	}
 	if err := tw.msg.advanceToStage(tw.rw.op, stageSend); err != nil {
 		return err
 	}

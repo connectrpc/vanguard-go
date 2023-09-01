@@ -15,6 +15,7 @@
 package vanguard
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -124,6 +126,33 @@ type Mux struct {
 	// when a service is registered, this one is used. If nil, the default resolver
 	// will be [protoregistry.GlobalTypes].
 	TypeResolver TypeResolver
+	// RequestHook is an optional hook that, if non-nil, will be called for each
+	// request message that flows through the middleware. If it returns a non-nil
+	// error, the operation will fail. The returned error should use connect.NewError
+	// to provide RPC error information (code and details); otherwise the RPC client
+	// will simply see an "unknown" error code and the returned error's message.
+	//
+	// For client and bidirectional streams, this is called for each request in a
+	// stream. If it returns an error, the stream will be closed with an error sent
+	// back to the caller, and the server will see a context.Canceled error trying
+	// to read more from the request stream or write a response.
+	RequestHook func(context.Context, proto.Message) error
+	// ResponseHook is an optional hook that, if non-nil, will be called for each
+	// response message that flows through the middleware. If it returns a non-nil
+	// error, the operation will fail. The returned error should use connect.NewError
+	// to provide RPC error information (code and details); otherwise the RPC client
+	// will simply see an "unknown" error code and the returned error's message.
+	//
+	// For server and bidirectional streams, this is called for each response in a
+	// stream. If it returns an error, the stream will be closed with an error sent
+	// back to the caller, and the server will see receive the same error trying to
+	// read more request data or write more to the response stream.
+	ResponseHook func(context.Context, proto.Message) error
+
+	// TODO: Do we want other hooks for observability, like operation start and end?
+	//       If so, should we add parameter to above hook functions so they know
+	//       which operation the message is associated with (like an int64 ID that
+	//       is unique per operation)?
 
 	init             sync.Once
 	codecImpls       map[string]func(TypeResolver) Codec
@@ -227,6 +256,13 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		svcOpts.maxMsgBufferBytes = DefaultMaxMessageBufferBytes
 	}
 
+	if svcOpts.requestHook == nil {
+		svcOpts.requestHook = m.RequestHook
+	}
+	if svcOpts.responseHook == nil {
+		svcOpts.responseHook = m.ResponseHook
+	}
+
 	if svcOpts.resolver == nil {
 		svcOpts.resolver = m.TypeResolver
 		if svcOpts.resolver == nil {
@@ -289,6 +325,8 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 		compressorNames:   opts.compressorNames,
 		maxMsgBufferBytes: opts.maxMsgBufferBytes,
 		maxGetURLBytes:    opts.maxGetURLBytes,
+		requestHook:       opts.requestHook,
+		responseHook:      opts.responseHook,
 	}
 	m.methods[methodPath] = methodConf
 
@@ -449,6 +487,26 @@ func WithMaxGetURLBytes(limit uint32) ServiceOption {
 	})
 }
 
+// WithRequestHook sets the given hook for examining request messages.
+// This overrides any hook defined on the Mux.
+//
+// See Mux.RequestHook for more information.
+func WithRequestHook(hook func(context.Context, proto.Message) error) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.requestHook = hook
+	})
+}
+
+// WithResponseHook sets the given hook for examining response messages.
+// This overrides any hook defined on the Mux.
+//
+// See Mux.ResponseHook for more information.
+func WithResponseHook(hook func(context.Context, proto.Message) error) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.responseHook = hook
+	})
+}
+
 // TypeResolver can resolve message and extension types and is used to instantiate
 // messages as needed for the middleware to serialize/de-serialize request and
 // response payloads.
@@ -484,6 +542,7 @@ type serviceOptions struct {
 	preferredCodec              string
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
+	requestHook, responseHook   func(context.Context, proto.Message) error
 }
 
 type methodConfig struct {
@@ -498,6 +557,7 @@ type methodConfig struct {
 	httpRule                    *routeTarget // First HTTP rule, if any.
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
+	requestHook, responseHook   func(context.Context, proto.Message) error
 }
 
 // computeSet returns a resolved set of values of type T, preferring the given values if

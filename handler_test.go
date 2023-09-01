@@ -705,22 +705,16 @@ func TestHandler_PassThrough(t *testing.T) {
 						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "xyz1.foo",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "xyz2.foo",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz2.foo"},
 					}},
 					{in: &testMsgIn{
 						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "test.test",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "test.test"},
 					}},
 				},
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
@@ -740,9 +734,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "xyz1.foo",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),

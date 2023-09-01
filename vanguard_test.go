@@ -37,6 +37,7 @@ import (
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 //nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
@@ -646,6 +647,415 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
 			_, err = client.GetBook(context.Background(), req)
 			require.ErrorContains(t, err, "server should only see POST; instead got GET")
+		})
+	}
+}
+
+//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
+func TestMux_Hooks(t *testing.T) {
+	t.Parallel()
+	// NB: These cases are identical to the pass-through cases, but should
+	// not just pass through when a request or response hook is configured.
+
+	var interceptor testInterceptor
+	_, contentHandler := testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	)
+
+	var reqMsgs sync.Map
+	var respMsgs sync.Map
+	type testCaseName struct{}
+	hookFactory := func(msgsRecorded *sync.Map) func(context.Context, proto.Message) error {
+		return func(ctx context.Context, msg proto.Message) error {
+			name, ok := ctx.Value(testCaseName{}).(string)
+			if !ok {
+				return errors.New("no testCaseName in context")
+			}
+			var slice []proto.Message
+			val, exists := msgsRecorded.Load(name)
+			if exists {
+				var isSlice bool
+				slice, isSlice = val.([]proto.Message)
+				if !isSlice {
+					return fmt.Errorf("val in map is wrong type: %T", val)
+				}
+			}
+			// must make defensive copy since middleware re-uses same message
+			// for each value in the stream
+			msg = proto.Clone(msg)
+			slice = append(slice, msg)
+			msgsRecorded.Store(name, slice)
+			return nil
+		}
+	}
+
+	svrCases := []struct {
+		name     string
+		reqHook  bool
+		respHook bool
+		svr      *httptest.Server
+	}{
+		{
+			name:    "request_hook",
+			reqHook: true,
+		},
+		{
+			name:     "response_hook",
+			respHook: true,
+		},
+		{
+			name:     "both_hooks",
+			reqHook:  true,
+			respHook: true,
+		},
+	}
+	for i := range svrCases {
+		svrCase := &svrCases[i]
+		mux := &Mux{}
+		if svrCase.reqHook {
+			mux.RequestHook = hookFactory(&reqMsgs)
+		}
+		if svrCase.respHook {
+			mux.ResponseHook = hookFactory(&respMsgs)
+		}
+		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
+		handler := mux.AsHandler()
+		// propagate test name into context so that request and response hooks can access it
+		setContextHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
+			testName := request.Header.Get("Test")
+			ctx := context.WithValue(request.Context(), testCaseName{}, testName)
+			handler.ServeHTTP(respWriter, request.WithContext(ctx))
+		})
+		// Use HTTP/2 so we can test a bidi stream.
+		server := httptest.NewUnstartedServer(setContextHandler)
+		server.EnableHTTP2 = true
+		server.StartTLS()
+		t.Cleanup(server.Close)
+
+		svrCase.svr = server
+	}
+
+	ctx := context.Background()
+
+	type connectClientCase struct {
+		name string
+		opts []connect.ClientOption
+	}
+	compressionOptions := []connectClientCase{
+		{
+			name: "identity",
+		},
+		{
+			name: "gzip",
+			opts: []connect.ClientOption{connect.WithSendCompression(CompressionGzip)},
+		},
+	}
+	encodingOptions := []connectClientCase{
+		{
+			name: "proto",
+		},
+		{
+			name: "json",
+			opts: []connect.ClientOption{connect.WithProtoJSON()},
+		},
+	}
+	protocolOptions := []connectClientCase{
+		{
+			name: "connect",
+		},
+		{
+			name: "grpc",
+			opts: []connect.ClientOption{connect.WithGRPC()},
+		},
+		{
+			name: "grpc-web",
+			opts: []connect.ClientOption{connect.WithGRPCWeb()},
+		},
+	}
+	testRequests := []struct {
+		name   string
+		invoke func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error)
+		stream testStream
+	}{
+		{
+			name: "unary success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.IndexRequest{Page: "abcdef"},
+					}},
+					{out: &testMsgOut{
+						msg: &httpbody.HttpBody{
+							ContentType: "text/html",
+							Data:        ([]byte)(`<html><title>Foo</title><body><h1>Foo</h1></html>`),
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "unary fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.IndexRequest{Page: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "client stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &emptypb.Empty{},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "client stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "server stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "server stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "bidi stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz2.foo"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "test.test"},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "bidi stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+	}
+
+	checkHookResults := func(t *testing.T, expected []proto.Message, actualsMap *sync.Map) {
+		t.Helper()
+		// Make sure the hook recorded exactly the expected messages.
+		var slice []proto.Message
+		vals, exists := actualsMap.LoadAndDelete(t.Name())
+		if exists {
+			var ok bool
+			slice, ok = vals.([]proto.Message)
+			require.True(t, ok)
+		}
+		require.Len(t, slice, len(expected))
+		for i, msg := range slice {
+			want := expected[i]
+			assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
+		}
+	}
+
+	for _, protocolCase := range protocolOptions {
+		protocolCase := protocolCase
+		t.Run(protocolCase.name, func(t *testing.T) {
+			t.Parallel()
+			for _, encodingCase := range encodingOptions {
+				encodingCase := encodingCase
+				t.Run(encodingCase.name, func(t *testing.T) {
+					t.Parallel()
+					for _, compressionCase := range compressionOptions {
+						compressionCase := compressionCase
+						t.Run(compressionCase.name, func(t *testing.T) {
+							t.Parallel()
+							for _, testReq := range testRequests {
+								testReq := testReq
+								t.Run(testReq.name, func(t *testing.T) {
+									t.Parallel()
+									for _, svrCase := range svrCases {
+										svrCase := svrCase
+										t.Run(svrCase.name, func(t *testing.T) {
+											clientOptions := make([]connect.ClientOption, 0, 4)
+											clientOptions = append(clientOptions, protocolCase.opts...)
+											clientOptions = append(clientOptions, encodingCase.opts...)
+											clientOptions = append(clientOptions, compressionCase.opts...)
+											client := testv1connect.NewContentServiceClient(svrCase.svr.Client(), svrCase.svr.URL, clientOptions...)
+
+											runRPCTestCase(t, &interceptor, client, testReq.invoke, testReq.stream)
+
+											if svrCase.reqHook {
+												var reqs []proto.Message
+												for _, msg := range testReq.stream.msgs {
+													if msg.in != nil {
+														reqs = append(reqs, msg.in.msg)
+													}
+												}
+												checkHookResults(t, reqs, &reqMsgs)
+											}
+											if svrCase.respHook {
+												var resps []proto.Message
+												for _, msg := range testReq.stream.msgs {
+													if msg.out != nil && msg.out.msg != nil {
+														resps = append(resps, msg.out.msg)
+													}
+												}
+												checkHookResults(t, resps, &respMsgs)
+											}
+										})
+									}
+								})
+							}
+						})
+					}
+				})
+			}
 		})
 	}
 }
