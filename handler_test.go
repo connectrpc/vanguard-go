@@ -29,7 +29,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -516,10 +515,7 @@ func TestHandler_PassThrough(t *testing.T) {
 		},
 		{
 			name: "json",
-			// NB: connect has a JSON codec implementation, but it is not exposed or
-			//     selectable from the client; it is only available for handlers when
-			//     handling requests that use this format ¯\_(ツ)_/¯
-			opts: []connect.ClientOption{connect.WithCodec(jsonConnectCodec{})},
+			opts: []connect.ClientOption{connect.WithProtoJSON()},
 		},
 	}
 	protocolOptions := []connectClientCase{
@@ -1224,26 +1220,4 @@ func rot13(data []byte) {
 		}
 		data[index] = char
 	}
-}
-
-type jsonConnectCodec struct{}
-
-func (j jsonConnectCodec) Name() string {
-	return CodecJSON
-}
-
-func (j jsonConnectCodec) Marshal(a any) ([]byte, error) {
-	msg, ok := a.(proto.Message)
-	if !ok {
-		return nil, errors.New("not a message")
-	}
-	return protojson.Marshal(msg)
-}
-
-func (j jsonConnectCodec) Unmarshal(bytes []byte, a any) error {
-	msg, ok := a.(proto.Message)
-	if !ok {
-		return errors.New("not a message")
-	}
-	return protojson.Unmarshal(bytes, msg)
 }
