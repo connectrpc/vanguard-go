@@ -877,6 +877,15 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		rw.reportError(err)
 		return
 	}
+	// snapshot trailer keys
+	trailerKeys := parseMultiHeader(rw.Header().Values("Trailer"))
+	if len(trailerKeys) > 0 {
+		respMeta.pendingTrailerKeys = make(headerKeys, len(trailerKeys))
+		for _, k := range trailerKeys {
+			respMeta.pendingTrailerKeys.add(k)
+		}
+		rw.Header().Del("Trailer")
+	}
 
 	// Remove other headers that might mess up the next leg
 	rw.Header().Del("Content-Encoding")
@@ -1081,7 +1090,7 @@ func (rw *responseWriter) close() {
 		return
 	}
 	// try to get end from trailers
-	trailer := httpExtractTrailers(rw.Header())
+	trailer := httpExtractTrailers(rw.Header(), rw.respMeta.pendingTrailerKeys)
 	end, err := rw.op.server.protocol.extractEndFromTrailers(rw.op, trailer)
 	if err != nil {
 		rw.reportError(err)

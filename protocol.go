@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -345,11 +346,12 @@ type requestMeta struct {
 // responseMeta represents the metadata found in response headers that are
 // protocol-specific.
 type responseMeta struct {
-	end               *responseEnd
-	codec             string
-	compression       string
-	acceptCompression []string
-	pendingTrailers   http.Header
+	end                *responseEnd
+	codec              string
+	compression        string
+	acceptCompression  []string
+	pendingTrailers    http.Header
+	pendingTrailerKeys headerKeys
 }
 
 // responseEnd is a protocol-agnostic representation of the disposition
@@ -372,6 +374,17 @@ type responseEnd struct {
 	wasCompressed bool
 }
 
+type headerKeys map[string]struct{}
+
+func (keys headerKeys) add(k string) {
+	keys[textproto.CanonicalMIMEHeaderKey(k)] = struct{}{}
+}
+
+func (keys headerKeys) contains(k string) bool {
+	_, contains := keys[textproto.CanonicalMIMEHeaderKey(k)]
+	return contains
+}
+
 // parseMultiHeader parses headers that allow multiple values. It
 // supports the values being supplied in a single header separated
 // by commas, multiple headers, or a combination thereof.
@@ -389,13 +402,13 @@ func parseMultiHeader(vals []string) []string {
 			pos := strings.IndexByte(val, ',')
 			if pos == -1 {
 				if val != "" {
-					result = append(result, val)
+					result = append(result, strings.TrimSpace(val))
 				}
 				break
 			}
 			item := val[:pos]
 			if item != "" {
-				result = append(result, item)
+				result = append(result, strings.TrimSpace(item))
 			}
 			val = val[pos+1:]
 		}
