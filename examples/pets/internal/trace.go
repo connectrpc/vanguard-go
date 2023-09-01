@@ -68,7 +68,11 @@ func traceRequest(tr *tracer, req *http.Request) {
 	if req.URL.RawQuery != "" {
 		queryString = "?" + req.URL.RawQuery
 	}
-	tr.traceReq("%s http://%s%s%s %s", req.Method, req.Host, req.URL.Path, queryString, req.Proto)
+	scheme := req.URL.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	tr.traceReq("%s %s://%s%s%s %s", req.Method, scheme, req.Host, req.URL.Path, queryString, req.Proto)
 	traceHeaders(tr.traceReq, req.Header)
 	tr.traceReq("")
 }

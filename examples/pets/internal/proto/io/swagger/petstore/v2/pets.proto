@@ -30,6 +30,7 @@ service PetService {
     option (google.api.http).body = "*";
   }
   rpc FindPetsByTag(TagReq) returns (Pets) {
+    option deprecated = true;
     option (google.api.http).get = "/pet/findByTags";
     option (google.api.http).response_body = "pets";
     option idempotency_level = NO_SIDE_EFFECTS;

@@ -63,6 +63,7 @@ type PetServiceClient interface {
 	UploadFile(context.Context, *connect.Request[v2.UploadFileReq]) (*connect.Response[v2.ApiResponse], error)
 	AddPet(context.Context, *connect.Request[v2.Pet]) (*connect.Response[v2.Pet], error)
 	UpdatePet(context.Context, *connect.Request[v2.Pet]) (*connect.Response[v2.Pet], error)
+	// Deprecated: do not use.
 	FindPetsByTag(context.Context, *connect.Request[v2.TagReq]) (*connect.Response[v2.Pets], error)
 	FindPetsByStatus(context.Context, *connect.Request[v2.StatusReq]) (*connect.Response[v2.Pets], error)
 }
@@ -166,6 +167,8 @@ func (c *petServiceClient) UpdatePet(ctx context.Context, req *connect.Request[v
 }
 
 // FindPetsByTag calls io.swagger.petstore.v2.PetService.FindPetsByTag.
+//
+// Deprecated: do not use.
 func (c *petServiceClient) FindPetsByTag(ctx context.Context, req *connect.Request[v2.TagReq]) (*connect.Response[v2.Pets], error) {
 	return c.findPetsByTag.CallUnary(ctx, req)
 }
@@ -183,6 +186,7 @@ type PetServiceHandler interface {
 	UploadFile(context.Context, *connect.Request[v2.UploadFileReq]) (*connect.Response[v2.ApiResponse], error)
 	AddPet(context.Context, *connect.Request[v2.Pet]) (*connect.Response[v2.Pet], error)
 	UpdatePet(context.Context, *connect.Request[v2.Pet]) (*connect.Response[v2.Pet], error)
+	// Deprecated: do not use.
 	FindPetsByTag(context.Context, *connect.Request[v2.TagReq]) (*connect.Response[v2.Pets], error)
 	FindPetsByStatus(context.Context, *connect.Request[v2.StatusReq]) (*connect.Response[v2.Pets], error)
 }
