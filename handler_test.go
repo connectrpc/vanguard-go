@@ -1338,7 +1338,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		}
 	}
 
-	b.Run("PassThroughGRPC", func(b *testing.B) {
+	b.Run("gRPC_proto_gzip/gRPC_proto_gzip/PassThrough", func(b *testing.B) {
 		reqGRPCBody := envelopePayload(1, reqMsgProtoComp)
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
@@ -1369,20 +1369,22 @@ func BenchmarkServeHTTP(b *testing.B) {
 
 		b.StartTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			req := req.Clone(ctx)
-			req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
-			rsp := httptest.NewRecorder()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				req := req.Clone(ctx)
+				req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
+				rsp := httptest.NewRecorder()
 
-			hdlr.ServeHTTP(rsp, req)
-			assert.Equal(b, http.StatusOK, rsp.Code, "response code")
-			assert.Equal(b, "0", rsp.Header().Get("Grpc-Status"), "response status")
-			assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
-		}
+				hdlr.ServeHTTP(rsp, req)
+				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
+				assert.Equal(b, "0", rsp.Header().Get("Grpc-Status"), "response status")
+				assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
+			}
+		})
 		b.StopTimer()
 	})
 
-	b.Run("ConversionRESTxGRPC", func(b *testing.B) {
+	b.Run("REST_json/gRPC_proto/Convert", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
 		mux := &Mux{}
@@ -1411,23 +1413,25 @@ func BenchmarkServeHTTP(b *testing.B) {
 
 		b.StartTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			req := req.Clone(ctx)
-			req.Body = io.NopCloser(bytes.NewReader(reqMsgBookJSON))
-			rsp := httptest.NewRecorder()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				req := req.Clone(ctx)
+				req.Body = io.NopCloser(bytes.NewReader(reqMsgBookJSON))
+				rsp := httptest.NewRecorder()
 
-			hdlr.ServeHTTP(rsp, req)
-			assert.Equal(b, http.StatusOK, rsp.Code, "response code")
-			assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
-			data := rsp.Body.Bytes()
-			rsp.Body.Reset()
-			assert.NoError(b, json.Compact(rsp.Body, data))
-			assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
-		}
+				hdlr.ServeHTTP(rsp, req)
+				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
+				assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
+				data := rsp.Body.Bytes()
+				rsp.Body.Reset()
+				assert.NoError(b, json.Compact(rsp.Body, data))
+				assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
+			}
+		})
 		b.StopTimer()
 	})
 
-	b.Run("ConversionGRPCxREST", func(b *testing.B) {
+	b.Run("gRPC_proto/REST_json/Convert", func(b *testing.B) {
 		reqGRPCBody := envelopePayload(0, reqMsgProto)
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
@@ -1455,20 +1459,22 @@ func BenchmarkServeHTTP(b *testing.B) {
 
 		b.StartTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			req := req.Clone(ctx)
-			req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
-			rsp := httptest.NewRecorder()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				req := req.Clone(ctx)
+				req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
+				rsp := httptest.NewRecorder()
 
-			hdlr.ServeHTTP(rsp, req)
-			assert.Equal(b, http.StatusOK, rsp.Code, "response code")
-			assert.Equal(b, "application/grpc+proto", rsp.Header().Get("Content-Type"), "response content type")
-			assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
-		}
+				hdlr.ServeHTTP(rsp, req)
+				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
+				assert.Equal(b, "application/grpc+proto", rsp.Header().Get("Content-Type"), "response content type")
+				assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
+			}
+		})
 		b.StopTimer()
 	})
 
-	b.Run("ConversionConnectxGRPC", func(b *testing.B) {
+	b.Run("connect_json/gRPC_proto/Convert", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
 		mux := &Mux{}
@@ -1514,7 +1520,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		b.StopTimer()
 	})
 
-	b.Run("TranslateConnectxGRPC", func(b *testing.B) {
+	b.Run("connect_proto_gzip/gRPC_proto_gzip/Translate", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
 		mux := &Mux{}
@@ -1546,21 +1552,23 @@ func BenchmarkServeHTTP(b *testing.B) {
 
 		b.StartTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			req := req.Clone(ctx)
-			req.Body = io.NopCloser(bytes.NewReader(reqMsgProtoComp))
-			rsp := httptest.NewRecorder()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				req := req.Clone(ctx)
+				req.Body = io.NopCloser(bytes.NewReader(reqMsgProtoComp))
+				rsp := httptest.NewRecorder()
 
-			hdlr.ServeHTTP(rsp, req)
-			assert.Equal(b, http.StatusOK, rsp.Code, "response code")
-			assert.Equal(b, "application/proto", rsp.Header().Get("Content-Type"), "response content type")
-			assert.Equal(b, rspMsgProtoComp, rsp.Body.Bytes(), "response body")
-		}
+				hdlr.ServeHTTP(rsp, req)
+				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
+				assert.Equal(b, "application/proto", rsp.Header().Get("Content-Type"), "response content type")
+				assert.Equal(b, rspMsgProtoComp, rsp.Body.Bytes(), "response body")
+			}
+		})
 		b.StopTimer()
 	})
 
-	b.Run("LargeConversionRESTxGRPC", func(b *testing.B) {
-		largePayload := make([]byte, 5*1024*1024)
+	b.Run("REST_json/gRPC_proto/LargeHttpBody", func(b *testing.B) {
+		largePayload := make([]byte, maxRecycleBufferSize*2)
 		_, _ = rand.Read(largePayload)
 		rspGRPC := envelopePayload(0, marshalProto(&emptypb.Empty{}))
 
@@ -1588,16 +1596,18 @@ func BenchmarkServeHTTP(b *testing.B) {
 
 		b.StartTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			req := req.Clone(ctx)
-			req.Body = io.NopCloser(bytes.NewReader(largePayload))
-			rsp := httptest.NewRecorder()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				req := req.Clone(ctx)
+				req.Body = io.NopCloser(bytes.NewReader(largePayload))
+				rsp := httptest.NewRecorder()
 
-			hdlr.ServeHTTP(rsp, req)
-			assert.Equal(b, http.StatusOK, rsp.Code, "response code")
-			assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
-			assert.Equal(b, "{}", rsp.Body.String(), "response body")
-		}
+				hdlr.ServeHTTP(rsp, req)
+				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
+				assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
+				assert.Equal(b, "{}", rsp.Body.String(), "response body")
+			}
+		})
 		b.StopTimer()
 	})
 }
