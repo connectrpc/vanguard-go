@@ -1401,7 +1401,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			testv1connect.LibraryServiceName,
 			WithProtocols(ProtocolGRPC),
 			WithCodecs(CodecProto),
-			WithCompression(CompressionIdentity),
+			WithNoCompression(),
 		); err != nil {
 			b.Fatal(err)
 		}
@@ -1446,7 +1446,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			testv1connect.LibraryServiceName,
 			WithProtocols(ProtocolREST),
 			WithCodecs(CodecJSON),
-			WithCompression(CompressionIdentity),
+			WithNoCompression(),
 		); err != nil {
 			b.Fatal(err)
 		}
@@ -1491,7 +1491,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			testv1connect.LibraryServiceName,
 			WithProtocols(ProtocolGRPC),
 			WithCodecs(CodecProto),
-			WithCompression(CompressionIdentity),
+			WithNoCompression(),
 		); err != nil {
 			b.Fatal(err)
 		}
