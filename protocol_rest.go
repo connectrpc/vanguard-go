@@ -150,7 +150,7 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 			return fmt.Errorf("request should have no body; instead got %d bytes", len(src))
 		}
 	} else {
-		msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, target.ProtoReflect(), true)
+		msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
 		if err != nil {
 			return err
 		}
@@ -218,7 +218,7 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 		return bytes, nil
 	}
 
-	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), false)
+	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
 	if err != nil {
 		return nil, err
 	}
@@ -320,7 +320,7 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 	if op.restTarget.requestBodyFields == nil {
 		return base, nil
 	}
-	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), false)
+	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +352,7 @@ func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
-	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, target.ProtoReflect(), true)
+	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
 	if err != nil {
 		return err
 	}
@@ -411,24 +411,27 @@ func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.
 	return msg != nil && msg.FullName() == "google.api.HttpBody"
 }
 
-func getBodyField(fields []protoreflect.FieldDescriptor, root protoreflect.Message, mutable bool) (protoreflect.Message, protoreflect.FieldDescriptor, error) {
+type accessor func(protoreflect.Message, protoreflect.FieldDescriptor) protoreflect.Value
+
+func getBodyField(fields []protoreflect.FieldDescriptor, root protoreflect.Message, acc accessor) (protoreflect.Message, protoreflect.FieldDescriptor, error) {
 	msg := root
 	var leafField protoreflect.FieldDescriptor
 	for i, field := range fields {
-		if field.Cardinality() != protoreflect.Repeated {
-			if mutable {
-				msg = msg.Mutable(field).Message()
-			} else {
-				msg = msg.Get(field).Message()
-			}
+		if field.Message() != nil && !field.IsMap() {
+			msg = acc(msg, field).Message()
 			continue
 		}
 		if i != len(fields)-1 {
-			actual := "list"
-			if field.IsMap() {
+			var actual string
+			switch {
+			case field.IsList():
+				actual = "list"
+			case field.IsMap():
 				actual = "map"
+			default:
+				actual = field.Kind().String()
 			}
-			return nil, nil, fmt.Errorf("field %s of %s must be a message but is instead a %s", field.Name(), msg.Descriptor().FullName(), actual)
+			return nil, nil, fmt.Errorf("field %s of %s has invalid type: need message, but got %s", field.Name(), msg.Descriptor().FullName(), actual)
 		}
 		leafField = field
 	}
