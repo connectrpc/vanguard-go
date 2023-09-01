@@ -880,9 +880,9 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	// snapshot trailer keys
 	trailerKeys := parseMultiHeader(rw.Header().Values("Trailer"))
 	if len(trailerKeys) > 0 {
-		respMeta.pendingTrailerKeys = make(map[string]struct{}, len(trailerKeys))
+		respMeta.pendingTrailerKeys = make(headerKeys, len(trailerKeys))
 		for _, k := range trailerKeys {
-			respMeta.pendingTrailerKeys[strings.ToLower(k)] = struct{}{}
+			respMeta.pendingTrailerKeys.add(k)
 		}
 		rw.Header().Del("Trailer")
 	}

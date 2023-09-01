@@ -258,7 +258,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	return path, query, nil
 }
 
-func httpExtractTrailers(headers http.Header, knownTrailerKeys map[string]struct{}) http.Header {
+func httpExtractTrailers(headers http.Header, knownTrailerKeys headerKeys) http.Header {
 	trailers := make(http.Header, len(knownTrailerKeys))
 	for key, vals := range headers {
 		if strings.HasPrefix(key, http.TrailerPrefix) {
@@ -266,7 +266,7 @@ func httpExtractTrailers(headers http.Header, knownTrailerKeys map[string]struct
 			delete(headers, key)
 			continue
 		}
-		if _, expected := knownTrailerKeys[strings.ToLower(key)]; expected {
+		if _, expected := knownTrailerKeys[key]; expected {
 			trailers[key] = vals
 			delete(headers, key)
 			continue

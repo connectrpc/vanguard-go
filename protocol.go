@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -350,7 +351,7 @@ type responseMeta struct {
 	compression        string
 	acceptCompression  []string
 	pendingTrailers    http.Header
-	pendingTrailerKeys map[string]struct{}
+	pendingTrailerKeys headerKeys
 }
 
 // responseEnd is a protocol-agnostic representation of the disposition
@@ -371,6 +372,17 @@ type responseEnd struct {
 	// This can be used by a protocol handler that also encodes the end
 	// in a stream payload to decide whether to compress the final frame.
 	wasCompressed bool
+}
+
+type headerKeys map[string]struct{}
+
+func (keys headerKeys) add(k string) {
+	keys[textproto.CanonicalMIMEHeaderKey(k)] = struct{}{}
+}
+
+func (keys headerKeys) contains(k string) bool {
+	_, contains := keys[textproto.CanonicalMIMEHeaderKey(k)]
+	return contains
 }
 
 // parseMultiHeader parses headers that allow multiple values. It

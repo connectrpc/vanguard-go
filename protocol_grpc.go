@@ -86,19 +86,19 @@ func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	statusCode := grpcAddResponseMeta("application/grpc+", meta, headers)
 	if len(meta.pendingTrailers) > 0 {
 		if meta.pendingTrailerKeys == nil {
-			meta.pendingTrailerKeys = make(map[string]struct{}, len(meta.pendingTrailers))
+			meta.pendingTrailerKeys = make(headerKeys, len(meta.pendingTrailers))
 		}
 		for k := range meta.pendingTrailers {
-			meta.pendingTrailerKeys[strings.ToLower(k)] = struct{}{}
+			meta.pendingTrailerKeys.add(k)
 		}
 	}
 	for k := range meta.pendingTrailerKeys {
 		headers.Add("Trailer", textproto.CanonicalMIMEHeaderKey(k))
 	}
-	if _, hasStatus := meta.pendingTrailerKeys["grpc-status"]; !hasStatus {
+	if !meta.pendingTrailerKeys.contains("Grpc-Status") {
 		headers.Add("Trailer", "Grpc-Status")
 	}
-	if _, hasMessage := meta.pendingTrailerKeys["grpc-message"]; !hasMessage {
+	if !meta.pendingTrailerKeys.contains("Grpc-Message") {
 		headers.Add("Trailer", "Grpc-Message")
 	}
 	return statusCode
