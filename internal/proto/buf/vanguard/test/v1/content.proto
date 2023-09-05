@@ -25,19 +25,19 @@ import "google/protobuf/timestamp.proto";
 service ContentService {
   // Index returns a html index page at the given path.
   rpc Index(IndexRequest) returns (google.api.HttpBody) {
-    option (google.api.http) = {get: "/index/{page=**}"};
+    option (google.api.http) = {get: "/{page=**}"};
   }
   // Upload a file to the given path.
   rpc Upload(stream UploadRequest) returns (google.protobuf.Empty) {
     option (google.api.http) = {
-      post: "/raw/{filename=**}"
+      post: "/{filename=**}:upload"
       body: "file"
     };
   }
   // Download a file from the given path.
   rpc Download(DownloadRequest) returns (stream DownloadResponse) {
     option (google.api.http) = {
-      get: "/raw/{filename=**}"
+      get: "/{filename=**}:download"
       response_body: "file"
     };
   }

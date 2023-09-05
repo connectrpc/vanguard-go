@@ -92,7 +92,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "rest, route not found",
-			requestURL:    "/foo/bar/baz",
+			requestURL:    "/foo/bar/baz:buzz",
 			requestMethod: "PUT",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/json"},
