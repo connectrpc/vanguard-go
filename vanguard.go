@@ -124,6 +124,10 @@ type Mux struct {
 	// when a service is registered, this one is used. If nil, the default resolver
 	// will be [protoregistry.GlobalTypes].
 	TypeResolver TypeResolver
+	// UnknownHandler is the handler to use when a request is received for a method
+	// that has not been registered. If nil, the default is to return a 404 Not Found
+	// error.
+	UnknownHandler http.Handler
 
 	init             sync.Once
 	codecImpls       map[string]func(TypeResolver) Codec
