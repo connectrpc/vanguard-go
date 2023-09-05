@@ -35,9 +35,12 @@ import (
 )
 
 func main() {
-	port := flag.String("p", "8100", "port to serve on")
-	directory := flag.String("d", ".", "the directory of static file to host")
-	flag.Parse()
+	flagset := flag.NewFlagSet("fileserver", flag.ExitOnError)
+	port := flagset.String("p", "8100", "port to serve on")
+	directory := flagset.String("d", ".", "the directory of static file to host")
+	if err := flagset.Parse(os.Args[1:]); err != nil {
+		log.Fatal(err)
+	}
 
 	contentService := &ContentService{
 		FS: os.DirFS(*directory),
@@ -55,7 +58,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+*port, mux.AsHandler()))
 }
 
-var httpTemplate = template.Must(template.New("http").Parse(`
+var indexHTMLTemplate = template.Must(template.New("http").Parse(`
 <html>
 <head>
   <meta charset="UTF-8">
@@ -119,7 +122,7 @@ func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.In
 			tmplData.Files[filepath.Join(name, entry.Name())] = entry.Name()
 		}
 		var buf bytes.Buffer
-		if err := httpTemplate.Execute(&buf, tmplData); err != nil {
+		if err := indexHTMLTemplate.Execute(&buf, tmplData); err != nil {
 			return nil, err
 		}
 		data = buf.Bytes()
