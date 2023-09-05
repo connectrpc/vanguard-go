@@ -16,6 +16,7 @@
 package vanguard
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 type restClientProtocol struct{}
@@ -106,6 +108,9 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
 	if isErr {
+		if meta.end.httpCode != 0 {
+			return meta.end.httpCode
+		}
 		return httpStatusCodeFromRPC(meta.end.err.Code())
 	}
 	return http.StatusOK
@@ -123,7 +128,11 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 		return nil
 	}
 	stat := grpcStatusFromError(cerr)
-	bin, err := op.client.codec.MarshalAppend(nil, stat)
+	codec := op.client.codec
+	if codec == nil {
+		codec = DefaultJSONCodec(protoregistry.GlobalTypes)
+	}
+	bin, err := codec.MarshalAppend(nil, stat)
 	if err != nil {
 		// TODO: This is always uses JSON whereas above we use the given codec.
 		//       If/when we support codecs for REST other than JSON, what should

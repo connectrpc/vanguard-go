@@ -32,6 +32,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/anypb"
 )
@@ -229,7 +230,11 @@ func (c connectUnaryPostClientProtocol) encodeEnd(op *operation, end *responseEn
 	if end.err == nil {
 		return nil
 	}
-	wireErr := connectErrorToWireError(end.err, op.methodConf.resolver)
+	var resolver TypeResolver = protoregistry.GlobalTypes
+	if op.methodConf != nil {
+		resolver = op.methodConf.resolver
+	}
+	wireErr := connectErrorToWireError(end.err, resolver)
 	data, err := json.Marshal(wireErr)
 	if err != nil {
 		data = ([]byte)(`{"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}`)
@@ -454,7 +459,11 @@ func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMet
 func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, _ bool) http.Header {
 	streamEnd := &connectStreamEnd{Metadata: end.trailers}
 	if end.err != nil {
-		streamEnd.Error = connectErrorToWireError(end.err, op.methodConf.resolver)
+		var resolver TypeResolver = protoregistry.GlobalTypes
+		if op.methodConf != nil {
+			resolver = op.methodConf.resolver
+		}
+		streamEnd.Error = connectErrorToWireError(end.err, resolver)
 	}
 	buffer := op.bufferPool.Get()
 	defer op.bufferPool.Put(buffer)

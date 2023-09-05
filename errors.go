@@ -43,6 +43,9 @@ type httpError struct {
 }
 
 func (e *httpError) Error() string {
+	if e.err == nil {
+		return http.StatusText(e.code)
+	}
 	return e.err.Error()
 }
 
@@ -50,14 +53,20 @@ func (e *httpError) Unwrap() error {
 	return e.err
 }
 
-func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
+func asHttpError(err error) *httpError {
 	var httpErr *httpError
 	if errors.As(err, &httpErr) {
-		return httpErr.code, httpErr.headers
+		return httpErr
 	}
 	var connErr *connect.Error
 	if errors.As(err, &connErr) {
-		return httpStatusCodeFromRPC(connErr.Code()), nil
+		return &httpError{
+			code: httpStatusCodeFromRPC(connErr.Code()),
+			err:  err,
+		}
 	}
-	return http.StatusInternalServerError, nil
+	return &httpError{
+		code: http.StatusInternalServerError,
+		err:  err,
+	}
 }

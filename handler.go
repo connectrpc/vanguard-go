@@ -72,11 +72,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			h.mux.UnknownHandler.ServeHTTP(writer, request)
 			return
 		}
-		code, headerFunc := httpCodeFromError(err)
-		if headerFunc != nil {
-			headerFunc(writer.Header())
-		}
-		http.Error(writer, http.StatusText(code), code)
+		op.reportError(err)
 		return
 	}
 	if !op.client.protocol.acceptsStreamType(&op, op.methodConf.streamType) {
@@ -523,13 +519,13 @@ func (op *operation) reportError(err error) {
 		return
 	}
 	// No responseWriter created yet, so we duplicate some of its behavior to write an error
-	code, headerFunc := httpCodeFromError(err)
-	if headerFunc != nil {
-		headerFunc(op.writer.Header())
+	he := asHttpError(err)
+	if he.headers != nil {
+		he.headers(op.writer.Header())
 	}
 	connErr := asConnectError(err)
-	end := &responseEnd{err: connErr, httpCode: code}
-	code = op.client.protocol.addProtocolResponseHeaders(responseMeta{end: end}, op.writer.Header())
+	end := &responseEnd{err: connErr, httpCode: he.code}
+	code := op.client.protocol.addProtocolResponseHeaders(responseMeta{end: end}, op.writer.Header())
 	op.writer.WriteHeader(code)
 	trailers := op.client.protocol.encodeEnd(op, end, op.writer, true)
 	httpMergeTrailers(op.writer.Header(), trailers)
