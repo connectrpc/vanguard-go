@@ -90,7 +90,9 @@ func TestMux_RPCxREST(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		server := httptest.NewServer(mux.AsHandler())
+		server := httptest.NewUnstartedServer(mux.AsHandler())
+		server.EnableHTTP2 = true
+		server.StartTLS()
 		disableCompression(server)
 		t.Cleanup(server.Close)
 		return testServer{name: name, svr: server}

@@ -36,7 +36,7 @@ type handler struct {
 	canDecompress []string
 }
 
-func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) { //nolint:gocyclo
 	// Identify the protocol.
 	clientProtoHandler, originalContentType, queryVars := classifyRequest(request)
 	if clientProtoHandler == nil {
@@ -83,6 +83,10 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if op.methodConf.streamType == connect.StreamTypeBidi && request.ProtoMajor < 2 {
 		http.Error(writer, "bidi streams require HTTP/2", http.StatusHTTPVersionNotSupported)
+		return
+	}
+	if clientProtoHandler.protocol() == ProtocolGRPC && request.ProtoMajor != 2 {
+		http.Error(writer, "gRPC requires HTTP/2", http.StatusHTTPVersionNotSupported)
 		return
 	}
 
