@@ -65,6 +65,7 @@ func TestHandler_Errors(t *testing.T) {
 		requestHeaders          http.Header
 		expectedCode            int
 		expectedResponseHeaders http.Header
+		expectedBody            string // contains
 	}{
 		{
 			name:          "multiple content types",
@@ -131,7 +132,11 @@ func TestHandler_Errors(t *testing.T) {
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+proto"},
 			},
-			expectedCode: http.StatusNotFound,
+			expectedCode: http.StatusOK,
+			expectedResponseHeaders: http.Header{
+				"Grpc-Status":  []string{"12"},
+				"Grpc-Message": []string{"Not Found"},
+			},
 		},
 		{
 			name:          "grpc-web, method not found",
@@ -140,7 +145,12 @@ func TestHandler_Errors(t *testing.T) {
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+proto"},
 			},
-			expectedCode: http.StatusNotFound,
+			expectedCode: http.StatusOK,
+			//expectedBody: "{\"error\":{\"code\":12,\"message\":\"Not Found\"}}\n",
+			expectedResponseHeaders: http.Header{
+				"Grpc-Status":  []string{"12"},
+				"Grpc-Message": []string{"Not Found"},
+			},
 		},
 		{
 			name:          "connect get, method not idempotent",
@@ -440,9 +450,13 @@ func TestHandler_Errors(t *testing.T) {
 			targetMux.AsHandler().ServeHTTP(respWriter, req)
 			resp := respWriter.Result()
 			err := resp.Body.Close()
-			require.NoError(t, err)
-			require.Equal(t, testCase.expectedCode, resp.StatusCode)
+			assert.NoError(t, err)
+			assert.Equal(t, testCase.expectedCode, resp.StatusCode)
 			assert.Subset(t, resp.Header, testCase.expectedResponseHeaders)
+			if testCase.expectedBody != "" {
+				assert.Equal(t, testCase.expectedBody, respWriter.Body.String())
+			}
+
 		})
 	}
 }

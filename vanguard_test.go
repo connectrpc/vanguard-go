@@ -1364,7 +1364,6 @@ func runRPCTestCase[Client any](
 	invoke func(Client, http.Header, []proto.Message) (http.Header, []proto.Message, http.Header, error),
 	stream testStream,
 ) {
-	t.Helper()
 	awaitServer := interceptor.set(t, stream)
 	defer interceptor.del(t)
 	reqHeaders := http.Header{}

@@ -210,6 +210,10 @@ func TestMux_RESTxRPC(t *testing.T) {
 		output: output{
 			code:    http.StatusMethodNotAllowed,
 			rawBody: "Method Not Allowed\n",
+			body: &status.Status{
+				Code:    int32(connect.CodeInternal),
+				Message: "Method Not Allowed",
+			},
 		},
 	}, {
 		name: "GetBook-Error",

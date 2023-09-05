@@ -200,8 +200,12 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	status := http.StatusOK
 	if meta.end != nil && meta.end.err != nil {
-		if meta.end.httpCode != 0 && meta.end.httpCode != http.StatusOK {
-			status = meta.end.httpCode
+		var methodNotAllowed errMethodNotAllowed
+		if errors.Is(meta.end.err, errNotFound{}) {
+			status = http.StatusNotFound
+		} else if errors.As(meta.end.err, &methodNotAllowed) {
+			status = http.StatusMethodNotAllowed
+			methodNotAllowed.EncodeHeader(headers)
 		} else {
 			status = httpStatusCodeFromRPC(meta.end.err.Code())
 		}
@@ -450,6 +454,15 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 }
 
 func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
+	if meta.end != nil && meta.end.err != nil {
+		var methodNotAllowed errMethodNotAllowed
+		if errors.Is(meta.end.err, errNotFound{}) {
+			return http.StatusNotFound
+		} else if errors.As(meta.end.err, &methodNotAllowed) {
+			methodNotAllowed.EncodeHeader(headers)
+			return http.StatusMethodNotAllowed
+		}
+	}
 	headers.Set("Content-Type", "application/connect+"+meta.codec)
 	if meta.compression != "" {
 		headers.Set("Connect-Content-Encoding", meta.compression)
@@ -463,6 +476,10 @@ func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMet
 func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, _ bool) http.Header {
 	streamEnd := &connectStreamEnd{Metadata: end.trailers}
 	if end.err != nil {
+		if errors.Is(end.err, errMethodNotAllowed{}) ||
+			errors.Is(end.err, errNotFound{}) {
+			return nil // already encoded in headers
+		}
 		var resolver TypeResolver = protoregistry.GlobalTypes
 		if op.methodConf != nil {
 			resolver = op.methodConf.resolver

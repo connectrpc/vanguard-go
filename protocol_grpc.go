@@ -83,6 +83,14 @@ func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers 
 }
 
 func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
+	if meta.end != nil {
+		var methodNotAllowed errMethodNotAllowed
+		if errors.As(meta.end.err, &methodNotAllowed) {
+			methodNotAllowed.EncodeHeader(headers)
+			return http.StatusMethodNotAllowed
+		}
+	}
+
 	statusCode := grpcAddResponseMeta("application/grpc+", meta, headers)
 	if len(meta.pendingTrailers) > 0 {
 		if meta.pendingTrailerKeys == nil {
@@ -108,6 +116,11 @@ func (g grpcClientProtocol) encodeEnd(_ *operation, end *responseEnd, _ io.Write
 	if wasInHeaders {
 		// already recorded this in call to addProtocolResponseHeaders
 		return nil
+	}
+	if end.err != nil {
+		if errors.Is(end.err, errMethodNotAllowed{}) {
+			return nil // header only response
+		}
 	}
 	trailers := make(http.Header, len(end.trailers)+3)
 	grpcWriteEndToTrailers(end, trailers)
@@ -201,6 +214,13 @@ func (g grpcWebClientProtocol) extractProtocolRequestHeaders(_ *operation, heade
 }
 
 func (g grpcWebClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
+	if meta.end != nil {
+		var methodNotAllowed errMethodNotAllowed
+		if errors.As(meta.end.err, &methodNotAllowed) {
+			methodNotAllowed.EncodeHeader(headers)
+			return http.StatusMethodNotAllowed
+		}
+	}
 	return grpcAddResponseMeta("application/grpc-web+", meta, headers)
 }
 
@@ -209,6 +229,9 @@ func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer
 		// already recorded this in call to addProtocolResponseHeaders
 		return nil
 	}
+	//if errors.Is(end.err, errMethodNotAllowed{}) {
+	//	return nil // header only response
+	//}
 	trailers := make(http.Header, len(end.trailers)+3)
 	grpcWriteEndToTrailers(end, trailers)
 	buffer := op.bufferPool.Get()
@@ -355,8 +378,7 @@ func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 	if len(headers.Values("Grpc-Status")) > 0 {
 		connErr := grpcExtractErrorFromTrailer(headers)
 		respMeta.end = &responseEnd{
-			err:      connErr,
-			httpCode: statusCode,
+			err: connErr,
 		}
 		headers.Del("Grpc-Status")
 		headers.Del("Grpc-Message")
@@ -371,7 +393,6 @@ func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 			respMeta.end = &responseEnd{}
 		}
 		if respMeta.end.err == nil {
-			// TODO: map HTTP status code to an RPC error (opposite of httpStatusCodeFromRPC)
 			respMeta.end.err = connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected HTTP error: %d %s", statusCode, http.StatusText(statusCode)))
 		}
 	}

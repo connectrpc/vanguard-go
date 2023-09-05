@@ -278,13 +278,13 @@ func (m *Mux) AddCompression(name string, newCompressor func() connect.Compresso
 }
 
 func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
-	methodPath := string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
+	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
 	if _, ok := m.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodConf := &methodConfig{
 		descriptor:        methodDesc,
-		methodPath:        "/" + methodPath, // this usage wants proper URI path, with leading slash
+		methodPath:        methodPath,
 		handler:           handler,
 		resolver:          opts.resolver,
 		protocols:         opts.protocols,

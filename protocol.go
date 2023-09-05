@@ -360,13 +360,6 @@ type responseEnd struct {
 	err      *connect.Error
 	trailers http.Header
 
-	// httpCode is only populated when the responseEnd source contained
-	// such a code. This happens when the responseEnd comes from the
-	// response headers, which include the status line. It can also
-	// occur for REST streaming responses, where the final message may
-	// include both gRPC and HTTP codes.
-	httpCode int
-
 	// For enveloping protocols where the end is in a special stream
 	// payload, this will be true if that special payload was compressed.
 	// This can be used by a protocol handler that also encodes the end

@@ -68,11 +68,11 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	err := op.resolveMethod(h.mux)
 	if err != nil {
 		// If the method is not found, we'll try the unknown handler, if there is one.
-		if h.mux.UnknownHandler != nil && errors.Is(err, errNotFound) {
+		if h.mux.UnknownHandler != nil && errors.Is(err, errNotFound{}) {
 			h.mux.UnknownHandler.ServeHTTP(writer, request)
 			return
 		}
-		asHTTPError(err).Write(writer)
+		op.reportError(err)
 		return
 	}
 	if !op.client.protocol.acceptsStreamType(&op, op.methodConf.streamType) {
@@ -443,8 +443,6 @@ func (op *operation) handle() {
 	op.methodConf.handler.ServeHTTP(op.writer, op.request)
 }
 
-var errNotFound = &httpError{code: http.StatusNotFound}
-
 func (op *operation) resolveMethod(mux *Mux) error {
 	uriPath := op.request.URL.Path
 	switch op.client.protocol.protocol() {
@@ -456,7 +454,7 @@ func (op *operation) resolveMethod(mux *Mux) error {
 			return nil
 		}
 		if len(methods) == 0 {
-			return errNotFound
+			return errNotFound{}
 		}
 		var sb strings.Builder
 		for method := range methods {
@@ -465,42 +463,29 @@ func (op *operation) resolveMethod(mux *Mux) error {
 			}
 			sb.WriteString(method)
 		}
-		return &httpError{
-			code: http.StatusMethodNotAllowed,
-			headers: func(hdrs http.Header) {
-				hdrs.Set("Allow", sb.String())
-			},
+		return errMethodNotAllowed{
+			method:  op.request.Method,
+			allowed: []string{sb.String()},
 		}
 	default:
-		// The other protocols just use the URI path as the method name and don't allow query params
-		if len(uriPath) == 0 || uriPath[0] != '/' {
-			// no starting slash? won't match any known route
-			return errNotFound
-		}
-		methodConf := mux.methods[uriPath[1:]]
+		methodConf := mux.methods[uriPath]
 		if methodConf == nil {
-			// TODO: if the service is known, but the method is not, we should send to the client
-			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
-			return errNotFound
+			return errNotFound{}
 		}
 		op.restTarget = methodConf.httpRule
 		if op.request.Method != http.MethodPost {
 			mayAllowGet, ok := op.client.protocol.(clientProtocolAllowsGet)
 			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
 			if !allowsGet {
-				return &httpError{
-					code: http.StatusMethodNotAllowed,
-					headers: func(hdrs http.Header) {
-						hdrs.Set("Allow", http.MethodPost)
-					},
+				return errMethodNotAllowed{
+					method:  op.request.Method,
+					allowed: []string{http.MethodPost},
 				}
 			}
 			if allowsGet && op.request.Method != http.MethodGet {
-				return &httpError{
-					code: http.StatusMethodNotAllowed,
-					headers: func(hdrs http.Header) {
-						hdrs.Set("Allow", http.MethodGet+","+http.MethodPost)
-					},
+				return errMethodNotAllowed{
+					method:  op.request.Method,
+					allowed: []string{http.MethodGet, http.MethodPost},
 				}
 			}
 		}
@@ -519,12 +504,8 @@ func (op *operation) reportError(err error) {
 		return
 	}
 	// No responseWriter created yet, so we duplicate some of its behavior to write an error
-	he := asHTTPError(err)
-	if he.headers != nil {
-		he.headers(op.writer.Header())
-	}
 	connErr := asConnectError(err)
-	end := &responseEnd{err: connErr, httpCode: he.code}
+	end := &responseEnd{err: connErr}
 	code := op.client.protocol.addProtocolResponseHeaders(responseMeta{end: end}, op.writer.Header())
 	op.writer.WriteHeader(code)
 	trailers := op.client.protocol.encodeEnd(op, end, op.writer, true)
@@ -1010,11 +991,9 @@ func (rw *responseWriter) flushMessage() {
 func (rw *responseWriter) reportError(err error) {
 	var end responseEnd
 	if errors.As(err, &end.err) {
-		end.httpCode = httpStatusCodeFromRPC(end.err.Code())
+		// okay, we have a response end
 	} else {
-		// TODO: maybe this should be CodeUnknown instead?
 		end.err = connect.NewError(connect.CodeInternal, err)
-		end.httpCode = http.StatusBadGateway
 	}
 	rw.reportEnd(&end)
 }
@@ -1545,9 +1524,6 @@ func (ew *errorWriter) Close() error {
 		if err := compressPool.decompress(uncompressed, body); err != nil {
 			// can't really just return an error; we have to encode the
 			// error into the RPC response, so we populate respMeta.end
-			if ew.respMeta.end.httpCode == 0 || ew.respMeta.end.httpCode == http.StatusOK {
-				ew.respMeta.end.httpCode = http.StatusInternalServerError
-			}
 			ew.respMeta.end.err = connect.NewError(connect.CodeInternal, fmt.Errorf("failed to decompress body: %w", err))
 			body = nil
 		} else {

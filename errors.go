@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"connectrpc.com/connect"
 )
@@ -27,7 +28,13 @@ func asConnectError(err error) *connect.Error {
 	if errors.As(err, &ce) {
 		return ce
 	}
-	return connect.NewError(connect.CodeInternal, err)
+	code := connect.CodeInternal
+	if errors.Is(err, errNotFound{}) {
+		code = connect.CodeUnimplemented
+	} else if errors.Is(err, errMethodNotAllowed{}) {
+		code = connect.CodeUnimplemented
+	}
+	return connect.NewError(code, err)
 }
 
 var errNoTimeout = errors.New("no timeout")
@@ -36,46 +43,20 @@ func errProtocol(msg string, args ...any) error {
 	return fmt.Errorf("protocol error: "+msg, args...)
 }
 
-type httpError struct {
-	code    int
-	headers func(http.Header)
+type errNotFound struct{}
+
+func (e errNotFound) Error() string {
+	return http.StatusText(http.StatusNotFound)
 }
 
-func (e *httpError) Error() string {
-	return http.StatusText(e.code)
-}
-func (e *httpError) Code() int {
-	return e.code
-}
-func (e *httpError) Write(w http.ResponseWriter) {
-	if e.headers != nil {
-		e.headers(w.Header())
-	}
-	http.Error(w, e.Error(), e.code)
-}
-func (e *httpError) Headers() func(http.Header) {
-	return e.headers
+type errMethodNotAllowed struct {
+	method  string
+	allowed []string
 }
 
-func asHTTPError(err error) *httpError {
-	var httpErr *httpError
-	if errors.As(err, &httpErr) {
-		return httpErr
-	}
-	var ce *connect.Error
-	if errors.As(err, &ce) {
-		return &httpError{
-			code: httpStatusCodeFromRPC(ce.Code()),
-			headers: func(h http.Header) {
-				for key, vals := range ce.Meta() {
-					for _, val := range vals {
-						h.Add(key, val)
-					}
-				}
-			},
-		}
-	}
-	return &httpError{
-		code: http.StatusInternalServerError,
-	}
+func (e errMethodNotAllowed) Error() string {
+	return http.StatusText(http.StatusMethodNotAllowed)
+}
+func (e errMethodNotAllowed) EncodeHeader(h http.Header) {
+	h.Add("Allow", strings.Join(e.allowed, ","))
 }

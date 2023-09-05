@@ -16,6 +16,7 @@
 package vanguard
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -107,8 +108,12 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
 	if isErr {
-		if meta.end.httpCode != 0 && meta.end.httpCode != http.StatusOK {
-			return meta.end.httpCode
+		var methodNotAllowed errMethodNotAllowed
+		if errors.Is(meta.end.err, errNotFound{}) {
+			return http.StatusNotFound
+		} else if errors.As(meta.end.err, &methodNotAllowed) {
+			methodNotAllowed.EncodeHeader(headers)
+			return http.StatusMethodNotAllowed
 		}
 		return httpStatusCodeFromRPC(meta.end.err.Code())
 	}
@@ -253,11 +258,10 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
 	if statusCode/100 != 2 {
 		return responseMeta{
-				end: &responseEnd{httpCode: statusCode},
+				end: &responseEnd{},
 			}, func(_ Codec, src io.Reader, end *responseEnd) {
 				if err := httpErrorFromResponse(src); err != nil {
 					end.err = err
-					end.httpCode = httpStatusCodeFromRPC(err.Code())
 				}
 			}, nil
 	}
