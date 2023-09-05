@@ -104,7 +104,7 @@ service LibraryService {
   }
   rpc ListCheckouts(ListCheckoutsRequest) returns (ListCheckoutsResponse) {
     option (google.api.http) = {
-      get: "/v1/{name=shelves/*/books/*}:checkouts"
+      get: "/v2/{name=shelves/*/books/*}:checkouts"
       response_body: "checkouts"
     };
     option idempotency_level = NO_SIDE_EFFECTS;

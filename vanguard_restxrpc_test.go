@@ -16,6 +16,7 @@ package vanguard
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,7 +161,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 	}
 	type output struct {
 		code    int
-		body    proto.Message
+		body    any
 		rawBody string // if not proto.Message
 		meta    http.Header
 	}
@@ -283,6 +284,91 @@ func TestMux_RESTxRPC(t *testing.T) {
 				Title:  "The Art of Computer Programming",
 				Author: "Donald E. Knuth",
 			},
+		},
+	}, {
+		name: "MoveBooks",
+		input: input{
+			method: http.MethodPost,
+			path:   "/v2/shelves/1/books:move",
+			body: &httpbody.HttpBody{
+				ContentType: "application/json",
+				Data:        ([]byte)(`["book1", "book2", "book3", "book4"]`),
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceMoveBooksProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.MoveBooksRequest{
+						NewParent: "shelves/1",
+						Books:     []string{"book1", "book2", "book3", "book4"},
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.MoveBooksResponse{},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.MoveBooksResponse{},
+		},
+	}, {
+		name: "ListCheckouts",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v2/shelves/1/books/abc:checkouts",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListCheckoutsProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListCheckoutsRequest{
+						Name: "shelves/1/books/abc",
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.ListCheckoutsResponse{
+						Checkouts: []*testv1.Checkout{
+							{
+								Id: 123,
+								Books: []*testv1.Book{
+									{
+										Name:   "shelves/1/books/abc",
+										Parent: "shelves/1",
+									},
+									{
+										Name:   "shelves/1/books/def",
+										Parent: "shelves/1",
+									},
+								},
+							},
+						},
+					},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: `[
+				{
+					"id": "123",
+					"books": [
+						{
+							"name": "shelves/1/books/abc", "parent": "shelves/1",
+							"createTime": null, "updateTime": null,
+							"title": "", "author": "", "description": "",
+							"labels": {}
+						},
+						{
+							"name": "shelves/1/books/def", "parent": "shelves/1",
+							"createTime": null, "updateTime": null,
+							"title": "", "author": "", "description": "",
+							"labels": {}
+						}
+					]
+				}
+			]`,
 		},
 	}, {
 		name: "Index",
@@ -458,9 +544,19 @@ func TestMux_RESTxRPC(t *testing.T) {
 						require.NoError(t, decomp.decompress(out, body))
 						body = out
 					}
-					got := want.body.ProtoReflect().New().Interface()
-					require.NoError(t, codec.Unmarshal(body.Bytes(), got), "unmarshal body")
-					assert.Empty(t, cmp.Diff(want.body, got, protocmp.Transform()))
+					switch expect := want.body.(type) {
+					case proto.Message:
+						got := expect.ProtoReflect().New().Interface()
+						require.NoError(t, codec.Unmarshal(body.Bytes(), got), "unmarshal body")
+						assert.Empty(t, cmp.Diff(want.body, got, protocmp.Transform()))
+					case string:
+						var got, want any
+						require.NoError(t, json.Unmarshal(body.Bytes(), &got))
+						require.NoError(t, json.Unmarshal(([]byte)(expect), &want))
+						assert.Equal(t, want, got)
+					default:
+						t.Fatalf("unsupported body type: %T", expect)
+					}
 				})
 			}
 		})

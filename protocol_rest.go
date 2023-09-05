@@ -218,7 +218,7 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 		return bytes, nil
 	}
 
-	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
+	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +417,7 @@ func getBodyField(fields []protoreflect.FieldDescriptor, root protoreflect.Messa
 	msg := root
 	var leafField protoreflect.FieldDescriptor
 	for i, field := range fields {
-		if field.Message() != nil && !field.IsMap() {
+		if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 			msg = acc(msg, field).Message()
 			continue
 		}
