@@ -68,11 +68,11 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	err := op.resolveMethod(h.mux)
 	if err != nil {
 		// If the method is not found, we'll try the unknown handler, if there is one.
-		if h.mux.UnknownHandler != nil && errors.Is(err, err404) {
+		if h.mux.UnknownHandler != nil && errors.Is(err, errNotFound) {
 			h.mux.UnknownHandler.ServeHTTP(writer, request)
 			return
 		}
-		op.reportError(err)
+		asHTTPError(err).Write(writer)
 		return
 	}
 	if !op.client.protocol.acceptsStreamType(&op, op.methodConf.streamType) {
@@ -443,7 +443,7 @@ func (op *operation) handle() {
 	op.methodConf.handler.ServeHTTP(op.writer, op.request)
 }
 
-var err404 = &httpError{code: http.StatusNotFound}
+var errNotFound = &httpError{code: http.StatusNotFound}
 
 func (op *operation) resolveMethod(mux *Mux) error {
 	uriPath := op.request.URL.Path
@@ -456,7 +456,7 @@ func (op *operation) resolveMethod(mux *Mux) error {
 			return nil
 		}
 		if len(methods) == 0 {
-			return err404
+			return errNotFound
 		}
 		var sb strings.Builder
 		for method := range methods {
@@ -475,13 +475,13 @@ func (op *operation) resolveMethod(mux *Mux) error {
 		// The other protocols just use the URI path as the method name and don't allow query params
 		if len(uriPath) == 0 || uriPath[0] != '/' {
 			// no starting slash? won't match any known route
-			return err404
+			return errNotFound
 		}
 		methodConf := mux.methods[uriPath[1:]]
 		if methodConf == nil {
 			// TODO: if the service is known, but the method is not, we should send to the client
 			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
-			return err404
+			return errNotFound
 		}
 		op.restTarget = methodConf.httpRule
 		if op.request.Method != http.MethodPost {
@@ -519,7 +519,7 @@ func (op *operation) reportError(err error) {
 		return
 	}
 	// No responseWriter created yet, so we duplicate some of its behavior to write an error
-	he := asHttpError(err)
+	he := asHTTPError(err)
 	if he.headers != nil {
 		he.headers(op.writer.Header())
 	}

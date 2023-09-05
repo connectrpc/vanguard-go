@@ -38,35 +38,44 @@ func errProtocol(msg string, args ...any) error {
 
 type httpError struct {
 	code    int
-	headers func(header http.Header)
-	err     error
+	headers func(http.Header)
 }
 
 func (e *httpError) Error() string {
-	if e.err == nil {
-		return http.StatusText(e.code)
+	return http.StatusText(e.code)
+}
+func (e *httpError) Code() int {
+	return e.code
+}
+func (e *httpError) Write(w http.ResponseWriter) {
+	if e.headers != nil {
+		e.headers(w.Header())
 	}
-	return e.err.Error()
+	http.Error(w, e.Error(), e.code)
+}
+func (e *httpError) Headers() func(http.Header) {
+	return e.headers
 }
 
-func (e *httpError) Unwrap() error {
-	return e.err
-}
-
-func asHttpError(err error) *httpError {
+func asHTTPError(err error) *httpError {
 	var httpErr *httpError
 	if errors.As(err, &httpErr) {
 		return httpErr
 	}
-	var connErr *connect.Error
-	if errors.As(err, &connErr) {
+	var ce *connect.Error
+	if errors.As(err, &ce) {
 		return &httpError{
-			code: httpStatusCodeFromRPC(connErr.Code()),
-			err:  err,
+			code: httpStatusCodeFromRPC(ce.Code()),
+			headers: func(h http.Header) {
+				for key, vals := range ce.Meta() {
+					for _, val := range vals {
+						h.Add(key, val)
+					}
+				}
+			},
 		}
 	}
 	return &httpError{
 		code: http.StatusInternalServerError,
-		err:  err,
 	}
 }

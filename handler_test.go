@@ -62,9 +62,9 @@ func TestHandler_Errors(t *testing.T) {
 		useHTTP1                bool
 		requestURL              string
 		requestMethod           string
-		requestHeaders          map[string][]string
+		requestHeaders          http.Header
 		expectedCode            int
-		expectedResponseHeaders map[string]string
+		expectedResponseHeaders http.Header
 	}{
 		{
 			name:          "multiple content types",
@@ -147,8 +147,8 @@ func TestHandler_Errors(t *testing.T) {
 			requestURL:    "/buf.vanguard.test.v1.LibraryService/CreateBook?connect=v1",
 			requestMethod: "GET",
 			expectedCode:  http.StatusMethodNotAllowed,
-			expectedResponseHeaders: map[string]string{
-				"Allow": "POST",
+			expectedResponseHeaders: http.Header{
+				"Allow": []string{"POST"},
 			},
 		},
 		{
@@ -160,8 +160,8 @@ func TestHandler_Errors(t *testing.T) {
 				"Content-Type":             {"application/proto"},
 			},
 			expectedCode: http.StatusMethodNotAllowed,
-			expectedResponseHeaders: map[string]string{
-				"Allow": "POST",
+			expectedResponseHeaders: http.Header{
+				"Allow": []string{"POST"},
 			},
 		},
 		{
@@ -172,8 +172,8 @@ func TestHandler_Errors(t *testing.T) {
 				"Content-Type": {"application/connect+proto"},
 			},
 			expectedCode: http.StatusMethodNotAllowed,
-			expectedResponseHeaders: map[string]string{
-				"Allow": "POST",
+			expectedResponseHeaders: http.Header{
+				"Allow": []string{"POST"},
 			},
 		},
 		{
@@ -184,8 +184,8 @@ func TestHandler_Errors(t *testing.T) {
 				"Content-Type": {"application/grpc+proto"},
 			},
 			expectedCode: http.StatusMethodNotAllowed,
-			expectedResponseHeaders: map[string]string{
-				"Allow": "POST",
+			expectedResponseHeaders: http.Header{
+				"Allow": []string{"POST"},
 			},
 		},
 		{
@@ -196,8 +196,8 @@ func TestHandler_Errors(t *testing.T) {
 				"Content-Type": {"application/grpc-web+proto"},
 			},
 			expectedCode: http.StatusMethodNotAllowed,
-			expectedResponseHeaders: map[string]string{
-				"Allow": "POST",
+			expectedResponseHeaders: http.Header{
+				"Allow": []string{"POST"},
 			},
 		},
 		{
@@ -442,9 +442,7 @@ func TestHandler_Errors(t *testing.T) {
 			err := resp.Body.Close()
 			require.NoError(t, err)
 			require.Equal(t, testCase.expectedCode, resp.StatusCode)
-			for k, v := range testCase.expectedResponseHeaders {
-				require.Equal(t, v, resp.Header.Get(k))
-			}
+			assert.Subset(t, resp.Header, testCase.expectedResponseHeaders)
 		})
 	}
 }

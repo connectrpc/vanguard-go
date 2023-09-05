@@ -16,7 +16,6 @@
 package vanguard
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -108,7 +107,7 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
 	if isErr {
-		if meta.end.httpCode != 0 {
+		if meta.end.httpCode != 0 && meta.end.httpCode != http.StatusOK {
 			return meta.end.httpCode
 		}
 		return httpStatusCodeFromRPC(meta.end.err.Code())

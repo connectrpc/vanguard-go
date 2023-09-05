@@ -200,7 +200,11 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	status := http.StatusOK
 	if meta.end != nil && meta.end.err != nil {
-		status = httpStatusCodeFromRPC(meta.end.err.Code())
+		if meta.end.httpCode != 0 && meta.end.httpCode != http.StatusOK {
+			status = meta.end.httpCode
+		} else {
+			status = httpStatusCodeFromRPC(meta.end.err.Code())
+		}
 		headers.Set("Content-Type", contentTypeJSON) // error bodies are always in JSON
 		// TODO: Content-Encoding to compress error?
 	} else {
