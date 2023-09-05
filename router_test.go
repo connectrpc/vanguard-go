@@ -190,11 +190,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 
 func BenchmarkTrieMatch(b *testing.B) {
 	trie := initTrie(b)
-	path := strings.Join([]string{
-		"foo", "blah", "A", "B", "C", "foo", "D", "E", "F", "G", "foo",
-		"H", "I", "J", "K", "L", "M",
-	}, "/") + ":details"
-
+	path := "/foo/blah/A/B/C/foo/D/E/F/G/foo/H/I/J/K/L/M:details"
 	var (
 		method *routeTarget
 		vars   []routeTargetVarMatch
