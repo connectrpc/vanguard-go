@@ -456,7 +456,6 @@ func TestHandler_Errors(t *testing.T) {
 			if testCase.expectedBody != "" {
 				assert.Equal(t, testCase.expectedBody, respWriter.Body.String())
 			}
-
 		})
 	}
 }

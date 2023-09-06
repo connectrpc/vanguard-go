@@ -29,9 +29,9 @@ func asConnectError(err error) *connect.Error {
 		return ce
 	}
 	code := connect.CodeInternal
-	if errors.Is(err, errNotFound{}) {
+	if errors.Is(err, notFoundError{}) {
 		code = connect.CodeUnimplemented
-	} else if errors.Is(err, errMethodNotAllowed{}) {
+	} else if errors.Is(err, methodNotAllowedError{}) {
 		code = connect.CodeUnimplemented
 	}
 	return connect.NewError(code, err)
@@ -43,20 +43,20 @@ func errProtocol(msg string, args ...any) error {
 	return fmt.Errorf("protocol error: "+msg, args...)
 }
 
-type errNotFound struct{}
+type notFoundError struct{}
 
-func (e errNotFound) Error() string {
+func (e notFoundError) Error() string {
 	return http.StatusText(http.StatusNotFound)
 }
 
-type errMethodNotAllowed struct {
+type methodNotAllowedError struct {
 	method  string
 	allowed []string
 }
 
-func (e errMethodNotAllowed) Error() string {
+func (e methodNotAllowedError) Error() string {
 	return http.StatusText(http.StatusMethodNotAllowed)
 }
-func (e errMethodNotAllowed) EncodeHeader(h http.Header) {
+func (e methodNotAllowedError) EncodeHeader(h http.Header) {
 	h.Add("Allow", strings.Join(e.allowed, ","))
 }

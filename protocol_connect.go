@@ -200,13 +200,14 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	status := http.StatusOK
 	if meta.end != nil && meta.end.err != nil {
-		var methodNotAllowed errMethodNotAllowed
-		if errors.Is(meta.end.err, errNotFound{}) {
+		var methodNotAllowed methodNotAllowedError
+		switch {
+		case errors.Is(meta.end.err, notFoundError{}):
 			status = http.StatusNotFound
-		} else if errors.As(meta.end.err, &methodNotAllowed) {
+		case errors.As(meta.end.err, &methodNotAllowed):
 			status = http.StatusMethodNotAllowed
 			methodNotAllowed.EncodeHeader(headers)
-		} else {
+		default:
 			status = httpStatusCodeFromRPC(meta.end.err.Code())
 		}
 		headers.Set("Content-Type", contentTypeJSON) // error bodies are always in JSON
@@ -455,8 +456,8 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 
 func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	if meta.end != nil && meta.end.err != nil {
-		var methodNotAllowed errMethodNotAllowed
-		if errors.Is(meta.end.err, errNotFound{}) {
+		var methodNotAllowed methodNotAllowedError
+		if errors.Is(meta.end.err, notFoundError{}) {
 			return http.StatusNotFound
 		} else if errors.As(meta.end.err, &methodNotAllowed) {
 			methodNotAllowed.EncodeHeader(headers)
@@ -476,8 +477,8 @@ func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMet
 func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, _ bool) http.Header {
 	streamEnd := &connectStreamEnd{Metadata: end.trailers}
 	if end.err != nil {
-		if errors.Is(end.err, errMethodNotAllowed{}) ||
-			errors.Is(end.err, errNotFound{}) {
+		if errors.Is(end.err, methodNotAllowedError{}) ||
+			errors.Is(end.err, notFoundError{}) {
 			return nil // already encoded in headers
 		}
 		var resolver TypeResolver = protoregistry.GlobalTypes

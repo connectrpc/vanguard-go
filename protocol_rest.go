@@ -108,8 +108,8 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
 	if isErr {
-		var methodNotAllowed errMethodNotAllowed
-		if errors.Is(meta.end.err, errNotFound{}) {
+		var methodNotAllowed methodNotAllowedError
+		if errors.Is(meta.end.err, notFoundError{}) {
 			return http.StatusNotFound
 		} else if errors.As(meta.end.err, &methodNotAllowed) {
 			methodNotAllowed.EncodeHeader(headers)

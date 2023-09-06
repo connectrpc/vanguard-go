@@ -68,7 +68,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	err := op.resolveMethod(h.mux)
 	if err != nil {
 		// If the method is not found, we'll try the unknown handler, if there is one.
-		if h.mux.UnknownHandler != nil && errors.Is(err, errNotFound{}) {
+		if h.mux.UnknownHandler != nil && errors.Is(err, notFoundError{}) {
 			h.mux.UnknownHandler.ServeHTTP(writer, request)
 			return
 		}
@@ -454,7 +454,7 @@ func (op *operation) resolveMethod(mux *Mux) error {
 			return nil
 		}
 		if len(methods) == 0 {
-			return errNotFound{}
+			return notFoundError{}
 		}
 		var sb strings.Builder
 		for method := range methods {
@@ -463,27 +463,27 @@ func (op *operation) resolveMethod(mux *Mux) error {
 			}
 			sb.WriteString(method)
 		}
-		return errMethodNotAllowed{
+		return methodNotAllowedError{
 			method:  op.request.Method,
 			allowed: []string{sb.String()},
 		}
 	default:
 		methodConf := mux.methods[uriPath]
 		if methodConf == nil {
-			return errNotFound{}
+			return notFoundError{}
 		}
 		op.restTarget = methodConf.httpRule
 		if op.request.Method != http.MethodPost {
 			mayAllowGet, ok := op.client.protocol.(clientProtocolAllowsGet)
 			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
 			if !allowsGet {
-				return errMethodNotAllowed{
+				return methodNotAllowedError{
 					method:  op.request.Method,
 					allowed: []string{http.MethodPost},
 				}
 			}
 			if allowsGet && op.request.Method != http.MethodGet {
-				return errMethodNotAllowed{
+				return methodNotAllowedError{
 					method:  op.request.Method,
 					allowed: []string{http.MethodGet, http.MethodPost},
 				}
@@ -990,9 +990,7 @@ func (rw *responseWriter) flushMessage() {
 
 func (rw *responseWriter) reportError(err error) {
 	var end responseEnd
-	if errors.As(err, &end.err) {
-		// okay, we have a response end
-	} else {
+	if !errors.As(err, &end.err) {
 		end.err = connect.NewError(connect.CodeInternal, err)
 	}
 	rw.reportEnd(&end)
