@@ -29,7 +29,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func ExampleMux_rpcRpc() {
+func ExampleMux_connectToGRPC() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// RPC service implementing testv1connect.LibraryService annotations.
@@ -58,7 +58,8 @@ func ExampleMux_rpcRpc() {
 	// Create a connect client and call the service.
 	client := testv1connect.NewLibraryServiceClient(svr.Client(), svr.URL)
 
-	// Call the service.
+	// Call the service using Connect translated by the middleware to
+	// gRPC.
 	rsp, err := client.GetBook(
 		context.Background(),
 		connect.NewRequest(&testv1.GetBookRequest{
@@ -72,7 +73,7 @@ func ExampleMux_rpcRpc() {
 	// Output: Do Androids Dream of Electric Sheep?
 }
 
-func ExampleMux_restRpc() {
+func ExampleMux_restToGRPC() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// RPC service implementing testv1connect.LibraryService annotations.
@@ -113,8 +114,6 @@ func ExampleMux_restRpc() {
 		svr.URL+"/v1/shelves/top/books",
 		bytes.NewReader(body),
 	)
-	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("Content-Encoding", "identity")
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.RawQuery = "book_id=2&request_id=123"
 
@@ -136,7 +135,7 @@ func ExampleMux_restRpc() {
 	// Arthur C. Clarke
 }
 
-func ExampleMux_rpcRest() {
+func ExampleMux_connectToREST() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// REST service implementing testv1connect.LibraryService annotations.
@@ -213,7 +212,6 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		err = connect.NewError(connect.CodeNotFound, fmt.Errorf("method not found"))
 	}
 	rsp.Header().Set("Content-Type", "application/json")
-	rsp.Header().Set("Content-Encoding", "identity")
 	var body []byte
 	if err != nil {
 		code := connect.CodeInternal
