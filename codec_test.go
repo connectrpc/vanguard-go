@@ -464,6 +464,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			for _, testCase := range testCases {
 				testCase := testCase
 				for _, fieldName := range testCase.fieldNames {
+					fieldName := fieldName
 					t.Run(fieldName, func(t *testing.T) {
 						t.Parallel()
 						msg := (&testv1.AllTypes{}).ProtoReflect()
