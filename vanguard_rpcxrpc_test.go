@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
@@ -10,11 +20,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
-	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
-	"github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1/testv1connect"
+	testv1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
+	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
@@ -76,6 +87,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 		server := httptest.NewUnstartedServer(mux.AsHandler())
 		server.EnableHTTP2 = true
 		server.StartTLS()
+		disableCompression(server)
 		t.Cleanup(server.Close)
 		return testServer{name: name, svr: server}
 	}
@@ -98,13 +110,16 @@ func TestMux_RPCxRPC(t *testing.T) {
 		var opts []connect.ClientOption
 		for _, protocol := range protocols {
 			opts := appendClientProtocolOptions(t, opts, protocol)
-			addlOpts := map[string]connect.ClientOption{"": nil}
+			addlOpts := map[string][]connect.ClientOption{"": nil}
 			if protocol == ProtocolConnect {
-				addlOpts["(GET)"] = connect.WithHTTPGet()
+				addlOpts["(GET)"] = []connect.ClientOption{
+					connect.WithHTTPGet(),
+					connect.WithHTTPGetMaxURLSize(200, true),
+				}
 			}
 			for suffix, addlOpt := range addlOpts {
 				if addlOpt != nil {
-					opts = append(opts, addlOpt)
+					opts = append(opts, addlOpt...)
 				}
 				for _, codec := range codecs {
 					opts := appendClientCodecOptions(t, opts, codec)
@@ -139,15 +154,37 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromUnary(ctx, clients.libClient.GetBook, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.LibraryServiceGetBookProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.LibraryServiceGetBookProcedure,
-						msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+						msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.Book{Name: "shelves/1/books/1"},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			// Should force compression in Connect GET requests, for clients that support both.
+			// For clients that use GET but not compression, this will be too big for GET and will use POST instead.
+			name: "GetBook_large_request",
+			invoke: func(clients testClients, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, clients.libClient.GetBook, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.LibraryServiceGetBookProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 300) + "/1"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.Book{Name: strings.Repeat("foo/", 300) + "/1"},
 					}},
 				},
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
@@ -159,12 +196,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromUnary(ctx, clients.libClient.GetBook, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.LibraryServiceGetBookProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.LibraryServiceGetBookProcedure,
-						msg:    &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+						msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeFailedPrecondition, errors.New("foo")),
@@ -178,16 +215,15 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromClientStream(ctx, clients.contentClient.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &emptypb.Empty{},
@@ -202,16 +238,15 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromClientStream(ctx, clients.contentClient.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
@@ -225,12 +260,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromServerStream(ctx, clients.contentClient.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -266,12 +301,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromServerStream(ctx, clients.contentClient.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -293,12 +328,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromBidiStream(ctx, clients.contentClient.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -311,8 +346,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 						},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -329,12 +363,12 @@ func TestMux_RPCxRPC(t *testing.T) {
 				return outputFromBidiStream(ctx, clients.contentClient.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{

@@ -1,11 +1,22 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //nolint:revive // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -34,10 +45,10 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 	case connect.StreamTypeUnary:
 		return true
 	case connect.StreamTypeClient:
-		return requestIsSpecialHTTPBody(op)
+		return restHTTPBodyRequest(op)
 	case connect.StreamTypeServer:
 		// TODO: support server streams even when body is not google.api.HttpBody
-		return responseIsSpecialHTTPBody(op)
+		return restHTTPBodyResponse(op)
 	default:
 		return false
 	}
@@ -64,7 +75,7 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	if contentType != "" &&
 		contentType != "application/json" &&
 		contentType != "application/json; charset=utf-8" &&
-		!requestIsSpecialHTTPBody(op) {
+		!restHTTPBodyRequest(op) {
 		// invalid content-type
 		reqMeta.codec = contentType + "?"
 	}
@@ -83,7 +94,11 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	isErr := meta.end != nil && meta.end.err != nil
 	// TODO: this formulation might only be valid when meta.codec is JSON; support other codecs.
-	headers["Content-Type"] = []string{"application/" + meta.codec}
+	// Headers are only set if they are not already set, specially to allow
+	// for google.api.HttpBody payloads.
+	if headers["Content-Type"] == nil {
+		headers["Content-Type"] = []string{"application/" + meta.codec}
+	}
 	// TODO: Content-Encoding to compress error, too?
 	if !isErr && meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
@@ -121,29 +136,26 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 	return nil
 }
 
-func (r restClientProtocol) requestNeedsPrep(o *operation) bool {
-	return len(o.restTarget.vars) != 0 ||
-		len(o.request.URL.Query()) != 0 ||
-		o.restTarget.requestBodyFields != nil
+func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
+	return len(op.restTarget.vars) != 0 ||
+		len(op.request.URL.Query()) != 0 ||
+		op.restTarget.requestBodyFields != nil ||
+		restHTTPBodyRequest(op)
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
+	if err := r.prepareUnmarshalledRequestFromBody(op, src, target); err != nil {
+		return err
+	}
+	// Now pull in the fields from the URI path:
 	msg := target.ProtoReflect()
-	for _, field := range op.restTarget.requestBodyFields {
-		msg = msg.Mutable(field).Message()
-	}
-	if len(src) > 0 {
-		if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
-			return err
-		}
-	}
-	msg = target.ProtoReflect()
 	for i := len(op.restVars) - 1; i >= 0; i-- {
 		variable := op.restVars[i]
 		if err := setParameter(msg, variable.fields, variable.value); err != nil {
 			return err
 		}
 	}
+	// And finally from the query string:
 	for fieldPath, values := range op.queryValues() {
 		fields, err := resolvePathToDescriptors(msg.Descriptor(), fieldPath)
 		if err != nil {
@@ -158,16 +170,81 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	return nil
 }
 
-func (r restClientProtocol) responseNeedsPrep(o *operation) bool {
-	return len(o.restTarget.responseBodyFields) != 0
+func (r restClientProtocol) prepareUnmarshalledRequestFromBody(op *operation, src []byte, target proto.Message) error {
+	if op.restTarget.requestBodyFields == nil {
+		if len(src) > 0 {
+			return fmt.Errorf("request should have no body; instead got %d bytes", len(src))
+		}
+		return nil
+	}
+
+	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
+	if err != nil {
+		return err
+	}
+
+	if leafField == nil && restIsHTTPBody(msg.Descriptor(), nil) {
+		fields := msg.Descriptor().Fields()
+		contentType := op.reqContentType
+		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
+		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		return nil
+	}
+
+	if len(src) == 0 {
+		// No data to unmarshal.
+		return nil
+	}
+	if leafField == nil {
+		return op.client.codec.Unmarshal(src, msg.Interface())
+	}
+	restCodec, ok := op.client.codec.(RESTCodec)
+	if !ok {
+		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be unmarshalled",
+			op.client.codec.Name(), op.client.codec)
+	}
+	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
+}
+
+func (r restClientProtocol) responseNeedsPrep(op *operation) bool {
+	return len(op.restTarget.responseBodyFields) != 0 ||
+		restHTTPBodyResponse(op)
 }
 
 func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	msg := src.ProtoReflect()
-	for _, field := range op.restTarget.responseBodyFields {
-		msg = msg.Get(field).Message()
+	if restHTTPBodyResponse(op) {
+		msg := src.ProtoReflect()
+		for _, field := range op.restTarget.responseBodyFields {
+			msg = msg.Get(field).Message()
+		}
+		if !msg.IsValid() {
+			return base, nil
+		}
+		desc := msg.Descriptor()
+		dataField := desc.Fields().ByName("data")
+		contentField := desc.Fields().ByName("content_type")
+		contentType := msg.Get(contentField).String()
+		bytes := msg.Get(dataField).Bytes()
+		if contentType != "" {
+			headers.Set("Content-Type", contentType)
+		}
+		return bytes, nil
 	}
-	return op.client.codec.MarshalAppend(base, msg.Interface())
+
+	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
+	if err != nil {
+		return nil, err
+	}
+	if leafField == nil {
+		return op.client.codec.MarshalAppend(base, msg.Interface())
+	}
+	restCodec, ok := op.client.codec.(RESTCodec)
+	if !ok {
+		return nil,
+			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be marshalled",
+				op.client.codec.Name(), op.client.codec)
+	}
+	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
 }
 
 func (r restClientProtocol) String() string {
@@ -202,7 +279,7 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	}
 }
 
-func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	if statusCode/100 != 2 {
 		return responseMeta{
 				end: &responseEnd{httpCode: statusCode},
@@ -224,7 +301,7 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 			meta.codec = meta.codec[:n]
 		}
 	default:
-		meta.codec = contentType + "?"
+		meta.codec = ""
 	}
 	headers.Del("Content-Type")
 
@@ -253,23 +330,55 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 	if op.restTarget.requestBodyFields == nil {
 		return base, nil
 	}
-	msg := src.ProtoReflect()
-	for _, field := range op.restTarget.requestBodyFields {
-		msg = msg.Get(field).Message()
+	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
+	if err != nil {
+		return nil, err
 	}
-	return op.server.codec.MarshalAppend(base, msg.Interface())
+	if restHTTPBodyRequest(op) {
+		fields := msg.Descriptor().Fields()
+		contentType := msg.Get(fields.ByName("content_type")).String()
+		bytes := msg.Get(fields.ByName("data")).Bytes()
+		headers.Set("Content-Type", contentType)
+		return bytes, nil
+	}
+	if leafField == nil {
+		return op.server.codec.MarshalAppend(base, msg.Interface())
+	}
+	restCodec, ok := op.server.codec.(RESTCodec)
+	if !ok {
+		return nil,
+			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be marshalled",
+				op.server.codec.Name(), op.server.codec)
+	}
+	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
 }
 
-func (r restServerProtocol) responseNeedsPrep(o *operation) bool {
-	return len(o.restTarget.responseBodyFieldPath) != 0
+func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
+	return len(op.restTarget.responseBodyFieldPath) != 0 ||
+		restHTTPBodyResponse(op)
 }
 
 func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
-	msg := target.ProtoReflect()
-	for _, field := range op.restTarget.responseBodyFields {
-		msg = msg.Mutable(field).Message()
+	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
+	if err != nil {
+		return err
 	}
-	return op.server.codec.Unmarshal(src, msg.Interface())
+	if restHTTPBodyResponse(op) {
+		fields := msg.Descriptor().Fields()
+		contentType := op.rspContentType
+		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
+		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		return nil
+	}
+	if leafField == nil {
+		return op.server.codec.Unmarshal(src, msg.Interface())
+	}
+	restCodec, ok := op.server.codec.(RESTCodec)
+	if !ok {
+		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be unmarshalled",
+			op.server.codec.Name(), op.server.codec)
+	}
+	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
 }
 
 func (r restServerProtocol) requiresMessageToProvideRequestLine(o *operation) bool {
@@ -284,6 +393,7 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 	urlPath = path
 	queryParams = query.Encode()
 	includeBody = op.restTarget.requestBodyFields != nil // can be len(0) if body is '*'
+	// TODO: Should this return an error if URL (path + query string) is greater than op.methodConf.maxGetURLSz?
 	return urlPath, queryParams, op.restTarget.method, includeBody, nil
 }
 
@@ -291,18 +401,52 @@ func (r restServerProtocol) String() string {
 	return protocolNameREST
 }
 
-func requestIsSpecialHTTPBody(op *operation) bool {
-	return isSpecialHTTPBody(op.method.Input(), op.restTarget.requestBodyFields)
+func restHTTPBodyRequest(op *operation) bool {
+	return restIsHTTPBody(op.methodConf.descriptor.Input(), op.restTarget.requestBodyFields)
 }
 
-func responseIsSpecialHTTPBody(op *operation) bool {
-	return isSpecialHTTPBody(op.method.Output(), op.restTarget.responseBodyFields)
+func restHTTPBodyResponse(op *operation) bool {
+	return restIsHTTPBody(op.methodConf.descriptor.Output(), op.restTarget.responseBodyFields)
 }
 
-func isSpecialHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
+func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {
 	if len(bodyPath) > 0 {
 		field := bodyPath[len(bodyPath)-1]
+		if field.IsList() || field.IsMap() {
+			return false
+		}
 		msg = field.Message()
 	}
 	return msg != nil && msg.FullName() == "google.api.HttpBody"
+}
+
+type accessor func(protoreflect.Message, protoreflect.FieldDescriptor) protoreflect.Value
+
+func getBodyField(fields []protoreflect.FieldDescriptor, root protoreflect.Message, acc accessor) (protoreflect.Message, protoreflect.FieldDescriptor, error) {
+	msg := root
+	var leafField protoreflect.FieldDescriptor
+	for i, field := range fields {
+		if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
+			msg = acc(msg, field).Message()
+			continue
+		}
+		if i != len(fields)-1 {
+			// NB: This should not be possible since we validate the field types when
+			//     we build the fields path, when methods are configured with the mux.
+			//     This logic to construct an error is "just in case", like if we
+			//     introduce a bug such that the validation fails to catch this.
+			var actual string
+			switch {
+			case field.IsList():
+				actual = "list"
+			case field.IsMap():
+				actual = "map"
+			default:
+				actual = field.Kind().String()
+			}
+			return nil, nil, fmt.Errorf("field %s of %s has invalid type: need message, but got %s", field.Name(), msg.Descriptor().FullName(), actual)
+		}
+		leafField = field
+	}
+	return msg, leafField, nil
 }

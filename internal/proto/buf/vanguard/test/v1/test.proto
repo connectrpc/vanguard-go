@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 syntax = "proto3";
 
@@ -82,4 +92,124 @@ message ParameterValues {
   google.protobuf.Struct struct_value = 42;
   google.protobuf.Value value = 43;
   repeated ParameterValues recursive_list = 44;
+}
+
+message AllTypes {
+  // scalar types
+  double double_value = 1;
+  float float_value = 2;
+  int32 int32_value = 3;
+  int64 int64_value = 4;
+  uint32 uint32_value = 5;
+  uint64 uint64_value = 6;
+  sint32 sint32_value = 7;
+  sint64 sint64_value = 8;
+  fixed32 fixed32_value = 9;
+  fixed64 fixed64_value = 10;
+  sfixed32 sfixed32_value = 11;
+  sfixed64 sfixed64_value = 12;
+  bool bool_value = 13;
+  string string_value = 14;
+  bytes bytes_value = 15;
+  
+  // repeated types
+  repeated double double_list = 16;
+  repeated float float_list = 17;
+  repeated int32 int32_list = 18;
+  repeated int64 int64_list = 19;
+  repeated uint32 uint32_list = 20;
+  repeated uint64 uint64_list = 21;
+  repeated sint32 sint32_list = 22;
+  repeated sint64 sint64_list = 23;
+  repeated fixed32 fixed32_list = 24;
+  repeated fixed64 fixed64_list = 25;
+  repeated sfixed32 sfixed32_list = 26;
+  repeated sfixed64 sfixed64_list = 27;
+  repeated bool bool_list = 28;
+  repeated string string_list = 29;
+  repeated bytes bytes_list = 30;
+
+  // map key types
+  map<int32,string> int32_to_string_map = 31;
+  map<int64,string> int64_to_string_map = 32;
+  map<uint32,string> uint32_to_string_map = 33;
+  map<uint64,string> uint64_to_string_map = 34;
+  map<sint32,string> sint32_to_string_map = 35;
+  map<sint64,string> sint64_to_string_map = 36;
+  map<fixed32,string> fixed32_to_string_map = 37;
+  map<fixed64,string> fixed64_to_string_map = 38;
+  map<sfixed32,string> sfixed32_to_string_map = 39;
+  map<sfixed64,string> sfixed64_to_string_map = 40;
+  map<bool,string> bool_to_string_map = 41;
+  map<string,string> string_to_string_map = 42;
+
+  // map value types
+  map<string,double> double_map = 43;
+  map<string,float> float_map = 44;
+  map<string,int32> int32_map = 45;
+  map<string,int64> int64_map = 46;
+  map<string,uint32> uint32_map = 47;
+  map<string,uint64> uint64_map = 48;
+  map<string,sint32> sint32_map = 49;
+  map<string,sint64> sint64_map = 50;
+  map<string,fixed32> fixed32_map = 51;
+  map<string,fixed64> fixed64_map = 52;
+  map<string,sfixed32> sfixed32_map = 53;
+  map<string,sfixed64> sfixed64_map = 54;
+  map<string,bool> bool_map = 55;
+  map<string,string> string_map = 56;
+  map<string,bytes> bytes_map = 57;
+
+  // explicit presence types
+  optional double opt_double_value = 58;
+  optional float opt_float_value = 59;
+  optional int32 opt_int32_value = 60;
+  optional int64 opt_int64_value = 61;
+  optional uint32 opt_uint32_value = 62;
+  optional uint64 opt_uint64_value = 63;
+  optional sint32 opt_sint32_value = 64;
+  optional sint64 opt_sint64_value = 65;
+  optional fixed32 opt_fixed32_value = 66;
+  optional fixed64 opt_fixed64_value = 67;
+  optional sfixed32 opt_sfixed32_value = 68;
+  optional sfixed64 opt_sfixed64_value = 69;
+  optional bool opt_bool_value = 70;
+  optional string opt_string_value = 71;
+  optional bytes opt_bytes_value = 72;
+
+  // named types
+  enum Enum {
+    ZERO = 0;
+    ONE = 1;
+    TWO = 2;
+  }
+  AllTypes msg_value = 73;
+  Enum enum_value = 74;
+  optional AllTypes opt_msg_value = 75;
+  optional Enum opt_enum_value = 76;
+  repeated AllTypes msg_list = 77;
+  repeated Enum enum_list = 78;
+  map<string,AllTypes> msg_map = 79;
+  map<string,Enum> enum_map = 80;
+
+  // oneof
+  oneof option {
+    double double_option = 81;
+    float float_option = 82;
+    int32 int32_option = 83;
+    int64 int64_option = 84;
+    uint32 uint32_option = 85;
+    uint64 uint64_option = 86;
+    sint32 sint32_option = 87;
+    sint64 sint64_option = 88;
+    fixed32 fixed32_option = 89;
+    fixed64 fixed64_option = 90;
+    sfixed32 sfixed32_option = 91;
+    sfixed64 sfixed64_option = 92;
+    bool bool_option = 93;
+    string string_option = 94;
+    bytes bytes_option = 95;
+    AllTypes msg_option = 96;
+    Enum enum_option = 97;
+  }
 }

@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
@@ -14,12 +24,11 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
-	"github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1/testv1connect"
+	testv1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
+	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -83,7 +92,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "rest, route not found",
-			requestURL:    "/foo/bar/baz",
+			requestURL:    "/foo/bar/baz:buzz",
 			requestMethod: "PUT",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/json"},
@@ -506,10 +515,7 @@ func TestHandler_PassThrough(t *testing.T) {
 		},
 		{
 			name: "json",
-			// NB: connect has a JSON codec implementation, but it is not exposed or
-			//     selectable from the client; it is only available for handlers when
-			//     handling requests that use this format ¯\_(ツ)_/¯
-			opts: []connect.ClientOption{connect.WithCodec(jsonConnectCodec{})},
+			opts: []connect.ClientOption{connect.WithProtoJSON()},
 		},
 	}
 	protocolOptions := []connectClientCase{
@@ -536,12 +542,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromUnary(ctx, client.Index, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceIndexProcedure,
-						msg:    &testv1.IndexRequest{Page: "abcdef"},
+						msg: &testv1.IndexRequest{Page: "abcdef"},
 					}},
 					{out: &testMsgOut{
 						msg: &httpbody.HttpBody{
@@ -559,12 +565,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromUnary(ctx, client.Index, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceIndexProcedure,
-						msg:    &testv1.IndexRequest{Page: "xyz"},
+						msg: &testv1.IndexRequest{Page: "xyz"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
@@ -578,16 +584,15 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromClientStream(ctx, client.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &emptypb.Empty{},
@@ -602,16 +607,15 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromClientStream(ctx, client.Upload, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceUploadProcedure,
-						msg:    &testv1.UploadRequest{Filename: "xyz"},
+						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
@@ -625,12 +629,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromServerStream(ctx, client.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -666,12 +670,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromServerStream(ctx, client.Download, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceDownloadProcedure,
-						msg:    &testv1.DownloadRequest{Filename: "xyz"},
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.DownloadResponse{
@@ -693,12 +697,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -711,8 +715,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						},
 					}},
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -729,12 +732,12 @@ func TestHandler_PassThrough(t *testing.T) {
 				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
 			},
 			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
 				rspHeader: http.Header{"Message": []string{"world"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
-						method: testv1connect.ContentServiceSubscribeProcedure,
-						msg:    &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
 						msg: &testv1.SubscribeResponse{
@@ -1217,26 +1220,4 @@ func rot13(data []byte) {
 		}
 		data[index] = char
 	}
-}
-
-type jsonConnectCodec struct{}
-
-func (j jsonConnectCodec) Name() string {
-	return CodecJSON
-}
-
-func (j jsonConnectCodec) Marshal(a any) ([]byte, error) {
-	msg, ok := a.(proto.Message)
-	if !ok {
-		return nil, errors.New("not a message")
-	}
-	return protojson.Marshal(msg)
-}
-
-func (j jsonConnectCodec) Unmarshal(bytes []byte, a any) error {
-	msg, ok := a.(proto.Message)
-	if !ok {
-		return errors.New("not a message")
-	}
-	return protojson.Unmarshal(bytes, msg)
 }

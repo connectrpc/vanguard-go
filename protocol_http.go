@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
@@ -9,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -52,7 +61,7 @@ func httpWriteError(rsp http.ResponseWriter, err error) {
 	codec := protojson.MarshalOptions{
 		EmitUnpopulated: true,
 	}
-	cerr := asError(err)
+	cerr := asConnectError(err)
 	statusCode := httpStatusCodeFromRPC(cerr.Code())
 	stat := grpcStatusFromError(cerr)
 
@@ -182,7 +191,8 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 		return path, nil, nil
 	} else if target.requestBodyFieldPath != "" {
 		// Exclude the request body path from the query.
-		fieldPathCounts[target.requestBodyFieldPath]++
+		// A count of negative one means *all* values (even for repeated fields) are already used.
+		fieldPathCounts[target.requestBodyFieldPath] = -1
 	}
 
 	// Build the query by traversing the fields in the message.
@@ -200,7 +210,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 
 		switch {
 		case !isParameterType(field):
-			if fieldIndex > 0 {
+			if fieldIndex != 0 {
 				break
 			}
 			if field.IsMap() || field.IsList() ||
@@ -218,6 +228,9 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 			}
 			fieldIndex++
 		case field.IsList():
+			if fieldIndex < 0 {
+				break
+			}
 			listValue := value.List()
 			for fieldIndex < listValue.Len() {
 				value := listValue.Get(fieldIndex)
@@ -249,22 +262,15 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	return path, query, nil
 }
 
-func httpExtractTrailers(headers http.Header) http.Header {
-	expectedTrailerSet := make(map[string]struct{})
-	for _, vals := range headers.Values("Trailer") {
-		for _, val := range strings.Split(vals, ",") {
-			val = textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(val))
-			expectedTrailerSet[val] = struct{}{}
-		}
-	}
-	trailers := make(http.Header, len(expectedTrailerSet))
+func httpExtractTrailers(headers http.Header, knownTrailerKeys headerKeys) http.Header {
+	trailers := make(http.Header, len(knownTrailerKeys))
 	for key, vals := range headers {
 		if strings.HasPrefix(key, http.TrailerPrefix) {
 			trailers[strings.TrimPrefix(key, http.TrailerPrefix)] = vals
 			delete(headers, key)
 			continue
 		}
-		if _, expected := expectedTrailerSet[key]; expected {
+		if _, expected := knownTrailerKeys[key]; expected {
 			trailers[key] = vals
 			delete(headers, key)
 			continue

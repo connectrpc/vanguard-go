@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
@@ -219,7 +229,7 @@ func (c connectUnaryPostClientProtocol) encodeEnd(op *operation, end *responseEn
 	if end.err == nil {
 		return nil
 	}
-	wireErr := connectErrorToWireError(end.err, op.resolver)
+	wireErr := connectErrorToWireError(end.err, op.methodConf.resolver)
 	data, err := json.Marshal(wireErr)
 	if err != nil {
 		data = ([]byte)(`{"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}`)
@@ -262,7 +272,7 @@ func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, 
 	}
 }
 
-func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	var respMeta responseMeta
 	contentType := headers.Get("Content-Type")
 	switch {
@@ -278,7 +288,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 	headers.Del("Accept-Encoding")
 	trailers := connectExtractUnaryTrailers(headers)
 
-	var endUnmarshaler responseEndUnmarshaler
+	var endUnmarshaller responseEndUnmarshaller
 	if statusCode == http.StatusOK { //nolint:nestif
 		respMeta.pendingTrailers = trailers
 	} else {
@@ -292,7 +302,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 			wasCompressed: respMeta.compression != "",
 			trailers:      trailers,
 		}
-		endUnmarshaler = func(_ Codec, r io.Reader, end *responseEnd) {
+		endUnmarshaller = func(_ Codec, r io.Reader, end *responseEnd) {
 			// TODO: buffer size limit; use op.bufferPool
 			data, err := io.ReadAll(r)
 			if err != nil {
@@ -307,7 +317,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 			end.err = wireErr.toConnectError()
 		}
 	}
-	return respMeta, endUnmarshaler, nil
+	return respMeta, endUnmarshaller, nil
 }
 
 func (c connectUnaryServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
@@ -315,7 +325,14 @@ func (c connectUnaryServerProtocol) extractEndFromTrailers(_ *operation, _ http.
 }
 
 func (c connectUnaryServerProtocol) requestNeedsPrep(op *operation) bool {
-	return op.request.Method == http.MethodGet
+	return c.useGet(op)
+}
+
+func (c connectUnaryServerProtocol) useGet(op *operation) bool {
+	methodOptions, _ := op.methodConf.descriptor.Options().(*descriptorpb.MethodOptions)
+	_, isStable := op.server.codec.(StableCodec)
+	return op.request.Method == http.MethodGet && isStable &&
+		methodOptions.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
 }
 
 func (c connectUnaryServerProtocol) prepareMarshalledRequest(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
@@ -335,29 +352,20 @@ func (c connectUnaryServerProtocol) prepareUnmarshalledResponse(_ *operation, _ 
 }
 
 func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(op *operation) bool {
-	return op.request.Method == http.MethodGet
+	return c.useGet(op)
 }
 
 func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
-	if op.request.Method != http.MethodGet {
-		return op.methodPath, "", http.MethodPost, true, nil
+	if !c.useGet(op) {
+		return op.methodConf.methodPath, "", http.MethodPost, true, nil
 	}
 	vals := make(url.Values, 5)
 	vals.Set("connect", "v1")
 
 	vals.Set("encoding", op.server.codec.Name())
 	buf := op.bufferPool.Get()
-	stableMarshaler, isStable := op.server.codec.(interface {
-		StableMarshalAppend(b []byte, msg proto.Message) ([]byte, error)
-	})
-	var data []byte
-	if isStable {
-		data, err = stableMarshaler.StableMarshalAppend(buf.Bytes(), msg)
-	} else {
-		// Without stable marshalling, the URLs will be inconsistent
-		// and less cache-able.
-		data, err = op.server.codec.MarshalAppend(buf.Bytes(), msg)
-	}
+	stableMarshaler := op.server.codec.(StableCodec) //nolint:forcetypeassert,errcheck // c.useGet called above already checked this
+	data, err := stableMarshaler.MarshalAppendStable(buf.Bytes(), msg)
 	if err != nil {
 		op.bufferPool.Put(buf)
 		return "", "", "", false, err
@@ -365,34 +373,38 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	buf = op.bufferPool.Wrap(data, buf)
 	defer op.bufferPool.Put(buf)
 
-	// TODO: Maybe examine serialized bytes and only set this if there are
-	//       control characters or multi-byte characters? Or maybe those
-	//       characters are okay and we only do it when the result is
-	//       smaller (since percent-encoding is less efficient spacewise).
-	vals.Set("base64", "1")
 	encoded := op.bufferPool.Get()
-	encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
-	encoded.Grow(encodedLen)
-	encodedBytes := encoded.Bytes()[:encodedLen]
-	base64.RawURLEncoding.Encode(encodedBytes, data)
-	encoded = op.bufferPool.Wrap(encodedBytes, encoded)
 	defer op.bufferPool.Put(encoded)
-
 	if op.server.reqCompression != nil {
 		vals.Set("compression", op.server.reqCompression.Name())
-		buf.Reset()
-		if err := op.server.reqCompression.compress(buf, encoded); err != nil {
+		if err := op.server.reqCompression.compress(encoded, buf); err != nil {
 			return "", "", "", false, err
 		}
-		encoded = buf
+		// for the next step, we want encoded empty and data to be the message source
+		buf, encoded = encoded, buf // swap so writing to encoded doesn't mutate data
+		encoded.Reset()
+		data = buf.Bytes()
 	}
 
-	vals.Set("message", encoded.String())
-	// TODO: Limit to how big query string is (or maybe query string + URI path?)
-	//       So if transformation enlarges the query string/URL from the original
-	//       request (particularly if we de-compress w/out re-compressing), we can
-	//       decide to use POST instead of GET.
-	return op.methodPath, vals.Encode(), http.MethodGet, false, nil
+	var msgStr string
+	if stableMarshaler.IsBinary() || op.server.reqCompression != nil {
+		b64encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
+		vals.Set("base64", "1")
+		encoded.Grow(b64encodedLen)
+		encodedBytes := encoded.Bytes()[:b64encodedLen]
+		base64.RawURLEncoding.Encode(encodedBytes, data)
+		msgStr = string(encodedBytes)
+	} else {
+		msgStr = string(data)
+	}
+
+	vals.Set("message", msgStr)
+	queryString := vals.Encode()
+	if uint32(len(op.methodConf.methodPath)+len(queryString)+1) > op.methodConf.maxGetURLBytes {
+		// URL is too big; fall back to POST
+		return op.methodConf.methodPath, "", http.MethodPost, true, nil
+	}
+	return op.methodConf.methodPath, vals.Encode(), http.MethodGet, false, nil
 }
 
 func (c connectUnaryServerProtocol) String() string {
@@ -442,7 +454,7 @@ func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMet
 func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, _ bool) http.Header {
 	streamEnd := &connectStreamEnd{Metadata: end.trailers}
 	if end.err != nil {
-		streamEnd.Error = connectErrorToWireError(end.err, op.resolver)
+		streamEnd.Error = connectErrorToWireError(end.err, op.methodConf.resolver)
 	}
 	buffer := op.bufferPool.Get()
 	defer op.bufferPool.Put(buffer)
@@ -509,7 +521,7 @@ func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta,
 	}
 }
 
-func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	var respMeta responseMeta
 	contentType := headers.Get("Content-Type")
 	switch {

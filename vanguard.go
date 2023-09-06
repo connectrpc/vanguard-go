@@ -1,11 +1,22 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"sync"
@@ -26,6 +37,9 @@ const (
 	CodecJSON  = "json"
 	// TODO: Some grpc impls support "text" out of the box (but not JSON, ironically).
 	//       such as the JS impl. Should we also support it out of the box?
+
+	DefaultMaxMessageBufferBytes = math.MaxUint32
+	DefaultMaxGetURLBytes        = 8 * 1024
 )
 
 // Mux is a registry of RPC handlers that can handle transforming requests
@@ -83,6 +97,29 @@ type Mux struct {
 	// only see uncompressed payloads. If any requests arrive that use a known
 	// compression algorithm, the data will be decompressed.
 	Compressors []string
+	// MaxMessageBufferBytes is the maximum size of a received message when buffering
+	// is necessary. Buffering a message is sometimes necessary when translating
+	// from one protocol to another or one encoding to another. If buffering is
+	// necessary to translate a given request and a message exceeds the configured
+	// buffer size, the RPC will fail with a "resource exhausted" error. This applies
+	// to on-the-wire sizes. The actual memory usage for a buffered memory could be
+	// much higher than this due to decompression and/or decoding.
+	//
+	// If no value is configured, or it is set to a non-positive value, the limit is
+	// 4 GB. This is also a technical limitation of Connect and gRPC, whose envelopes
+	// do not allow payloads whose size in bytes overflows 32 bits. This should
+	// generally be set to a value that is less than or equal to similar limits
+	// configured in the server handler (or remote server, if the server handler will
+	// proxy the request elsewhere).
+	MaxMessageBufferBytes uint32
+	// MaxGetURLBytes is the maximum size of a GET URL that can be used to send an
+	// RPC using the Connect unary protocol with GET as the HTTP method. If a
+	// GET request would exceed this limit, the RPC will be sent using POST as the
+	// HTTP method instead.
+	//
+	// If no value is configured, or it is set to a non-positive value, a default
+	// limit of 8 KB (8192 bytes) will be used.
+	MaxGetURLBytes uint32
 	// TypeResolver is the default TypeResolver. If no TypeResolver is specified
 	// when a service is registered, this one is used. If nil, the default resolver
 	// will be [protoregistry.GlobalTypes].
@@ -177,6 +214,19 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		}
 	}
 
+	switch {
+	case svcOpts.maxGetURLBytes <= 0 && m.MaxGetURLBytes > 0:
+		svcOpts.maxGetURLBytes = m.MaxGetURLBytes
+	case svcOpts.maxGetURLBytes <= 0:
+		svcOpts.maxGetURLBytes = DefaultMaxGetURLBytes
+	}
+	switch {
+	case svcOpts.maxMsgBufferBytes <= 0 && m.MaxMessageBufferBytes > 0:
+		svcOpts.maxMsgBufferBytes = m.MaxMessageBufferBytes
+	case svcOpts.maxMsgBufferBytes <= 0:
+		svcOpts.maxMsgBufferBytes = DefaultMaxMessageBufferBytes
+	}
+
 	if svcOpts.resolver == nil {
 		svcOpts.resolver = m.TypeResolver
 		if svcOpts.resolver == nil {
@@ -229,16 +279,29 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodConf := &methodConfig{
-		descriptor:      methodDesc,
-		methodPath:      "/" + methodPath, // this usage wants proper URI path, with leading slash
-		handler:         handler,
-		resolver:        opts.resolver,
-		protocols:       opts.protocols,
-		codecNames:      opts.codecNames,
-		preferredCodec:  opts.preferredCodec,
-		compressorNames: opts.compressorNames,
+		descriptor:        methodDesc,
+		methodPath:        "/" + methodPath, // this usage wants proper URI path, with leading slash
+		handler:           handler,
+		resolver:          opts.resolver,
+		protocols:         opts.protocols,
+		codecNames:        opts.codecNames,
+		preferredCodec:    opts.preferredCodec,
+		compressorNames:   opts.compressorNames,
+		maxMsgBufferBytes: opts.maxMsgBufferBytes,
+		maxGetURLBytes:    opts.maxGetURLBytes,
 	}
 	m.methods[methodPath] = methodConf
+
+	switch {
+	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
+		methodConf.streamType = connect.StreamTypeBidi
+	case methodDesc.IsStreamingClient():
+		methodConf.streamType = connect.StreamTypeClient
+	case methodDesc.IsStreamingServer():
+		methodConf.streamType = connect.StreamTypeServer
+	default:
+		methodConf.streamType = connect.StreamTypeUnary
+	}
 
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
 		firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
@@ -363,6 +426,29 @@ func WithTypeResolver(resolver TypeResolver) ServiceOption {
 	})
 }
 
+// WithMaxMessageBufferBytes returns a service option that limits buffering of data
+// when handling the service to the given limit. If any payload in a request or
+// response exceeds this, the RPC will fail with a "resource exhausted" error.
+//
+// If set to zero or a negative value, a limit of 4 GB will be used.
+func WithMaxMessageBufferBytes(limit uint32) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.maxMsgBufferBytes = limit
+	})
+}
+
+// WithMaxGetURLBytes returns a service option that limits the size of URLs with
+// the Connect unary protocol using the GET HTTP method. If a URL's length would
+// exceed this limit, the POST HTTP method will be used instead (and the request
+// contents moved from the URL to the body).
+//
+// If set to zero or a negative value, a limit of 8 KB will be used.
+func WithMaxGetURLBytes(limit uint32) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.maxGetURLBytes = limit
+	})
+}
+
 // TypeResolver can resolve message and extension types and is used to instantiate
 // messages as needed for the middleware to serialize/de-serialize request and
 // response payloads.
@@ -396,17 +482,22 @@ type serviceOptions struct {
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
 	preferredCodec              string
+	maxMsgBufferBytes           uint32
+	maxGetURLBytes              uint32
 }
 
 type methodConfig struct {
 	descriptor                  protoreflect.MethodDescriptor
 	methodPath                  string
+	streamType                  connect.StreamType
 	handler                     http.Handler
 	resolver                    TypeResolver
 	protocols                   map[Protocol]struct{}
 	codecNames, compressorNames map[string]struct{}
 	preferredCodec              string
 	httpRule                    *routeTarget // First HTTP rule, if any.
+	maxMsgBufferBytes           uint32
+	maxGetURLBytes              uint32
 }
 
 // computeSet returns a resolved set of values of type T, preferring the given values if

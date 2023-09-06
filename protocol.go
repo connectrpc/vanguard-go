@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
@@ -8,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 
@@ -83,7 +94,7 @@ func (p Protocol) String() string {
 func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
 	switch p {
 	case ProtocolConnect:
-		if op.streamType == connect.StreamTypeUnary {
+		if op.methodConf.streamType == connect.StreamTypeUnary {
 			return connectUnaryServerProtocol{}
 		}
 		return connectStreamServerProtocol{}
@@ -197,7 +208,7 @@ type serverProtocolHandler interface {
 	// body), the body, and a pointer to the responseEnd which should
 	// be populated with the details. If the response body was compressed,
 	// it will be decompressed before it is provided to the given function.
-	extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error)
+	extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error)
 	// Called at end of RPC if responseEnd has not been returned by
 	// extractProtocolResponseHeaders or from an enveloped message
 	// in the response body whose trailer bit is set.
@@ -207,10 +218,10 @@ type serverProtocolHandler interface {
 	String() string
 }
 
-// responseEndUnmarshaler populates the given responseEnd by unmarshalling
+// responseEndUnmarshaller populates the given responseEnd by unmarshalling
 // information from the given reader. If unmarshalling needs to know the
 // server's codec, it also provided as the first argument.
-type responseEndUnmarshaler func(Codec, io.Reader, *responseEnd)
+type responseEndUnmarshaller func(Codec, io.Reader, *responseEnd)
 
 // clientProtocolEndMustBeInHeaders is an optional interface implemented
 // by clientProtocolHandler instances to indicate if the end of an RPC
@@ -335,11 +346,12 @@ type requestMeta struct {
 // responseMeta represents the metadata found in response headers that are
 // protocol-specific.
 type responseMeta struct {
-	end               *responseEnd
-	codec             string
-	compression       string
-	acceptCompression []string
-	pendingTrailers   http.Header
+	end                *responseEnd
+	codec              string
+	compression        string
+	acceptCompression  []string
+	pendingTrailers    http.Header
+	pendingTrailerKeys headerKeys
 }
 
 // responseEnd is a protocol-agnostic representation of the disposition
@@ -362,6 +374,17 @@ type responseEnd struct {
 	wasCompressed bool
 }
 
+type headerKeys map[string]struct{}
+
+func (keys headerKeys) add(k string) {
+	keys[textproto.CanonicalMIMEHeaderKey(k)] = struct{}{}
+}
+
+func (keys headerKeys) contains(k string) bool {
+	_, contains := keys[textproto.CanonicalMIMEHeaderKey(k)]
+	return contains
+}
+
 // parseMultiHeader parses headers that allow multiple values. It
 // supports the values being supplied in a single header separated
 // by commas, multiple headers, or a combination thereof.
@@ -379,13 +402,13 @@ func parseMultiHeader(vals []string) []string {
 			pos := strings.IndexByte(val, ',')
 			if pos == -1 {
 				if val != "" {
-					result = append(result, val)
+					result = append(result, strings.TrimSpace(val))
 				}
 				break
 			}
 			item := val[:pos]
 			if item != "" {
-				result = append(result, item)
+				result = append(result, strings.TrimSpace(item))
 			}
 			val = val[pos+1:]
 		}

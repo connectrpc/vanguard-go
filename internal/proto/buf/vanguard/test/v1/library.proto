@@ -1,45 +1,53 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 syntax = "proto3";
 
 package buf.vanguard.test.v1;
 
 import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
-import "google/protobuf/empty.proto";
 
 service LibraryService {
   // Gets a book.
   rpc GetBook(GetBookRequest) returns (Book) {
-    option (google.api.http) = {
-      get : "/v1/{name=shelves/*/books/*}"
-    };
+    option (google.api.http) = {get: "/v1/{name=shelves/*/books/*}"};
     option idempotency_level = NO_SIDE_EFFECTS;
-  };
+  }
   // Creates a book, and returns the new Book.
   rpc CreateBook(CreateBookRequest) returns (Book) {
     option (google.api.http) = {
-      post : "/v1/{parent=shelves/*}/books"
-      body : "book"
+      post: "/v1/{parent=shelves/*}/books"
+      body: "book"
     };
-  };
+  }
   // Lists books in a shelf.
   rpc ListBooks(ListBooksRequest) returns (ListBooksResponse) {
     // List method maps to HTTP GET.
     option (google.api.http) = {
       // The `parent` captures the parent resource name, such as
       // "shelves/shelf1".
-      get : "/v1/{parent=shelves/*}/books"
+      get: "/v1/{parent=shelves/*}/books"
     };
   }
   // Creates a shelf.
   rpc CreateShelf(CreateShelfRequest) returns (Shelf) {
     option (google.api.http) = {
-      post : "/v1/shelves"
-      body : "shelf"
+      post: "/v1/shelves"
+      body: "shelf"
     };
   }
   // Updates a book.
@@ -49,8 +57,8 @@ service LibraryService {
     option (google.api.http) = {
       // Note the URL template variable which captures the resource name of the
       // book to update.
-      patch : "/v1/{book.name=shelves/*/books/*}"
-      body : "book"
+      patch: "/v1/{book.name=shelves/*/books/*}"
+      body: "book"
     };
   }
   // Deletes a book.
@@ -60,14 +68,44 @@ service LibraryService {
     option (google.api.http) = {
       // Note the URL template variable capturing the multi-segment name of the
       // book resource to be deleted, such as "shelves/shelf1/books/book2"
-      delete : "/v1/{name=shelves/*/books/*}"
+      delete: "/v1/{name=shelves/*/books/*}"
     };
   }
   // Search books in a shelf.
   rpc SearchBooks(SearchBooksRequest) returns (SearchBooksResponse) {
     // Search over a multiple shelves with "shelves/-" wildcard.
+    option (google.api.http) = {get: "/v2/{parent=shelves/*}/books:search"};
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc MoveBooks(MoveBooksRequest) returns (MoveBooksResponse) {
     option (google.api.http) = {
-      get : "/v2/{parent=shelves/*}/books:search"
+      post: "/v2/{new_parent=shelves/*}/books:move"
+      body: "books"
+    };
+  }
+  rpc CheckoutBooks(CheckoutBooksRequest) returns (Checkout) {
+    option (google.api.http) = {
+      post: "/v2/checkouts"
+      body: "book_names"
+    };
+  }
+  rpc ReturnBooks(ReturnBooksRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      put: "/v2/checkouts/{id}"
+      body:"*"
+    };
+  }
+  rpc GetCheckout(GetCheckoutRequest) returns (Checkout) {
+    option (google.api.http) = {
+      get: "/v2/checkouts/{id}"
+      response_body: "books"
+    };
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc ListCheckouts(ListCheckoutsRequest) returns (ListCheckoutsResponse) {
+    option (google.api.http) = {
+      get: "/v2/{name=shelves/*/books/*}:checkouts"
+      response_body: "checkouts"
     };
     option idempotency_level = NO_SIDE_EFFECTS;
   }
@@ -131,7 +169,9 @@ message ListBooksResponse {
 
 message Shelf {}
 
-message CreateShelfRequest { Shelf shelf = 1; }
+message CreateShelfRequest {
+  Shelf shelf = 1;
+}
 
 message UpdateBookRequest {
   // The book resource which replaces the resource on the server.
@@ -172,4 +212,38 @@ message SearchBooksResponse {
   // Token to retrieve the next page of results, or empty if there are no
   // more results in the list.
   string next_page_token = 2;
+}
+
+message MoveBooksRequest {
+  string new_parent = 1;
+  repeated string books = 2;
+}
+
+message MoveBooksResponse {
+}
+
+message Checkout {
+  uint64 id = 1;
+  repeated Book books = 2;
+}
+
+message CheckoutBooksRequest {
+  repeated string book_names = 2;
+}
+
+message GetCheckoutRequest {
+  uint64 id = 1;
+}
+
+message ReturnBooksRequest {
+  uint64 id = 1;
+  repeated string book_names = 2;
+}
+
+message ListCheckoutsRequest {
+  string name = 1;
+}
+
+message ListCheckoutsResponse {
+  repeated Checkout checkouts = 1;
 }

@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
@@ -12,15 +22,16 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	testv1 "github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1"
-	"github.com/bufbuild/vanguard/internal/gen/buf/vanguard/test/v1/testv1connect"
+	testv1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
+	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1/testv1connect"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestMux_RPCxREST(t *testing.T) {
@@ -29,6 +40,7 @@ func TestMux_RPCxREST(t *testing.T) {
 	var interceptor testInterceptor
 	services := []protoreflect.FullName{
 		testv1connect.LibraryServiceName,
+		testv1connect.ContentServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -40,7 +52,8 @@ func TestMux_RPCxREST(t *testing.T) {
 	}
 	protocols := []Protocol{
 		ProtocolGRPC,
-		// TODO: grpc-web & connect
+		ProtocolGRPCWeb,
+		ProtocolConnect,
 	}
 
 	makeServer := func(compression string) testServer {
@@ -55,7 +68,8 @@ func TestMux_RPCxREST(t *testing.T) {
 				},
 			)
 		}
-		codec := DefaultJSONCodec(protoregistry.GlobalTypes)
+		// We use an "always-stable" codec for determinism in tests.
+		codec := &stableJSONCodec{}
 		opts := []ServiceOption{
 			WithProtocols(ProtocolREST),
 			WithCodecs(codec.Name()),
@@ -69,6 +83,10 @@ func TestMux_RPCxREST(t *testing.T) {
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
 
 		mux := &Mux{}
+		mux.AddCodec(CodecJSON, func(res TypeResolver) Codec {
+			codec := DefaultJSONCodec(res).(*jsonCodec) //nolint:errcheck,forcetypeassert
+			return &stableJSONCodec{jsonCodec: *codec}
+		})
 		for _, service := range services {
 			if err := mux.RegisterServiceByName(
 				hdlr, service, opts...,
@@ -77,7 +95,9 @@ func TestMux_RPCxREST(t *testing.T) {
 			}
 		}
 		server := httptest.NewUnstartedServer(mux.AsHandler())
-		server.Start()
+		server.EnableHTTP2 = true
+		server.StartTLS()
+		disableCompression(server)
 		t.Cleanup(server.Close)
 		return testServer{name: name, svr: server}
 	}
@@ -112,92 +132,341 @@ func TestMux_RPCxREST(t *testing.T) {
 		}
 	}
 
+	ctx := context.Background()
+	type testClients struct {
+		contentClient testv1connect.ContentServiceClient
+		libClient     testv1connect.LibraryServiceClient
+	}
 	type output struct {
 		header   http.Header
 		messages []proto.Message
 		trailer  http.Header
+		wantErr  *connect.Error
 	}
 	type testRequest struct {
 		name   string
-		input  func(t *testing.T) (http.Header, []proto.Message, http.Header)
+		input  func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error)
 		stream testStream
 		output output
 	}
-	testRequests := []testRequest{}
-	for _, opts := range testOpts {
-		libClient := testv1connect.NewLibraryServiceClient(
-			opts.svr.Client(), opts.svr.URL, opts.opts...,
-		)
-
-		testRequests = append(testRequests, []testRequest{{
-			name: "GetBook_" + opts.name,
-			input: func(t *testing.T) (http.Header, []proto.Message, http.Header) {
-				t.Helper()
-				req := connect.NewRequest(&testv1.GetBookRequest{Name: "shelves/1/books/1"})
-				req.Header().Set("Test", t.Name()) // test header
-				req.Header().Set("Message", "hello")
-				rsp, err := libClient.GetBook(context.Background(), req)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return rsp.Header(), []proto.Message{rsp.Msg}, rsp.Trailer()
-			},
-			stream: testStream{
-				reqHeader: http.Header{"Message": []string{"hello"}},
-				rspHeader: http.Header{"Message": []string{"world"}},
-				msgs: []testMsg{
-					{in: &testMsgIn{
-						method: "/v1/shelves/1/books/1",
-						msg:    nil, // GET request.
-					}},
-					{out: &testMsgOut{
-						msg: &testv1.Book{Name: "shelves/1/books/1"},
-					}},
-				},
-			},
-			output: output{
-				header: http.Header{"Message": []string{"world"}},
-				messages: []proto.Message{
-					&testv1.Book{Name: "shelves/1/books/1"},
-				},
-			},
-		}}...)
-
-		// Add more tests...
-	}
-
-	passingCases := map[string]struct{}{
-		"GetBook_gRPC_proto_identity/REST_json_identity": {},
-		"GetBook_gRPC_proto_gzip/REST_json_gzip":         {},
-		"GetBook_gRPC_proto_gzip/REST_json_identity":     {},
-		"GetBook_gRPC_json_gzip/REST_json_identity":      {},
-		"GetBook_gRPC_json_gzip/REST_json_gzip":          {},
-		"GetBook_gRPC_json_identity/REST_json_identity":  {},
-
-		// TODO: fix identity to compressed
-		// "GetBook_gRPC_proto_identity/REST_json_gzip": {},
-		// "GetBook_gRPC_json_identity/REST_json_gzip":  {},
-	}
-	_ = passingCases
-	for _, testCase := range testRequests {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			if _, ok := passingCases[testCase.name]; !ok {
-				t.Skip()
+	testRequests := []testRequest{{
+		name: "GetBook",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			hdr.Set("Message", "hello")
+			msgs := []proto.Message{
+				&testv1.GetBookRequest{Name: "shelves/1/books/1"},
 			}
+			return outputFromUnary(ctx, clients.libClient.GetBook, hdr, msgs)
+		},
+		stream: testStream{
+			method:    "/v1/shelves/1/books/1",
+			reqHeader: http.Header{"Message": []string{"hello"}},
+			rspHeader: http.Header{"Message": []string{"world"}},
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: nil, // GET request.
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1"},
+				}},
+			},
+		},
+		output: output{
+			header: http.Header{"Message": []string{"world"}},
+			messages: []proto.Message{
+				&testv1.Book{Name: "shelves/1/books/1"},
+			},
+		},
+	}, {
+		name: "GetBook-Error",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			hdr.Set("Message", "hello")
+			msgs := []proto.Message{
+				&testv1.GetBookRequest{Name: "shelves/1/books/1"},
+			}
+			return outputFromUnary(ctx, clients.libClient.GetBook, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/v1/shelves/1/books/1",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: nil, // GET request.
+				}},
+				{out: &testMsgOut{
+					err: connect.NewError(
+						connect.CodePermissionDenied,
+						fmt.Errorf("permission denied")),
+				}},
+			},
+		},
+		output: output{
+			wantErr: connect.NewError(
+				connect.CodePermissionDenied,
+				fmt.Errorf("permission denied")),
+		},
+	}, {
+		name: "CreateBook",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.CreateBookRequest{
+					Parent:    "shelves/1",
+					BookId:    "1",
+					RequestId: "2",
+					Book: &testv1.Book{
+						Title:  "The Art of Computer Programming",
+						Author: "Donald E. Knuth",
+					},
+				},
+			}
+			return outputFromUnary(ctx, clients.libClient.CreateBook, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/v1/shelves/1/books?book_id=1&request_id=2",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.Book{
+						Title:  "The Art of Computer Programming",
+						Author: "Donald E. Knuth",
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{
+						Title:  "The Art of Computer Programming",
+						Author: "Donald E. Knuth",
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&testv1.Book{
+				Title:  "The Art of Computer Programming",
+				Author: "Donald E. Knuth",
+			}},
+		},
+	}, {
+		name: "MoveBooks",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.MoveBooksRequest{
+					NewParent: "shelves/1",
+					Books:     []string{"book1", "book2", "book3", "book4"},
+				},
+			}
+			return outputFromUnary(ctx, clients.libClient.MoveBooks, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/v2/shelves/1/books:move",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &httpbody.HttpBody{
+						ContentType: "application/json",
+						Data:        ([]byte)(`["book1","book2","book3","book4"]`),
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.MoveBooksResponse{},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&testv1.MoveBooksResponse{}},
+		},
+	}, {
+		name: "ListCheckouts",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.ListCheckoutsRequest{
+					Name: "shelves/1/books/abc",
+				},
+			}
+			return outputFromUnary(ctx, clients.libClient.ListCheckouts, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/v2/shelves/1/books/abc:checkouts",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: nil, // GET request.
+				}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "application/json",
+						Data: ([]byte)(`[
+							{
+								"id": "123",
+								"books": [
+									{"name": "shelves/1/books/abc", "parent": "shelves/1"},
+									{"name": "shelves/1/books/def", "parent": "shelves/1"}
+								]
+							}
+						]`),
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&testv1.ListCheckoutsResponse{
+				Checkouts: []*testv1.Checkout{
+					{
+						Id: 123,
+						Books: []*testv1.Book{
+							{
+								Name: "shelves/1/books/abc", Parent: "shelves/1",
+							},
+							{
+								Name: "shelves/1/books/def", Parent: "shelves/1",
+							},
+						},
+					},
+				},
+			}},
+		},
+	}, {
+		name: "Index",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.IndexRequest{Page: "page.html"},
+			}
+			return outputFromUnary(ctx, clients.contentClient.Index, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/page.html",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: nil, // GET request.
+				}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "text/html",
+						Data:        []byte("<html>hello</html>"),
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&httpbody.HttpBody{
+				ContentType: "text/html",
+				Data:        []byte("<html>hello</html>"),
+			}},
+		},
+	}, {
+		name: "Upload",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.UploadRequest{
+					Filename: "message.txt",
+					File: &httpbody.HttpBody{
+						ContentType: "text/plain",
+						Data:        []byte("hello"),
+					},
+				},
+				&testv1.UploadRequest{
+					File: &httpbody.HttpBody{
+						Data: []byte(" world"),
+					},
+				},
+			}
+			return outputFromClientStream(ctx, clients.contentClient.Upload, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/message.txt:upload",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &httpbody.HttpBody{
+						ContentType: "text/plain",
+						Data:        []byte("hello world"),
+					},
+				}},
+				{out: &testMsgOut{msg: &emptypb.Empty{}}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&emptypb.Empty{}},
+		},
+	}, {
+		name: "Download",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.DownloadRequest{Filename: "message.txt"},
+			}
+			return outputFromServerStream(ctx, clients.contentClient.Download, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/message.txt:download",
+			msgs: []testMsg{
+				{in: &testMsgIn{}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "text/plain",
+						Data:        []byte("hello world"),
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&testv1.DownloadResponse{
+				File: &httpbody.HttpBody{
+					ContentType: "text/plain",
+					Data:        []byte("hello world"),
+				},
+			}},
+		},
+	}}
 
-			interceptor.set(t, testCase.stream)
-			defer interceptor.del(t)
+	for _, opts := range testOpts {
+		opts := opts
+		clients := testClients{
+			libClient: testv1connect.NewLibraryServiceClient(
+				opts.svr.Client(), opts.svr.URL, opts.opts...,
+			),
+			contentClient: testv1connect.NewContentServiceClient(
+				opts.svr.Client(), opts.svr.URL, opts.opts...,
+			),
+		}
+		t.Run(opts.name, func(t *testing.T) {
+			t.Parallel()
+			for _, req := range testRequests {
+				req := req
+				t.Run(req.name, func(t *testing.T) {
+					t.Parallel()
 
-			header, messages, trailer := testCase.input(t)
-			assert.Subset(t, header, testCase.output.header)
-			assert.Subset(t, trailer, testCase.output.trailer)
-			require.Len(t, messages, len(testCase.output.messages))
-			for i, msg := range messages {
-				want := testCase.output.messages[i]
-				assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
+					interceptor.set(t, req.stream)
+					defer interceptor.del(t)
+
+					reqHdr := http.Header{}
+					reqHdr.Set("Test", t.Name())
+
+					header, messages, trailer, err := req.input(clients, reqHdr)
+					if req.output.wantErr != nil {
+						assert.Equal(t, req.output.wantErr.Code(), connect.CodeOf(err))
+					} else {
+						assert.NoError(t, err)
+					}
+					assert.Subset(t, header, req.output.header)
+					assert.Subset(t, trailer, req.output.trailer)
+					require.Len(t, messages, len(req.output.messages))
+					for i, msg := range messages {
+						want := req.output.messages[i]
+						assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
+					}
+				})
 			}
 		})
 	}
+}
+
+type stableJSONCodec struct {
+	jsonCodec
+}
+
+func (s stableJSONCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+	// Always use stable method
+	return s.jsonCodec.MarshalAppendStable(b, msg)
+}
+
+func (s stableJSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+	data, err := s.jsonCodec.MarshalAppendField(base, msg, field)
+	if err != nil {
+		return nil, err
+	}
+	return jsonStabilize(data)
 }

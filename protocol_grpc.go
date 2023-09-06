@@ -1,6 +1,16 @@
 // Copyright 2023 Buf Technologies, Inc.
 //
-// All rights reserved.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package vanguard
 
@@ -12,6 +22,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -67,12 +78,30 @@ func (g grpcClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType
 }
 
 func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
-	// TODO: if headers has "Te: trailers", should we remove it?
+	headers.Del("Te") // no need to propagate "te: trailers" to requests in different protocols
 	return grpcExtractRequestMeta("application/grpc", "application/grpc+", headers)
 }
 
 func (g grpcClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	return grpcAddResponseMeta("application/grpc+", meta, headers)
+	statusCode := grpcAddResponseMeta("application/grpc+", meta, headers)
+	if len(meta.pendingTrailers) > 0 {
+		if meta.pendingTrailerKeys == nil {
+			meta.pendingTrailerKeys = make(headerKeys, len(meta.pendingTrailers))
+		}
+		for k := range meta.pendingTrailers {
+			meta.pendingTrailerKeys.add(k)
+		}
+	}
+	for k := range meta.pendingTrailerKeys {
+		headers.Add("Trailer", textproto.CanonicalMIMEHeaderKey(k))
+	}
+	if !meta.pendingTrailerKeys.contains("Grpc-Status") {
+		headers.Add("Trailer", "Grpc-Status")
+	}
+	if !meta.pendingTrailerKeys.contains("Grpc-Message") {
+		headers.Add("Trailer", "Grpc-Message")
+	}
+	return statusCode
 }
 
 func (g grpcClientProtocol) encodeEnd(_ *operation, end *responseEnd, _ io.Writer, wasInHeaders bool) http.Header {
@@ -113,7 +142,7 @@ func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	headers.Set("Te", "trailers")
 }
 
-func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	return grpcExtractResponseMeta("application/grpc", "application/grpc+", statusCode, headers), nil, nil
 }
 
@@ -228,7 +257,7 @@ func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, heade
 	grpcAddRequestMeta("application/grpc-web+", meta, headers)
 }
 
-func (g grpcWebServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (g grpcWebServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	return grpcExtractResponseMeta("application/grpc-web", "application/grpc-web+", statusCode, headers), nil, nil
 }
 
@@ -376,22 +405,6 @@ func grpcAddResponseMeta(contentTypePrefix string, meta responseMeta, headers ht
 	}
 	if len(meta.acceptCompression) > 0 {
 		headers.Set("Grpc-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
-	}
-	trailingKeys := parseMultiHeader(headers.Values("Trailer"))
-	var hasStatus, hasMessage bool
-	for _, k := range trailingKeys {
-		if strings.ToLower(k) == "grpc-status" {
-			hasStatus = true
-		}
-		if strings.ToLower(k) == "grpc-message" {
-			hasMessage = true
-		}
-	}
-	if !hasStatus {
-		headers.Add("Trailer", "Grpc-Status")
-	}
-	if !hasMessage {
-		headers.Add("Trailer", "Grpc-Message")
 	}
 	return http.StatusOK
 }
