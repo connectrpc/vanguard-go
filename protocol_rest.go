@@ -144,38 +144,10 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	if op.restTarget.requestBodyFields == nil { //nolint:nestif // TODO: improve control flow
-		if len(src) > 0 {
-			return fmt.Errorf("request should have no body; instead got %d bytes", len(src))
-		}
-	} else {
-		msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
-		if err != nil {
-			return err
-		}
-		if restIsHTTPBody(msg.Descriptor(), nil) {
-			fields := msg.Descriptor().Fields()
-			contentType := op.reqContentType
-			msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
-			msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
-		} else if len(src) > 0 {
-			if leafField == nil {
-				if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
-					return err
-				}
-			} else {
-				restCodec, ok := op.client.codec.(RESTCodec)
-				if !ok {
-					return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be unmarshalled",
-						op.client.codec.Name(), op.client.codec)
-				}
-				if err := restCodec.UnmarshalField(src, msg.Interface(), leafField); err != nil {
-					return err
-				}
-			}
-		}
+	if err := r.prepareUnmarshalledRequestFromBody(op, src, target); err != nil {
+		return err
 	}
-
+	// Now pull in the fields from the URI path:
 	msg := target.ProtoReflect()
 	for i := len(op.restVars) - 1; i >= 0; i-- {
 		variable := op.restVars[i]
@@ -183,6 +155,7 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 			return err
 		}
 	}
+	// And finally from the query string:
 	for fieldPath, values := range op.queryValues() {
 		fields, err := resolvePathToDescriptors(msg.Descriptor(), fieldPath)
 		if err != nil {
@@ -195,6 +168,42 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 		}
 	}
 	return nil
+}
+
+func (r restClientProtocol) prepareUnmarshalledRequestFromBody(op *operation, src []byte, target proto.Message) error {
+	if op.restTarget.requestBodyFields == nil {
+		if len(src) > 0 {
+			return fmt.Errorf("request should have no body; instead got %d bytes", len(src))
+		}
+		return nil
+	}
+
+	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
+	if err != nil {
+		return err
+	}
+
+	if leafField == nil && restIsHTTPBody(msg.Descriptor(), nil) {
+		fields := msg.Descriptor().Fields()
+		contentType := op.reqContentType
+		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
+		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		return nil
+	}
+
+	if len(src) == 0 {
+		// No data to unmarshal.
+		return nil
+	}
+	if leafField == nil {
+		return op.client.codec.Unmarshal(src, msg.Interface())
+	}
+	restCodec, ok := op.client.codec.(RESTCodec)
+	if !ok {
+		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be unmarshalled",
+			op.client.codec.Name(), op.client.codec)
+	}
+	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
 }
 
 func (r restClientProtocol) responseNeedsPrep(op *operation) bool {
