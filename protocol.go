@@ -208,7 +208,7 @@ type serverProtocolHandler interface {
 	// body), the body, and a pointer to the responseEnd which should
 	// be populated with the details. If the response body was compressed,
 	// it will be decompressed before it is provided to the given function.
-	extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error)
+	extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error)
 	// Called at end of RPC if responseEnd has not been returned by
 	// extractProtocolResponseHeaders or from an enveloped message
 	// in the response body whose trailer bit is set.
@@ -218,10 +218,10 @@ type serverProtocolHandler interface {
 	String() string
 }
 
-// responseEndUnmarshaler populates the given responseEnd by unmarshalling
+// responseEndUnmarshaller populates the given responseEnd by unmarshalling
 // information from the given reader. If unmarshalling needs to know the
 // server's codec, it also provided as the first argument.
-type responseEndUnmarshaler func(Codec, io.Reader, *responseEnd)
+type responseEndUnmarshaller func(Codec, io.Reader, *responseEnd)
 
 // clientProtocolEndMustBeInHeaders is an optional interface implemented
 // by clientProtocolHandler instances to indicate if the end of an RPC

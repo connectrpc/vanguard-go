@@ -272,7 +272,7 @@ func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, 
 	}
 }
 
-func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	var respMeta responseMeta
 	contentType := headers.Get("Content-Type")
 	switch {
@@ -288,7 +288,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 	headers.Del("Accept-Encoding")
 	trailers := connectExtractUnaryTrailers(headers)
 
-	var endUnmarshaler responseEndUnmarshaler
+	var endUnmarshaller responseEndUnmarshaller
 	if statusCode == http.StatusOK { //nolint:nestif
 		respMeta.pendingTrailers = trailers
 	} else {
@@ -302,7 +302,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 			wasCompressed: respMeta.compression != "",
 			trailers:      trailers,
 		}
-		endUnmarshaler = func(_ Codec, r io.Reader, end *responseEnd) {
+		endUnmarshaller = func(_ Codec, r io.Reader, end *responseEnd) {
 			// TODO: buffer size limit; use op.bufferPool
 			data, err := io.ReadAll(r)
 			if err != nil {
@@ -317,7 +317,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 			end.err = wireErr.toConnectError()
 		}
 	}
-	return respMeta, endUnmarshaler, nil
+	return respMeta, endUnmarshaller, nil
 }
 
 func (c connectUnaryServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
@@ -521,7 +521,7 @@ func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta,
 	}
 }
 
-func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	var respMeta responseMeta
 	contentType := headers.Get("Content-Type")
 	switch {

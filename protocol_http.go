@@ -191,7 +191,8 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 		return path, nil, nil
 	} else if target.requestBodyFieldPath != "" {
 		// Exclude the request body path from the query.
-		fieldPathCounts[target.requestBodyFieldPath]++
+		// A count of negative one means *all* values (even for repeated fields) are already used.
+		fieldPathCounts[target.requestBodyFieldPath] = -1
 	}
 
 	// Build the query by traversing the fields in the message.
@@ -209,7 +210,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 
 		switch {
 		case !isParameterType(field):
-			if fieldIndex > 0 {
+			if fieldIndex != 0 {
 				break
 			}
 			if field.IsMap() || field.IsList() ||
@@ -227,6 +228,9 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 			}
 			fieldIndex++
 		case field.IsList():
+			if fieldIndex < 0 {
+				break
+			}
 			listValue := value.List()
 			for fieldIndex < listValue.Len() {
 				value := listValue.Get(fieldIndex)

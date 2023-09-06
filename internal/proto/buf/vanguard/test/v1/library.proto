@@ -77,6 +77,38 @@ service LibraryService {
     option (google.api.http) = {get: "/v2/{parent=shelves/*}/books:search"};
     option idempotency_level = NO_SIDE_EFFECTS;
   }
+  rpc MoveBooks(MoveBooksRequest) returns (MoveBooksResponse) {
+    option (google.api.http) = {
+      post: "/v2/{new_parent=shelves/*}/books:move"
+      body: "books"
+    };
+  }
+  rpc CheckoutBooks(CheckoutBooksRequest) returns (Checkout) {
+    option (google.api.http) = {
+      post: "/v2/checkouts"
+      body: "book_names"
+    };
+  }
+  rpc ReturnBooks(ReturnBooksRequest) returns (google.protobuf.Empty) {
+    option (google.api.http) = {
+      put: "/v2/checkouts/{id}"
+      body:"*"
+    };
+  }
+  rpc GetCheckout(GetCheckoutRequest) returns (Checkout) {
+    option (google.api.http) = {
+      get: "/v2/checkouts/{id}"
+      response_body: "books"
+    };
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc ListCheckouts(ListCheckoutsRequest) returns (ListCheckoutsResponse) {
+    option (google.api.http) = {
+      get: "/v2/{name=shelves/*/books/*}:checkouts"
+      response_body: "checkouts"
+    };
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
 }
 
 message Book {
@@ -180,4 +212,38 @@ message SearchBooksResponse {
   // Token to retrieve the next page of results, or empty if there are no
   // more results in the list.
   string next_page_token = 2;
+}
+
+message MoveBooksRequest {
+  string new_parent = 1;
+  repeated string books = 2;
+}
+
+message MoveBooksResponse {
+}
+
+message Checkout {
+  uint64 id = 1;
+  repeated Book books = 2;
+}
+
+message CheckoutBooksRequest {
+  repeated string book_names = 2;
+}
+
+message GetCheckoutRequest {
+  uint64 id = 1;
+}
+
+message ReturnBooksRequest {
+  uint64 id = 1;
+  repeated string book_names = 2;
+}
+
+message ListCheckoutsRequest {
+  string name = 1;
+}
+
+message ListCheckoutsResponse {
+  repeated Checkout checkouts = 1;
 }

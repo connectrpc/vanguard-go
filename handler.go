@@ -1513,7 +1513,7 @@ func (tw *transformingWriter) reset() {
 type errorWriter struct {
 	rw          *responseWriter
 	respMeta    *responseMeta
-	processBody responseEndUnmarshaler
+	processBody responseEndUnmarshaller
 	buffer      *bytes.Buffer
 }
 
