@@ -82,6 +82,7 @@ func TestJSONStabilize(t *testing.T) {
 }
 
 func TestJSONCodec_MarshalField(t *testing.T) {
+	t.Parallel()
 	testCases := []struct {
 		fieldNames     []string
 		expectZeroJSON string
