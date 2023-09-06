@@ -140,7 +140,7 @@ func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	headers.Set("Te", "trailers")
 }
 
-func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	return grpcExtractResponseMeta("application/grpc", "application/grpc+", statusCode, headers), nil, nil
 }
 
@@ -255,7 +255,7 @@ func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, heade
 	grpcAddRequestMeta("application/grpc-web+", meta, headers)
 }
 
-func (g grpcWebServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (g grpcWebServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	return grpcExtractResponseMeta("application/grpc-web", "application/grpc-web+", statusCode, headers), nil, nil
 }
 

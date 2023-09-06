@@ -28,7 +28,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -70,7 +69,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			)
 		}
 		// We use an "always-stable" codec for determinism in tests.
-		codec := stableJSONCodec{}
+		codec := &stableJSONCodec{}
 		opts := []ServiceOption{
 			WithProtocols(ProtocolREST),
 			WithCodecs(codec.Name()),
@@ -84,7 +83,10 @@ func TestMux_RPCxREST(t *testing.T) {
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
 
 		mux := &Mux{}
-		mux.AddCodec(CodecJSON, func(res TypeResolver) Codec { return stableJSONCodec{res: res} })
+		mux.AddCodec(CodecJSON, func(res TypeResolver) Codec {
+			codec := DefaultJSONCodec(res).(*jsonCodec) //nolint:errcheck,forcetypeassert
+			return &stableJSONCodec{jsonCodec: *codec}
+		})
 		for _, service := range services {
 			if err := mux.RegisterServiceByName(
 				hdlr, service, opts...,
@@ -451,19 +453,10 @@ func TestMux_RPCxREST(t *testing.T) {
 }
 
 type stableJSONCodec struct {
-	res TypeResolver
-}
-
-func (s stableJSONCodec) Name() string {
-	return CodecJSON
+	jsonCodec
 }
 
 func (s stableJSONCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
-	opts := jsonCodec{m: protojson.MarshalOptions{EmitUnpopulated: true, Resolver: s.res}}
-	return opts.MarshalAppendStable(b, msg)
-}
-
-func (s stableJSONCodec) Unmarshal(b []byte, msg proto.Message) error {
-	opts := jsonCodec{u: protojson.UnmarshalOptions{Resolver: s.res}}
-	return opts.Unmarshal(b, msg)
+	// Always use stable method
+	return s.jsonCodec.MarshalAppendStable(b, msg)
 }

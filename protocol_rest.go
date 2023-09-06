@@ -16,7 +16,6 @@
 package vanguard
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,14 +159,19 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 			msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
 			msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
 		} else if len(src) > 0 {
-			if leafField != nil {
-				buf := op.bufferPool.Get()
-				defer op.bufferPool.Put(buf)
-				_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
-				src = buf.Bytes()
-			}
-			if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
-				return err
+			if leafField == nil {
+				if err := op.client.codec.Unmarshal(src, msg.Interface()); err != nil {
+					return err
+				}
+			} else {
+				restCodec, ok := op.client.codec.(RESTCodec)
+				if !ok {
+					return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be unmarshalled",
+						op.client.codec.Name(), op.client.codec)
+				}
+				if err := restCodec.UnmarshalField(src, msg.Interface(), leafField); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -222,19 +226,16 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 	if err != nil {
 		return nil, err
 	}
-	result, err := op.client.codec.MarshalAppend(base, msg.Interface())
-	if err != nil {
-		return nil, err
-	}
 	if leafField == nil {
-		return result, nil
+		return op.client.codec.MarshalAppend(base, msg.Interface())
 	}
-	// We have to dig a repeated field out of the message we just marshaled.
-	var val map[string]json.RawMessage
-	if err := json.Unmarshal(result, &val); err != nil {
-		return nil, err
+	restCodec, ok := op.client.codec.(RESTCodec)
+	if !ok {
+		return nil,
+			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be marshalled",
+				op.client.codec.Name(), op.client.codec)
 	}
-	return val[leafField.JSONName()], nil
+	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
 }
 
 func (r restClientProtocol) String() string {
@@ -269,7 +270,7 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	}
 }
 
-func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaler, error) {
+func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	if statusCode/100 != 2 {
 		return responseMeta{
 				end: &responseEnd{httpCode: statusCode},
@@ -331,19 +332,16 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 		headers.Set("Content-Type", contentType)
 		return bytes, nil
 	}
-	result, err := op.server.codec.MarshalAppend(base, msg.Interface())
-	if err != nil {
-		return nil, err
-	}
 	if leafField == nil {
-		return result, nil
+		return op.server.codec.MarshalAppend(base, msg.Interface())
 	}
-	// We have to dig a repeated field out of the message we just marshaled.
-	var val map[string]json.RawMessage
-	if err := json.Unmarshal(result, &val); err != nil {
-		return nil, err
+	restCodec, ok := op.server.codec.(RESTCodec)
+	if !ok {
+		return nil,
+			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be marshalled",
+				op.server.codec.Name(), op.server.codec)
 	}
-	return val[leafField.JSONName()], nil
+	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
 }
 
 func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
@@ -363,13 +361,15 @@ func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byt
 		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
 		return nil
 	}
-	if leafField != nil {
-		buf := op.bufferPool.Get()
-		defer op.bufferPool.Put(buf)
-		_, _ = fmt.Fprintf(buf, "{%q: %s}", leafField.JSONName(), src)
-		src = buf.Bytes()
+	if leafField == nil {
+		return op.server.codec.Unmarshal(src, msg.Interface())
 	}
-	return op.server.codec.Unmarshal(src, msg.Interface())
+	restCodec, ok := op.server.codec.(RESTCodec)
+	if !ok {
+		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be unmarshalled",
+			op.server.codec.Name(), op.server.codec)
+	}
+	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
 }
 
 func (r restServerProtocol) requiresMessageToProvideRequestLine(o *operation) bool {
@@ -422,6 +422,10 @@ func getBodyField(fields []protoreflect.FieldDescriptor, root protoreflect.Messa
 			continue
 		}
 		if i != len(fields)-1 {
+			// NB: This should not be possible since we validate the field types when
+			//     we build the fields path, when methods are configured with the mux.
+			//     This logic to construct an error is "just in case", like if we
+			//     introduce a bug such that the validation fails to catch this.
 			var actual string
 			switch {
 			case field.IsList():
