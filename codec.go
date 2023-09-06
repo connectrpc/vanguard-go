@@ -134,6 +134,9 @@ func (p *jsonCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte,
 }
 
 func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
+		return p.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
+	}
 	opts := p.m // copy marshal options, so we might modify them
 	msgReflect := msg.ProtoReflect()
 	if !msgReflect.Has(field) {
@@ -145,8 +148,8 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 			msgReflect.Set(field, msgReflect.Get(field))
 		} else {
 			// Setting the field (like above) won't help due to implicit presence.
-			// So instead, force the zero value to be marshalled.
-			p.m.EmitUnpopulated = true // force the zero value to be marshaled
+			// So instead, force the default value to be marshalled.
+			opts.EmitUnpopulated = true
 		}
 	}
 
@@ -171,6 +174,12 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	// Nothing in the serialized form? It's unclear under what conditions this
 	// could happen (it's possible that this cannot happen). Just in case it
 	// does, we'll emit a zero/empty value.
+	//
+	// NB: The reason we set EmitUnpopulated above, instead of just always
+	//     using the code below to marshal a zero value, is because with
+	//     editions, it will be possible to have fields with implicit presence
+	//     with *non-zero* default values. So we'd rather use EmitUnpopulated
+	//     and let protojson marshal the correct non-zero default.
 	switch {
 	case field.IsList():
 		return append(base, '[', ']'), nil
@@ -178,8 +187,6 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 		return append(base, '{', '}'), nil
 	default:
 		switch field.Kind() {
-		case protoreflect.MessageKind, protoreflect.GroupKind:
-			return append(base, 'n', 'u', 'l', 'l'), nil
 		case protoreflect.BoolKind:
 			return append(base, 'f', 'a', 'l', 's', 'e'), nil
 		case protoreflect.StringKind, protoreflect.BytesKind:
@@ -204,6 +211,9 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 }
 
 func (p *jsonCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
+	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
+		return p.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
+	}
 	// It would be nice if we could weave a bufferPool to here...
 	fieldName := p.fieldName(field)
 	buf := bytes.NewBuffer(make([]byte, 0, len(fieldName)+len(data)+3))
