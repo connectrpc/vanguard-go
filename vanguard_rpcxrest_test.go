@@ -460,3 +460,11 @@ func (s stableJSONCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, err
 	// Always use stable method
 	return s.jsonCodec.MarshalAppendStable(b, msg)
 }
+
+func (s stableJSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+	data, err := s.jsonCodec.MarshalAppendField(base, msg, field)
+	if err != nil {
+		return nil, err
+	}
+	return jsonStabilize(data)
+}

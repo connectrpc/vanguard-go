@@ -134,29 +134,26 @@ func (p *jsonCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte,
 }
 
 func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
-	opts := p.m                // copy marshal options
-	p.m.EmitUnpopulated = true // so we can make sure that default/zero values get marshalled
+	opts := p.m // copy marshal options, so we might modify them
 	msgReflect := msg.ProtoReflect()
-	if !msgReflect.Has(field) && field.ContainingOneof() != nil {
-		// If the field is part of a oneof and absent, it will not be
-		// emitted, even with EmitUnpopulated set to true. So we set
-		// it to its default to force serialization.
-		// NB: At this point in a request flow, we should have already used the message
-		//     to populate the URI path and query string, so it should be safe to mutate
-		//     it. In the response flow, nothing looks at the message except the
-		//     marshalling step. So, again, mutation should be okay.
-		msgReflect.Set(field, msgReflect.Get(field))
-	}
-	wholeMessage, err := opts.MarshalAppend(base, msg)
-	if err != nil {
-		return nil, err
+	if !msgReflect.Has(field) {
+		if field.HasPresence() {
+			// NB: At this point in a request flow, we should have already used the message
+			//     to populate the URI path and query string, so it should be safe to mutate
+			//     it. In the response flow, nothing looks at the message except the
+			//     marshalling step. So, again, mutation should be okay.
+			msgReflect.Set(field, msgReflect.Get(field))
+		} else {
+			// Setting the field (like above) won't help due to implicit presence.
+			// So instead, force the zero value to be marshalled.
+			p.m.EmitUnpopulated = true // force the zero value to be marshaled
+		}
 	}
 
-	// NB: Do we need another overload, like MarshalAppendFieldStable?? For now, we'll
-	//     just always use stable marshalling with fields. We want to do this in tests
-	//     for determinism. And we want to do this for query string params, for
-	//     stable cache keys in the event that responses are cacheable.
-	wholeMessage, err = jsonStabilize(wholeMessage)
+	// NB: We could possibly manually perform the marshaling, but that is
+	//     a decent but of protojson to reproduce (lot of new code to test
+	//     and to maintain) and risks inadvertently diverging from protojson.
+	wholeMessage, err := opts.MarshalAppend(base, msg)
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +167,10 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	if ok {
 		return result, nil
 	}
-	// Nothing in the serialized form. Unclear under what conditions this may happen
-	// (maybe it can't happen?). In case it does, we'll emit a zero/empty value.
+
+	// Nothing in the serialized form? It's unclear under what conditions this
+	// could happen (it's possible that this cannot happen). Just in case it
+	// does, we'll emit a zero/empty value.
 	switch {
 	case field.IsList():
 		return append(base, '[', ']'), nil
@@ -215,6 +214,9 @@ func (p *jsonCodec) UnmarshalField(data []byte, msg proto.Message, field protore
 	buf.WriteByte(':')
 	buf.Write(data)
 	buf.WriteByte('}')
+	// NB: We could possibly manually perform the unmarshaling, but that is
+	//     a decent but of protojson to reproduce (lot of new code to test
+	//     and to maintain) and risks inadvertently diverging from protojson.
 	return p.Unmarshal(buf.Bytes(), msg)
 }
 
