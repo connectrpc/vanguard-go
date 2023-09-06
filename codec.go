@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strconv"
-
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -154,7 +152,7 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	}
 
 	// NB: We could possibly manually perform the marshaling, but that is
-	//     a decent but of protojson to reproduce (lot of new code to test
+	//     a decent bit of protojson to reproduce (lot of new code to test
 	//     and to maintain) and risks inadvertently diverging from protojson.
 	wholeMessage, err := opts.MarshalAppend(base, msg)
 	if err != nil {
@@ -162,52 +160,33 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	}
 
 	// We have to dig a repeated field out of the message we just marshalled.
-	var val map[string]json.RawMessage
-	if err := json.Unmarshal(wholeMessage, &val); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(wholeMessage))
+	tok, err := dec.Token()
+	if err != nil {
 		return nil, err
 	}
-	result, ok := val[p.fieldName(field)]
-	if ok {
-		return result, nil
+	if tok != json.Delim('{') {
+		return nil, fmt.Errorf("JSON should be an object and begin with '{'; instead got %v", tok)
 	}
-
-	// Nothing in the serialized form? It's unclear under what conditions this
-	// could happen (it's possible that this cannot happen). Just in case it
-	// does, we'll emit a zero/empty value.
-	//
-	// NB: The reason we set EmitUnpopulated above, instead of just always
-	//     using the code below to marshal a zero value, is because with
-	//     editions, it will be possible to have fields with implicit presence
-	//     with *non-zero* default values. So we'd rather use EmitUnpopulated
-	//     and let protojson marshal the correct non-zero default.
-	switch {
-	case field.IsList():
-		return append(base, '[', ']'), nil
-	case field.IsMap():
-		return append(base, '{', '}'), nil
-	default:
-		switch field.Kind() {
-		case protoreflect.BoolKind:
-			return append(base, 'f', 'a', 'l', 's', 'e'), nil
-		case protoreflect.StringKind, protoreflect.BytesKind:
-			return append(base, '"', '"'), nil
-		case protoreflect.Int64Kind, protoreflect.Uint64Kind, protoreflect.Sint64Kind,
-			protoreflect.Fixed64Kind, protoreflect.Sfixed64Kind:
-			return append(base, '"', '0', '"'), nil
-		case protoreflect.Int32Kind, protoreflect.Uint32Kind, protoreflect.Sint32Kind,
-			protoreflect.Fixed32Kind, protoreflect.Sfixed32Kind,
-			protoreflect.FloatKind, protoreflect.DoubleKind:
-			return append(base, '0'), nil
-		case protoreflect.EnumKind:
-			defaultEnumVal := field.Enum().Values().Get(0)
-			if opts.UseEnumNumbers {
-				return strconv.AppendInt(base, int64(defaultEnumVal.Number()), 10), nil
-			}
-			return strconv.AppendQuote(base, string(defaultEnumVal.Name())), nil
-		default:
-			return nil, fmt.Errorf("unknown kind %v", field.Kind())
+	fieldName := p.fieldName(field)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("JSON object key should be a string; instead got %T", keyTok)
+		}
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, err
+		}
+		if key == fieldName {
+			return val, nil
 		}
 	}
+	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
 func (p *jsonCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
@@ -225,7 +204,7 @@ func (p *jsonCodec) UnmarshalField(data []byte, msg proto.Message, field protore
 	buf.Write(data)
 	buf.WriteByte('}')
 	// NB: We could possibly manually perform the unmarshaling, but that is
-	//     a decent but of protojson to reproduce (lot of new code to test
+	//     a decent bit of protojson to reproduce (lot of new code to test
 	//     and to maintain) and risks inadvertently diverging from protojson.
 	return p.Unmarshal(buf.Bytes(), msg)
 }
