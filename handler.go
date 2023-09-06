@@ -2001,20 +2001,3 @@ func asFlusher(respWriter http.ResponseWriter) http.Flusher {
 		}
 	}
 }
-
-func bufferLimitError(limit int64) error {
-	return sizeLimitError("max buffer size", limit)
-}
-
-func contentLengthError(limit int64) error {
-	return sizeLimitError("content length", limit)
-}
-
-func sizeLimitError(what string, limit int64) error {
-	return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("%s (%d) exceeded", what, limit))
-}
-
-func malformedRequestError(err error) error {
-	// Adds 400 Bad Request / InvalidArgument status codes to error
-	return connect.NewError(connect.CodeInvalidArgument, err)
-}

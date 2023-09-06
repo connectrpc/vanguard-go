@@ -459,7 +459,8 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 	}
 
 	for _, marshalOpt := range marshalOpts {
-		codec := &jsonCodec{m: marshalOpt.opts}
+		opts := marshalOpt.opts
+		codec := NewJSONCodec(opts, protojson.UnmarshalOptions{}).(RESTCodec) //nolint:forcetypeassert,errcheck
 		t.Run(marshalOpt.name, func(t *testing.T) {
 			t.Parallel()
 			for _, testCase := range testCases {
@@ -477,9 +478,9 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 						data, err = jsonStabilize(data) // for deterministic JSON strings
 						require.NoError(t, err)
 						expected := testCase.expectZeroJSON
-						if codec.m.UseEnumNumbers && testCase.expectZeroJSONEnumNumbers != "" {
+						if opts.UseEnumNumbers && testCase.expectZeroJSONEnumNumbers != "" {
 							expected = testCase.expectZeroJSONEnumNumbers
-						} else if codec.m.UseProtoNames && testCase.expectZeroJSONProtoNames != "" {
+						} else if opts.UseProtoNames && testCase.expectZeroJSONProtoNames != "" {
 							expected = testCase.expectZeroJSONProtoNames
 						}
 						require.Equal(t, expected, string(data))
@@ -509,9 +510,9 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 						data, err = jsonStabilize(data)
 						require.NoError(t, err)
 						expected = testCase.expectJSON
-						if codec.m.UseEnumNumbers && testCase.expectJSONEnumNumbers != "" {
+						if opts.UseEnumNumbers && testCase.expectJSONEnumNumbers != "" {
 							expected = testCase.expectJSONEnumNumbers
-						} else if codec.m.UseProtoNames && testCase.expectJSONProtoNames != "" {
+						} else if opts.UseProtoNames && testCase.expectJSONProtoNames != "" {
 							expected = testCase.expectJSONProtoNames
 						}
 						require.Equal(t, expected, string(data))

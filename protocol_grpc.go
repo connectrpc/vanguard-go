@@ -535,7 +535,7 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 	if codeHeader == "" {
 		return connect.NewError(
 			connect.CodeInternal,
-			errProtocol("missing trailer header %q", "Grpc-Status"),
+			protocolError("missing trailer header %q", "Grpc-Status"),
 		)
 	}
 	if codeHeader == "0" {
@@ -546,7 +546,7 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 	if err != nil {
 		return connect.NewError(
 			connect.CodeInternal,
-			errProtocol("invalid error code %q: %w", codeHeader, err),
+			protocolError("invalid error code %q: %w", codeHeader, err),
 		)
 	}
 	if code == 0 {
@@ -563,14 +563,14 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 	if err != nil {
 		return connect.NewError(
 			connect.CodeInternal,
-			errProtocol("invalid grpc-status-details-bin trailer: %w", err),
+			protocolError("invalid grpc-status-details-bin trailer: %w", err),
 		)
 	}
 	var stat status.Status
 	if err := proto.Unmarshal(detailsBinary, &stat); err != nil {
 		return connect.NewError(
 			connect.CodeInternal,
-			errProtocol("invalid protobuf for error details: %w", err),
+			protocolError("invalid protobuf for error details: %w", err),
 		)
 	}
 	trailerErr := connect.NewWireError(connect.Code(stat.Code), errors.New(stat.Message))
@@ -606,14 +606,14 @@ func grpcDecodeTimeout(timeout string) (time.Duration, error) {
 	}
 	unit, ok := grpcTimeoutUnitLookup[timeout[len(timeout)-1]]
 	if !ok {
-		return 0, errProtocol("timeout %q has invalid unit", timeout)
+		return 0, protocolError("timeout %q has invalid unit", timeout)
 	}
 	num, err := strconv.ParseInt(timeout[:len(timeout)-1], 10 /* base */, 64 /* bitsize */)
 	if err != nil || num < 0 {
-		return 0, errProtocol("invalid timeout %q", timeout)
+		return 0, protocolError("invalid timeout %q", timeout)
 	}
 	if num > 99999999 { // timeout must be ASCII string of at most 8 digits
-		return 0, errProtocol("timeout %q is too long", timeout)
+		return 0, protocolError("timeout %q is too long", timeout)
 	}
 	if unit == time.Hour && num > grpcTimeoutMaxHours {
 		// Timeout is effectively unbounded, so ignore it. The grpc-go

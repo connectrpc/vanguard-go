@@ -85,16 +85,16 @@ func httpErrorFromResponse(body io.Reader) *connect.Error {
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, err)
 	}
-	var status status.Status
-	if err := codec.Unmarshal(bin, &status); err != nil {
+	var stat status.Status
+	if err := codec.Unmarshal(bin, &stat); err != nil {
 		return connect.NewError(connect.CodeInternal, err)
 	}
 
 	connectErr := connect.NewWireError(
-		connect.Code(status.Code),
-		errors.New(status.Message),
+		connect.Code(stat.Code),
+		errors.New(stat.Message),
 	)
-	for _, msg := range status.Details {
+	for _, msg := range stat.Details {
 		errDetail, _ := connect.NewErrorDetail(msg)
 		connectErr.AddDetail(errDetail)
 	}

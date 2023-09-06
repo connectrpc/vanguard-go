@@ -27,8 +27,15 @@ import (
 // Codec is a message encoding format. It handles unmarshalling
 // messages from bytes and back.
 type Codec interface {
+	// Name returns the name of this codec. This is used in content-type
+	// strings to indicate this codec in the various RPC protocols.
 	Name() string
-	MarshalAppend(b []byte, msg proto.Message) ([]byte, error)
+	// MarshalAppend marshals the given message to bytes, appended to the
+	// given base byte slice. The given slice may be empty, but its
+	// capacity should be used when marshalling to bytes to reduce
+	// additional allocations.
+	MarshalAppend(base []byte, msg proto.Message) ([]byte, error)
+	// Unmarshal unmarshals the given data into the given target message.
 	Unmarshal(data []byte, msg proto.Message) error
 }
 
@@ -46,6 +53,11 @@ type Codec interface {
 // Connect protocol and that codec as POST requests.
 type StableCodec interface {
 	Codec
+	// MarshalAppendStable is the same as MarshalAppend except that the
+	// bytes produced must be deterministic and stable. Ideally, the
+	// produced bytes represent a *canonical* encoding. But this is not
+	// required as many codecs (including binary Protobuf and JSON) do
+	// not have a well-defined canonical encoding format.
 	MarshalAppendStable(b []byte, msg proto.Message) ([]byte, error)
 	// IsBinary returns true for non-text formats. This is used to decide
 	// whether the message query string parameter should be base64-encoded.
@@ -55,29 +67,48 @@ type StableCodec interface {
 // RESTCodec is a Codec with additional methods for marshalling and unmarshalling
 // individual fields of a message. This is necessary to support query string
 // variables and request and response bodies whose value is a specific field, not
-// an entire message. These methods are only used by the REST protocol.
+// an entire message. The extra methods are only used by the REST protocol.
 type RESTCodec interface {
 	Codec
-	MarshalAppendField(b []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
+	// MarshalAppendField marshals just the given field of the given message to
+	// bytes, and appends it to the given base byte slice.
+	MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
+	// UnmarshalField unmarshals the given data into the given field of the given
+	// message.
 	UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
 }
 
 // DefaultProtoCodec is the default codec factory used for
 // the codec name "proto". The given resolver is used to
 // unmarshal extensions.
+//
+// The returned codec implements StableCodec, in addition to
+// Codec.
 func DefaultProtoCodec(res TypeResolver) Codec {
 	return &protoCodec{Resolver: res}
 }
 
-// DefaultJSONCodec is the default codec factory used for
-// the codec name "json". The given resolve is used to
-// unmarshal extensions and also to marshal and unmarshal
-// instances of google.protobuf.Any.
+// DefaultJSONCodec is the default codec factory used for the codec named
+// "json". The given resolver is used to unmarshal extensions and also to
+// marshal and unmarshal instances of google.protobuf.Any.
+//
+// The returned codec implements StableCodec and RESTCodec, in addition to
+// Codec.
 func DefaultJSONCodec(res TypeResolver) Codec {
-	return &jsonCodec{
-		m: protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
-		u: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
-	}
+	return NewJSONCodec(
+		protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
+		protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
+	)
+}
+
+// NewJSONCodec creates a new Codec for the JSON format that uses the given
+// marshal and unmarshal options. This can be used to create JSON codecs
+// with behavior that differs from the DefaultJSONCodec.
+//
+// The returned codec implements StableCodec and RESTCodec, in addition to
+// Codec.
+func NewJSONCodec(marshalOpts protojson.MarshalOptions, unmarshalOpts protojson.UnmarshalOptions) Codec {
+	return &jsonCodec{m: marshalOpts, u: unmarshalOpts}
 }
 
 type protoCodec proto.UnmarshalOptions

@@ -32,10 +32,6 @@ func asConnectError(err error) *connect.Error {
 
 var errNoTimeout = errors.New("no timeout")
 
-func errProtocol(msg string, args ...any) error {
-	return fmt.Errorf("protocol error: "+msg, args...)
-}
-
 type httpError struct {
 	code    int
 	headers func(header http.Header)
@@ -50,6 +46,10 @@ func (e *httpError) Unwrap() error {
 	return e.err
 }
 
+func protocolError(msg string, args ...any) error {
+	return fmt.Errorf("protocol error: "+msg, args...)
+}
+
 func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
 	var httpErr *httpError
 	if errors.As(err, &httpErr) {
@@ -60,4 +60,21 @@ func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
 		return httpStatusCodeFromRPC(connErr.Code()), nil
 	}
 	return http.StatusInternalServerError, nil
+}
+
+func bufferLimitError(limit int64) error {
+	return sizeLimitError("max buffer size", limit)
+}
+
+func contentLengthError(limit int64) error {
+	return sizeLimitError("content length", limit)
+}
+
+func sizeLimitError(what string, limit int64) error {
+	return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("%s (%d) exceeded", what, limit))
+}
+
+func malformedRequestError(err error) error {
+	// Adds 400 Bad Request / InvalidArgument status codes to error
+	return connect.NewError(connect.CodeInvalidArgument, err)
 }
