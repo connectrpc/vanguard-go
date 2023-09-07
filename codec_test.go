@@ -180,7 +180,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			fieldNames: []string{
 				"enum_value", "opt_enum_value", "enum_option",
 			},
-			expectZeroJSON:            `"ZERO"`,
+			expectZeroJSON:            `"ENUM_UNSPECIFIED"`,
 			value:                     testv1.AllTypes_ENUM_ONE,
 			expectJSON:                `"ENUM_ONE"`,
 			expectZeroJSONEnumNumbers: "0",
