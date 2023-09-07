@@ -124,6 +124,10 @@ type Mux struct {
 	// when a service is registered, this one is used. If nil, the default resolver
 	// will be [protoregistry.GlobalTypes].
 	TypeResolver TypeResolver
+	// UnknownHandler is the handler to use when a request is received for a method
+	// that has not been registered. If nil, the default is to return a 404 Not Found
+	// error.
+	UnknownHandler http.Handler
 
 	init             sync.Once
 	codecImpls       map[string]func(TypeResolver) Codec
@@ -274,13 +278,13 @@ func (m *Mux) AddCompression(name string, newCompressor func() connect.Compresso
 }
 
 func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
-	methodPath := string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
+	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
 	if _, ok := m.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodConf := &methodConfig{
 		descriptor:        methodDesc,
-		methodPath:        "/" + methodPath, // this usage wants proper URI path, with leading slash
+		methodPath:        methodPath,
 		handler:           handler,
 		resolver:          opts.resolver,
 		protocols:         opts.protocols,

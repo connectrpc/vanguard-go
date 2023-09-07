@@ -22,6 +22,11 @@ import (
 	"connectrpc.com/connect"
 )
 
+var (
+	errNoTimeout = errors.New("no timeout")
+	errNotFound  = &httpError{code: http.StatusNotFound}
+)
+
 func asConnectError(err error) *connect.Error {
 	var ce *connect.Error
 	if errors.As(err, &ce) {
@@ -30,36 +35,46 @@ func asConnectError(err error) *connect.Error {
 	return connect.NewError(connect.CodeInternal, err)
 }
 
-var errNoTimeout = errors.New("no timeout")
-
 type httpError struct {
-	code    int
-	headers func(header http.Header)
-	err     error
+	code   int
+	header http.Header
 }
 
 func (e *httpError) Error() string {
-	return e.err.Error()
+	return http.StatusText(e.code)
+}
+func (e *httpError) EncodeHeaders(header http.Header) {
+	for key, vals := range e.header {
+		for _, val := range vals {
+			header.Add(key, val)
+		}
+	}
+}
+func (e *httpError) Encode(writer http.ResponseWriter) {
+	e.EncodeHeaders(writer.Header())
+	http.Error(writer, e.Error(), e.code)
 }
 
-func (e *httpError) Unwrap() error {
-	return e.err
+func asHTTPError(err error) *httpError {
+	if err == nil {
+		return &httpError{code: http.StatusOK}
+	}
+	var httpErr *httpError
+	if errors.As(err, &httpErr) {
+		return httpErr
+	}
+	var ce *connect.Error
+	if errors.As(err, &ce) {
+		return &httpError{
+			code:   httpStatusCodeFromRPC(ce.Code()),
+			header: ce.Meta(),
+		}
+	}
+	return &httpError{code: http.StatusInternalServerError}
 }
 
 func protocolError(msg string, args ...any) error {
 	return fmt.Errorf("protocol error: "+msg, args...)
-}
-
-func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
-	var httpErr *httpError
-	if errors.As(err, &httpErr) {
-		return httpErr.code, httpErr.headers
-	}
-	var connErr *connect.Error
-	if errors.As(err, &connErr) {
-		return httpStatusCodeFromRPC(connErr.Code()), nil
-	}
-	return http.StatusInternalServerError, nil
 }
 
 func bufferLimitError(limit int64) error {

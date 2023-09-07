@@ -67,11 +67,12 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// Identify the method being invoked.
 	err := op.resolveMethod(h.mux)
 	if err != nil {
-		code, headerFunc := httpCodeFromError(err)
-		if headerFunc != nil {
-			headerFunc(writer.Header())
+		// If the method is not found, we'll try the unknown handler, if there is one.
+		if h.mux.UnknownHandler != nil && errors.Is(err, errNotFound) {
+			h.mux.UnknownHandler.ServeHTTP(writer, request)
+			return
 		}
-		http.Error(writer, http.StatusText(code), code)
+		asHTTPError(err).Encode(writer)
 		return
 	}
 	if !op.client.protocol.acceptsStreamType(&op, op.methodConf.streamType) {
@@ -453,7 +454,7 @@ func (op *operation) resolveMethod(mux *Mux) error {
 			return nil
 		}
 		if len(methods) == 0 {
-			return &httpError{code: http.StatusNotFound}
+			return errNotFound
 		}
 		var sb strings.Builder
 		for method := range methods {
@@ -464,21 +465,16 @@ func (op *operation) resolveMethod(mux *Mux) error {
 		}
 		return &httpError{
 			code: http.StatusMethodNotAllowed,
-			headers: func(hdrs http.Header) {
-				hdrs.Set("Allow", sb.String())
+			header: http.Header{
+				"Allow": []string{sb.String()},
 			},
 		}
 	default:
-		// The other protocols just use the URI path as the method name and don't allow query params
-		if len(uriPath) == 0 || uriPath[0] != '/' {
-			// no starting slash? won't match any known route
-			return &httpError{code: http.StatusNotFound}
-		}
-		methodConf := mux.methods[uriPath[1:]]
+		methodConf := mux.methods[uriPath]
 		if methodConf == nil {
 			// TODO: if the service is known, but the method is not, we should send to the client
 			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
-			return &httpError{code: http.StatusNotFound}
+			return errNotFound
 		}
 		op.restTarget = methodConf.httpRule
 		if op.request.Method != http.MethodPost {
@@ -487,16 +483,16 @@ func (op *operation) resolveMethod(mux *Mux) error {
 			if !allowsGet {
 				return &httpError{
 					code: http.StatusMethodNotAllowed,
-					headers: func(hdrs http.Header) {
-						hdrs.Set("Allow", http.MethodPost)
+					header: http.Header{
+						"Allow": []string{http.MethodPost},
 					},
 				}
 			}
 			if allowsGet && op.request.Method != http.MethodGet {
 				return &httpError{
 					code: http.StatusMethodNotAllowed,
-					headers: func(hdrs http.Header) {
-						hdrs.Set("Allow", http.MethodGet+","+http.MethodPost)
+					header: http.Header{
+						"Allow": []string{http.MethodGet + "," + http.MethodPost},
 					},
 				}
 			}
@@ -516,13 +512,11 @@ func (op *operation) reportError(err error) {
 		return
 	}
 	// No responseWriter created yet, so we duplicate some of its behavior to write an error
-	code, headerFunc := httpCodeFromError(err)
-	if headerFunc != nil {
-		headerFunc(op.writer.Header())
-	}
+	httpErr := asHTTPError(err)
+	httpErr.EncodeHeaders(op.writer.Header())
 	connErr := asConnectError(err)
-	end := &responseEnd{err: connErr, httpCode: code}
-	code = op.client.protocol.addProtocolResponseHeaders(responseMeta{end: end}, op.writer.Header())
+	end := &responseEnd{err: connErr, httpCode: httpErr.code}
+	code := op.client.protocol.addProtocolResponseHeaders(responseMeta{end: end}, op.writer.Header())
 	op.writer.WriteHeader(code)
 	trailers := op.client.protocol.encodeEnd(op, end, op.writer, true)
 	httpMergeTrailers(op.writer.Header(), trailers)
