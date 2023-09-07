@@ -182,7 +182,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			},
 			expectZeroJSON:            `"ZERO"`,
 			value:                     testv1.AllTypes_ENUM_ONE,
-			expectJSON:                `"ONE"`,
+			expectJSON:                `"ENUM_ONE"`,
 			expectZeroJSONEnumNumbers: "0",
 			expectJSONEnumNumbers:     "1",
 		},
@@ -192,9 +192,9 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			},
 			expectZeroJSON:        "{}",
 			value:                 &testv1.AllTypes{Int32Value: 123, EnumValue: testv1.AllTypes_ENUM_TWO},
-			expectJSON:            `{"int32Value":123,"enumValue":"TWO"}`,
+			expectJSON:            `{"int32Value":123,"enumValue":"ENUM_TWO"}`,
 			expectJSONEnumNumbers: `{"int32Value":123,"enumValue":2}`,
-			expectJSONProtoNames:  `{"int32_value":123,"enum_value":"TWO"}`,
+			expectJSONProtoNames:  `{"int32_value":123,"enum_value":"ENUM_TWO"}`,
 		},
 		// Repeated fields:
 		{
@@ -263,16 +263,16 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			fieldNames:            []string{"enum_list"},
 			expectZeroJSON:        "[]",
 			value:                 []testv1.AllTypes_Enum{testv1.AllTypes_ENUM_ONE, testv1.AllTypes_ENUM_TWO},
-			expectJSON:            `["ONE","TWO"]`,
+			expectJSON:            `["ENUM_ONE","ENUM_TWO"]`,
 			expectJSONEnumNumbers: "[1,2]",
 		},
 		{
 			fieldNames:            []string{"msg_list"},
 			expectZeroJSON:        "[]",
 			value:                 []*testv1.AllTypes{{Int32Value: 123, EnumValue: testv1.AllTypes_ENUM_TWO}, {}, {StringList: []string{"foo", "bar"}}},
-			expectJSON:            `[{"int32Value":123,"enumValue":"TWO"},{},{"stringList":["foo","bar"]}]`,
+			expectJSON:            `[{"int32Value":123,"enumValue":"ENUM_TWO"},{},{"stringList":["foo","bar"]}]`,
 			expectJSONEnumNumbers: `[{"int32Value":123,"enumValue":2},{},{"stringList":["foo","bar"]}]`,
-			expectJSONProtoNames:  `[{"int32_value":123,"enum_value":"TWO"},{},{"string_list":["foo","bar"]}]`,
+			expectJSONProtoNames:  `[{"int32_value":123,"enum_value":"ENUM_TWO"},{},{"string_list":["foo","bar"]}]`,
 		},
 		// Map fields (permutations on map value type):
 		{
@@ -341,16 +341,16 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			fieldNames:            []string{"enum_map"},
 			expectZeroJSON:        "{}",
 			value:                 map[string]testv1.AllTypes_Enum{"a": testv1.AllTypes_ENUM_ONE, "b": testv1.AllTypes_ENUM_TWO},
-			expectJSON:            `{"a":"ONE","b":"TWO"}`,
+			expectJSON:            `{"a":"ENUM_ONE","b":"ENUM_TWO"}`,
 			expectJSONEnumNumbers: `{"a":1,"b":2}`,
 		},
 		{
 			fieldNames:            []string{"msg_map"},
 			expectZeroJSON:        "{}",
 			value:                 map[string]*testv1.AllTypes{"a": {Int32Value: 123, EnumValue: testv1.AllTypes_ENUM_TWO}, "b": {}, "c": {StringList: []string{"foo", "bar"}}},
-			expectJSON:            `{"a":{"int32Value":123,"enumValue":"TWO"},"b":{},"c":{"stringList":["foo","bar"]}}`,
+			expectJSON:            `{"a":{"int32Value":123,"enumValue":"ENUM_TWO"},"b":{},"c":{"stringList":["foo","bar"]}}`,
 			expectJSONEnumNumbers: `{"a":{"int32Value":123,"enumValue":2},"b":{},"c":{"stringList":["foo","bar"]}}`,
-			expectJSONProtoNames:  `{"a":{"int32_value":123,"enum_value":"TWO"},"b":{},"c":{"string_list":["foo","bar"]}}`,
+			expectJSONProtoNames:  `{"a":{"int32_value":123,"enum_value":"ENUM_TWO"},"b":{},"c":{"string_list":["foo","bar"]}}`,
 		},
 		// Map fields (permutations on map key type):
 		{
