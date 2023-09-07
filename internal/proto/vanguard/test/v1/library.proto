@@ -14,7 +14,7 @@
 
 syntax = "proto3";
 
-package buf.vanguard.test.v1;
+package vanguard.test.v1;
 
 import "google/api/annotations.proto";
 import "google/protobuf/empty.proto";

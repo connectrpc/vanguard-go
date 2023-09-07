@@ -14,11 +14,9 @@
 
 syntax = "proto3";
 
-package buf.vanguard.test.v1;
+package vanguard.test.v1;
 
-import "google/api/annotations.proto";
 import "google/protobuf/duration.proto";
-import "google/protobuf/empty.proto";
 import "google/protobuf/field_mask.proto";
 import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
@@ -111,7 +109,7 @@ message AllTypes {
   bool bool_value = 13;
   string string_value = 14;
   bytes bytes_value = 15;
-  
+
   // repeated types
   repeated double double_list = 16;
   repeated float float_list = 17;
@@ -179,9 +177,9 @@ message AllTypes {
 
   // named types
   enum Enum {
-    ZERO = 0;
-    ONE = 1;
-    TWO = 2;
+    ENUM_UNSPECIFIED = 0;
+    ENUM_ONE = 1;
+    ENUM_TWO = 2;
   }
   AllTypes msg_value = 73;
   Enum enum_value = 74;
