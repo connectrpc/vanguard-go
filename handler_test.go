@@ -92,7 +92,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "rest, route not found",
-			requestURL:    "/foo/bar/baz",
+			requestURL:    "/foo/bar/baz:buzz",
 			requestMethod: "PUT",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/json"},
@@ -411,6 +411,20 @@ func TestHandler_Errors(t *testing.T) {
 				"Content-Type": {"application/connect+proto"},
 			},
 			expectedCode: http.StatusUnsupportedMediaType,
+		},
+		{
+			name: "unknown handler",
+			mux: &Mux{
+				UnknownHandler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+					writer.WriteHeader(http.StatusTeapot)
+				}),
+			},
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/UnknownMethod",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/connect+proto"},
+			},
+			expectedCode: http.StatusTeapot,
 		},
 	}
 

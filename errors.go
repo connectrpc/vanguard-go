@@ -22,6 +22,11 @@ import (
 	"connectrpc.com/connect"
 )
 
+var (
+	errNoTimeout = errors.New("no timeout")
+	errNotFound  = &httpError{code: http.StatusNotFound}
+)
+
 func asConnectError(err error) *connect.Error {
 	var ce *connect.Error
 	if errors.As(err, &ce) {
@@ -30,34 +35,61 @@ func asConnectError(err error) *connect.Error {
 	return connect.NewError(connect.CodeInternal, err)
 }
 
-var errNoTimeout = errors.New("no timeout")
-
-func errProtocol(msg string, args ...any) error {
-	return fmt.Errorf("protocol error: "+msg, args...)
-}
-
 type httpError struct {
-	code    int
-	headers func(header http.Header)
-	err     error
+	code   int
+	header http.Header
 }
 
 func (e *httpError) Error() string {
-	return e.err.Error()
+	return http.StatusText(e.code)
+}
+func (e *httpError) EncodeHeaders(header http.Header) {
+	for key, vals := range e.header {
+		for _, val := range vals {
+			header.Add(key, val)
+		}
+	}
+}
+func (e *httpError) Encode(writer http.ResponseWriter) {
+	e.EncodeHeaders(writer.Header())
+	http.Error(writer, e.Error(), e.code)
 }
 
-func (e *httpError) Unwrap() error {
-	return e.err
-}
-
-func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
+func asHTTPError(err error) *httpError {
+	if err == nil {
+		return &httpError{code: http.StatusOK}
+	}
 	var httpErr *httpError
 	if errors.As(err, &httpErr) {
-		return httpErr.code, httpErr.headers
+		return httpErr
 	}
-	var connErr *connect.Error
-	if errors.As(err, &connErr) {
-		return httpStatusCodeFromRPC(connErr.Code()), nil
+	var ce *connect.Error
+	if errors.As(err, &ce) {
+		return &httpError{
+			code:   httpStatusCodeFromRPC(ce.Code()),
+			header: ce.Meta(),
+		}
 	}
-	return http.StatusInternalServerError, nil
+	return &httpError{code: http.StatusInternalServerError}
+}
+
+func protocolError(msg string, args ...any) error {
+	return fmt.Errorf("protocol error: "+msg, args...)
+}
+
+func bufferLimitError(limit int64) error {
+	return sizeLimitError("max buffer size", limit)
+}
+
+func contentLengthError(limit int64) error {
+	return sizeLimitError("content length", limit)
+}
+
+func sizeLimitError(what string, limit int64) error {
+	return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("%s (%d) exceeded", what, limit))
+}
+
+func malformedRequestError(err error) error {
+	// Adds 400 Bad Request / InvalidArgument status codes to error
+	return connect.NewError(connect.CodeInvalidArgument, err)
 }

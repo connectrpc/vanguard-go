@@ -30,7 +30,6 @@ import (
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -69,7 +68,8 @@ func TestMux_RPCxREST(t *testing.T) {
 				},
 			)
 		}
-		codec := DefaultJSONCodec(protoregistry.GlobalTypes)
+		// We use an "always-stable" codec for determinism in tests.
+		codec := &stableJSONCodec{}
 		opts := []ServiceOption{
 			WithProtocols(ProtocolREST),
 			WithCodecs(codec.Name()),
@@ -83,6 +83,9 @@ func TestMux_RPCxREST(t *testing.T) {
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
 
 		mux := &Mux{}
+		mux.AddCodec(CodecJSON, func(res TypeResolver) Codec {
+			return &stableJSONCodec{JSONCodec: *DefaultJSONCodec(res)}
+		})
 		for _, service := range services {
 			if err := mux.RegisterServiceByName(
 				hdlr, service, opts...,
@@ -240,6 +243,83 @@ func TestMux_RPCxREST(t *testing.T) {
 			}},
 		},
 	}, {
+		name: "MoveBooks",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.MoveBooksRequest{
+					NewParent: "shelves/1",
+					Books:     []string{"book1", "book2", "book3", "book4"},
+				},
+			}
+			return outputFromUnary(ctx, clients.libClient.MoveBooks, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/v2/shelves/1/books:move",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &httpbody.HttpBody{
+						ContentType: "application/json",
+						Data:        ([]byte)(`["book1","book2","book3","book4"]`),
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.MoveBooksResponse{},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&testv1.MoveBooksResponse{}},
+		},
+	}, {
+		name: "ListCheckouts",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.ListCheckoutsRequest{
+					Name: "shelves/1/books/abc",
+				},
+			}
+			return outputFromUnary(ctx, clients.libClient.ListCheckouts, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/v2/shelves/1/books/abc:checkouts",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: nil, // GET request.
+				}},
+				{out: &testMsgOut{
+					msg: &httpbody.HttpBody{
+						ContentType: "application/json",
+						Data: ([]byte)(`[
+							{
+								"id": "123",
+								"books": [
+									{"name": "shelves/1/books/abc", "parent": "shelves/1"},
+									{"name": "shelves/1/books/def", "parent": "shelves/1"}
+								]
+							}
+						]`),
+					},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&testv1.ListCheckoutsResponse{
+				Checkouts: []*testv1.Checkout{
+					{
+						Id: 123,
+						Books: []*testv1.Book{
+							{
+								Name: "shelves/1/books/abc", Parent: "shelves/1",
+							},
+							{
+								Name: "shelves/1/books/def", Parent: "shelves/1",
+							},
+						},
+					},
+				},
+			}},
+		},
+	}, {
 		name: "Index",
 		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
 			msgs := []proto.Message{
@@ -248,7 +328,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromUnary(ctx, clients.contentClient.Index, hdr, msgs)
 		},
 		stream: testStream{
-			method: "/index/page.html",
+			method: "/page.html",
 			msgs: []testMsg{
 				{in: &testMsgIn{
 					msg: nil, // GET request.
@@ -287,7 +367,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromClientStream(ctx, clients.contentClient.Upload, hdr, msgs)
 		},
 		stream: testStream{
-			method: "/raw/message.txt",
+			method: "/message.txt:upload",
 			msgs: []testMsg{
 				{in: &testMsgIn{
 					msg: &httpbody.HttpBody{
@@ -310,7 +390,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromServerStream(ctx, clients.contentClient.Download, hdr, msgs)
 		},
 		stream: testStream{
-			method: "/raw/message.txt",
+			method: "/message.txt:download",
 			msgs: []testMsg{
 				{in: &testMsgIn{}},
 				{out: &testMsgOut{
@@ -371,4 +451,21 @@ func TestMux_RPCxREST(t *testing.T) {
 			}
 		})
 	}
+}
+
+type stableJSONCodec struct {
+	JSONCodec
+}
+
+func (s stableJSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+	// Always use stable method
+	return s.JSONCodec.MarshalAppendStable(base, msg)
+}
+
+func (s stableJSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+	data, err := s.JSONCodec.MarshalAppendField(base, msg, field)
+	if err != nil {
+		return nil, err
+	}
+	return jsonStabilize(data)
 }
