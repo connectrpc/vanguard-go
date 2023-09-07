@@ -92,82 +92,52 @@ func DefaultProtoCodec(res TypeResolver) Codec {
 // "json". The given resolver is used to unmarshal extensions and also to
 // marshal and unmarshal instances of google.protobuf.Any.
 //
-// The returned codec implements StableCodec and RESTCodec, in addition to
-// Codec.
-func DefaultJSONCodec(res TypeResolver) Codec {
-	return NewJSONCodec(
-		protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
-		protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
-	)
+// By default, the returned codec is configured to emit unpopulated fields
+// when marshalling and to discard unknown fields when unmarshalling.
+func DefaultJSONCodec(res TypeResolver) *JSONCodec {
+	return &JSONCodec{
+		MarshalOptions:   protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
+		UnmarshalOptions: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
+	}
 }
 
-// NewJSONCodec creates a new Codec for the JSON format that uses the given
-// marshal and unmarshal options. This can be used to create JSON codecs
-// with behavior that differs from the DefaultJSONCodec.
-//
-// The returned codec implements StableCodec and RESTCodec, in addition to
-// Codec.
-func NewJSONCodec(marshalOpts protojson.MarshalOptions, unmarshalOpts protojson.UnmarshalOptions) Codec {
-	return &jsonCodec{m: marshalOpts, u: unmarshalOpts}
+// JSONCodec implements Codec for the JSON format. It uses the [protojson]
+// package for its implementation.
+type JSONCodec struct {
+	// MarshalOptions is used for marshalling data to JSON.
+	MarshalOptions protojson.MarshalOptions
+	// UnmarshalOptions is used for unmarshalling data from JSON.
+	UnmarshalOptions protojson.UnmarshalOptions
 }
 
-type protoCodec proto.UnmarshalOptions
+var _ StableCodec = (*JSONCodec)(nil)
+var _ RESTCodec = (*JSONCodec)(nil)
 
-var _ StableCodec = (*protoCodec)(nil)
-
-func (p *protoCodec) Name() string {
-	return CodecProto
-}
-
-func (p *protoCodec) IsBinary() bool {
-	return true
-}
-
-func (p *protoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
-	return proto.MarshalOptions{}.MarshalAppend(base, msg)
-}
-
-func (p *protoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
-	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(base, msg)
-}
-
-func (p *protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return (*proto.UnmarshalOptions)(p).Unmarshal(bytes, msg)
-}
-
-type jsonCodec struct {
-	m protojson.MarshalOptions
-	u protojson.UnmarshalOptions
-}
-
-var _ StableCodec = (*jsonCodec)(nil)
-var _ RESTCodec = (*jsonCodec)(nil)
-
-func (p *jsonCodec) Name() string {
+func (j *JSONCodec) Name() string {
 	return CodecJSON
 }
 
-func (p *jsonCodec) IsBinary() bool {
+func (j *JSONCodec) IsBinary() bool {
 	return false
 }
 
-func (p *jsonCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
-	return p.m.MarshalAppend(base, msg)
+func (j *JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+	return j.MarshalOptions.MarshalAppend(base, msg)
 }
 
-func (p *jsonCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
-	data, err := p.m.MarshalAppend(base, msg)
+func (j *JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
+	data, err := j.MarshalOptions.MarshalAppend(base, msg)
 	if err != nil {
 		return nil, err
 	}
 	return jsonStabilize(data)
 }
 
-func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+func (j *JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
-		return p.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
+		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
 	}
-	opts := p.m // copy marshal options, so we might modify them
+	opts := j.MarshalOptions // copy marshal options, so we might modify them
 	msgReflect := msg.ProtoReflect()
 	if !msgReflect.Has(field) {
 		if field.HasPresence() {
@@ -200,7 +170,7 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	if tok != json.Delim('{') {
 		return nil, fmt.Errorf("JSON should be an object and begin with '{'; instead got %v", tok)
 	}
-	fieldName := p.fieldName(field)
+	fieldName := j.fieldName(field)
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
@@ -221,12 +191,12 @@ func (p *jsonCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
-func (p *jsonCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
+func (j *JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
-		return p.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
+		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
 	}
 	// It would be nice if we could weave a bufferPool to here...
-	fieldName := p.fieldName(field)
+	fieldName := j.fieldName(field)
 	buf := bytes.NewBuffer(make([]byte, 0, len(fieldName)+len(data)+3))
 	buf.WriteByte('{')
 	if err := json.NewEncoder(buf).Encode(fieldName); err != nil {
@@ -238,15 +208,15 @@ func (p *jsonCodec) UnmarshalField(data []byte, msg proto.Message, field protore
 	// NB: We could possibly manually perform the unmarshaling, but that is
 	//     a decent bit of protojson to reproduce (lot of new code to test
 	//     and to maintain) and risks inadvertently diverging from protojson.
-	return p.Unmarshal(buf.Bytes(), msg)
+	return j.Unmarshal(buf.Bytes(), msg)
 }
 
-func (p *jsonCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return p.u.Unmarshal(bytes, msg)
+func (j *JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+	return j.UnmarshalOptions.Unmarshal(bytes, msg)
 }
 
-func (p *jsonCodec) fieldName(field protoreflect.FieldDescriptor) string {
-	if !p.m.UseProtoNames {
+func (j *JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
+	if !j.MarshalOptions.UseProtoNames {
 		return field.JSONName()
 	}
 	if field.IsExtension() {
@@ -254,6 +224,30 @@ func (p *jsonCodec) fieldName(field protoreflect.FieldDescriptor) string {
 		return "[" + string(field.FullName()) + "]"
 	}
 	return string(field.Name())
+}
+
+type protoCodec proto.UnmarshalOptions
+
+var _ StableCodec = (*protoCodec)(nil)
+
+func (p *protoCodec) Name() string {
+	return CodecProto
+}
+
+func (p *protoCodec) IsBinary() bool {
+	return true
+}
+
+func (p *protoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+	return proto.MarshalOptions{}.MarshalAppend(base, msg)
+}
+
+func (p *protoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
+	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(base, msg)
+}
+
+func (p *protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+	return (*proto.UnmarshalOptions)(p).Unmarshal(bytes, msg)
 }
 
 func jsonStabilize(data []byte) ([]byte, error) {

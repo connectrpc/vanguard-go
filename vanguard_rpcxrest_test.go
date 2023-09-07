@@ -84,8 +84,7 @@ func TestMux_RPCxREST(t *testing.T) {
 
 		mux := &Mux{}
 		mux.AddCodec(CodecJSON, func(res TypeResolver) Codec {
-			codec := DefaultJSONCodec(res).(*jsonCodec) //nolint:errcheck,forcetypeassert
-			return &stableJSONCodec{jsonCodec: *codec}
+			return &stableJSONCodec{JSONCodec: *DefaultJSONCodec(res)}
 		})
 		for _, service := range services {
 			if err := mux.RegisterServiceByName(
@@ -455,16 +454,16 @@ func TestMux_RPCxREST(t *testing.T) {
 }
 
 type stableJSONCodec struct {
-	jsonCodec
+	JSONCodec
 }
 
-func (s stableJSONCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+func (s stableJSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	// Always use stable method
-	return s.jsonCodec.MarshalAppendStable(b, msg)
+	return s.JSONCodec.MarshalAppendStable(base, msg)
 }
 
 func (s stableJSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
-	data, err := s.jsonCodec.MarshalAppendField(base, msg, field)
+	data, err := s.JSONCodec.MarshalAppendField(base, msg, field)
 	if err != nil {
 		return nil, err
 	}

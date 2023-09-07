@@ -460,7 +460,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 
 	for _, marshalOpt := range marshalOpts {
 		opts := marshalOpt.opts
-		codec := NewJSONCodec(opts, protojson.UnmarshalOptions{}).(RESTCodec) //nolint:forcetypeassert,errcheck
+		codec := &JSONCodec{MarshalOptions: opts}
 		t.Run(marshalOpt.name, func(t *testing.T) {
 			t.Parallel()
 			for _, testCase := range testCases {

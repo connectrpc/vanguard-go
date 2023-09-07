@@ -326,7 +326,9 @@ func (m *Mux) maybeInit() {
 		// initialize default codecs and compressors
 		m.codecImpls = map[string]func(res TypeResolver) Codec{
 			CodecProto: DefaultProtoCodec,
-			CodecJSON:  DefaultJSONCodec,
+			CodecJSON: func(res TypeResolver) Codec {
+				return DefaultJSONCodec(res)
+			},
 		}
 		m.compressionPools = map[string]*compressionPool{
 			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
