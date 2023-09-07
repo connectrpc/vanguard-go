@@ -412,6 +412,20 @@ func TestHandler_Errors(t *testing.T) {
 			},
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
+		{
+			name: "unknown handler",
+			mux: &Mux{
+				UnknownHandler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+					writer.WriteHeader(http.StatusTeapot)
+				}),
+			},
+			requestURL:    "/buf.vanguard.test.v1.LibraryService/UnknownMethod",
+			requestMethod: "POST",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/connect+proto"},
+			},
+			expectedCode: http.StatusTeapot,
+		},
 	}
 
 	for _, testCase := range testCases {

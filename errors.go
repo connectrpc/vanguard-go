@@ -37,27 +37,41 @@ func errProtocol(msg string, args ...any) error {
 }
 
 type httpError struct {
-	code    int
-	headers func(header http.Header)
-	err     error
+	code   int
+	header http.Header
 }
 
 func (e *httpError) Error() string {
-	return e.err.Error()
+	return http.StatusText(e.code)
+}
+func (e *httpError) EncodeHeaders(header http.Header) {
+	for key, vals := range e.header {
+		for _, val := range vals {
+			header.Add(key, val)
+		}
+	}
+}
+func (e *httpError) Encode(writer http.ResponseWriter) {
+	e.EncodeHeaders(writer.Header())
+	http.Error(writer, e.Error(), e.code)
 }
 
-func (e *httpError) Unwrap() error {
-	return e.err
-}
-
-func httpCodeFromError(err error) (code int, headers func(header http.Header)) {
+func asHTTPError(err error) *httpError {
+	if err == nil {
+		return &httpError{code: http.StatusOK}
+	}
 	var httpErr *httpError
 	if errors.As(err, &httpErr) {
-		return httpErr.code, httpErr.headers
+		return httpErr
 	}
-	var connErr *connect.Error
-	if errors.As(err, &connErr) {
-		return httpStatusCodeFromRPC(connErr.Code()), nil
+	var ce *connect.Error
+	if errors.As(err, &ce) {
+		return &httpError{
+			code:   httpStatusCodeFromRPC(ce.Code()),
+			header: ce.Meta(),
+		}
 	}
-	return http.StatusInternalServerError, nil
+	return &httpError{code: http.StatusInternalServerError}
 }
+
+var errNotFound = &httpError{code: http.StatusNotFound}
