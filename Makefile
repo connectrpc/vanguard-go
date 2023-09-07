@@ -52,9 +52,10 @@ generate: $(BIN)/buf $(BIN)/license-header ## Regenerate code and licenses
 			--year-range "$(COPYRIGHT_YEARS)"
 
 .PHONY: lint
-lint: $(BIN)/golangci-lint ## Lint
+lint: $(BIN)/golangci-lint $(BIN)/buf ## Lint
 	$(GO) vet ./...
 	$(BIN)/golangci-lint run
+	$(BIN)/buf lint
 
 .PHONY: lintfix
 lintfix: $(BIN)/golangci-lint ## Automatically fix some lint errors
