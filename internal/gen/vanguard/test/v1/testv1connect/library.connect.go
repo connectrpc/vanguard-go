@@ -20,9 +20,9 @@ package testv1connect
 
 import (
 	connect "connectrpc.com/connect"
+	v1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	context "context"
 	errors "errors"
-	v1 "github.com/bufbuild/vanguard-go/internal/gen/vanguard/test/v1"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	http "net/http"
 	strings "strings"
