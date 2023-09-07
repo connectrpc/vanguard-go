@@ -1,9 +1,14 @@
 version: v1
+deps:
+  - buf.build/googleapis/googleapis
 lint:
   use:
     - DEFAULT
+  except:
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
+  rpc_allow_google_protobuf_empty_responses: true
 breaking:
   use:
     - WIRE_JSON
-deps:
-  - buf.build/googleapis/googleapis

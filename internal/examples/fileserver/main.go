@@ -29,8 +29,8 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/bufbuild/vanguard-go"
-	testv1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
-	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1/testv1connect"
+	testv1 "github.com/bufbuild/vanguard-go/internal/gen/vanguard/test/v1"
+	"github.com/bufbuild/vanguard-go/internal/gen/vanguard/test/v1/testv1connect"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 )
 
