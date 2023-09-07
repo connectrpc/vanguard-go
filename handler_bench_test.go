@@ -47,7 +47,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		var buf bytes.Buffer
 		w := gzip.NewWriter(&buf)
 		_, _ = w.Write(b)
-		w.Close()
+		_ = w.Close()
 		return buf.Bytes()
 	}
 	envelopePayload := func(flags uint8, msg []byte) []byte {

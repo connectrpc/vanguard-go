@@ -200,7 +200,7 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 	svcOpts.codecNames = computeSet(svcOpts.codecNames, m.Codecs, defaultCodecs, false)
 	for codecName := range svcOpts.codecNames {
 		if _, known := m.codecImpls[codecName]; !known {
-			return fmt.Errorf("codec %s is not known; use config.AddCodec to add known codecs first", codecName)
+			return fmt.Errorf("codec %s is not known; use mux.AddCodec to add known codecs first", codecName)
 		}
 	}
 	if svcOpts.preferredCodec == "" {
@@ -214,7 +214,7 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 	svcOpts.compressorNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
 	for compressorName := range svcOpts.compressorNames {
 		if _, known := m.compressionPools[compressorName]; !known {
-			return fmt.Errorf("compression algorithm %s is not known; use config.AddCompression to add known algorithms first", compressorName)
+			return fmt.Errorf("compression algorithm %s is not known; use mux.AddCompression to add known algorithms first", compressorName)
 		}
 	}
 
@@ -330,7 +330,9 @@ func (m *Mux) maybeInit() {
 		// initialize default codecs and compressors
 		m.codecImpls = map[string]func(res TypeResolver) Codec{
 			CodecProto: DefaultProtoCodec,
-			CodecJSON:  DefaultJSONCodec,
+			CodecJSON: func(res TypeResolver) Codec {
+				return DefaultJSONCodec(res)
+			},
 		}
 		m.compressionPools = map[string]*compressionPool{
 			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
@@ -340,7 +342,7 @@ func (m *Mux) maybeInit() {
 }
 
 // ServiceOption is an option for configuring how the middleware will handle
-// requests to a particular RPC service. See Config.RegisterService.
+// requests to a particular RPC service. See Mux.RegisterService.
 type ServiceOption interface {
 	apply(*serviceOptions)
 }
@@ -422,7 +424,7 @@ func WithNoCompression() ServiceOption {
 }
 
 // WithTypeResolver returns a service option to use the given resolver when serializing
-// and de-serializing messages. If not specified, this defaults to Config.TypeResolver
+// and de-serializing messages. If not specified, this defaults to Mux.TypeResolver
 // (which defaults to [protoregistry.GlobalTypes] if unset).
 func WithTypeResolver(resolver TypeResolver) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {

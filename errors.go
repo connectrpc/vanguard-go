@@ -22,18 +22,17 @@ import (
 	"connectrpc.com/connect"
 )
 
+var (
+	errNoTimeout = errors.New("no timeout")
+	errNotFound  = &httpError{code: http.StatusNotFound}
+)
+
 func asConnectError(err error) *connect.Error {
 	var ce *connect.Error
 	if errors.As(err, &ce) {
 		return ce
 	}
 	return connect.NewError(connect.CodeInternal, err)
-}
-
-var errNoTimeout = errors.New("no timeout")
-
-func errProtocol(msg string, args ...any) error {
-	return fmt.Errorf("protocol error: "+msg, args...)
 }
 
 type httpError struct {
@@ -74,4 +73,23 @@ func asHTTPError(err error) *httpError {
 	return &httpError{code: http.StatusInternalServerError}
 }
 
-var errNotFound = &httpError{code: http.StatusNotFound}
+func protocolError(msg string, args ...any) error {
+	return fmt.Errorf("protocol error: "+msg, args...)
+}
+
+func bufferLimitError(limit int64) error {
+	return sizeLimitError("max buffer size", limit)
+}
+
+func contentLengthError(limit int64) error {
+	return sizeLimitError("content length", limit)
+}
+
+func sizeLimitError(what string, limit int64) error {
+	return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("%s (%d) exceeded", what, limit))
+}
+
+func malformedRequestError(err error) error {
+	// Adds 400 Bad Request / InvalidArgument status codes to error
+	return connect.NewError(connect.CodeInvalidArgument, err)
+}

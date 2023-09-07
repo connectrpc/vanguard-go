@@ -132,10 +132,10 @@ type clientProtocolHandler interface {
 	//       in encodeEnd, it is too late to change status code or headers. We
 	//       could possibly combine these for unary-only protocols to make the
 	//       implementation simpler. If we do, we'd need a way to swap protocol
-	//       handlers -- so that a REST handler swap itself out for a unary vs.
-	//       streaming implementation once the method is known (for streaming
-	//       upload/download endpoints or in future general support for server
-	//       streaming endpoints).
+	//       handlers -- so that a REST handler can swap itself out for a
+	//       unary- or streaming-specific implementation once the method is known
+	//       (for streaming upload/download endpoints or in future general support
+	//       for server streaming endpoints).
 
 	// Encodes the given responseMeta as headers into the given target
 	// headers. If provided, allowedCompression should be used instead
