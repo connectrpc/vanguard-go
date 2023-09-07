@@ -11,6 +11,8 @@ RPC protocols. It can seamlessly translate between gRPC, gRPC-Web, and Connect p
 and it can also translate to/from REST if your Protobuf services are annotated with Google's
 [HTTP transcoding options](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L44).
 
+[See an example in action!](internal/examples/fileserver/main.go)
+
 There are a handful of key use cases for such middleware:
 1. Using the above mentioned HTTP transcoding annotations allows you to support REST
    clients. This can be particularly useful when migrating from a REST API to a schema-driven
