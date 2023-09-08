@@ -31,9 +31,9 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"github.com/bufbuild/vanguard-go"
-	testv1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
-	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1/testv1connect"
+	"connectrpc.com/vanguard"
+	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
+	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"

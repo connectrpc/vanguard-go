@@ -1,4 +1,4 @@
-module github.com/bufbuild/vanguard-go
+module connectrpc.com/vanguard
 
 go 1.19
 

@@ -24,8 +24,8 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	testv1 "github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1"
-	"github.com/bufbuild/vanguard-go/internal/gen/buf/vanguard/test/v1/testv1connect"
+	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
+	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
@@ -144,7 +144,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect get, method not idempotent",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/CreateBook?connect=v1",
+			requestURL:    "/vanguard.test.v1.LibraryService/CreateBook?connect=v1",
 			requestMethod: "GET",
 			expectedCode:  http.StatusMethodNotAllowed,
 			expectedResponseHeaders: map[string]string{
@@ -153,7 +153,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect unary, bad HTTP method",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "DELETE",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -166,7 +166,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, bad HTTP method",
-			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
+			requestURL:    "/vanguard.test.v1.ContentService/Download",
 			requestMethod: "GET",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
@@ -178,7 +178,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc, bad HTTP method",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "PUT",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+proto"},
@@ -190,7 +190,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, bad HTTP method",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "PATCH",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+proto"},
@@ -211,7 +211,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown codec",
-			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
+			requestURL:    "/vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+text"},
@@ -220,7 +220,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, unknown codec",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -230,13 +230,13 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect get, unknown codec",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=text",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=text",
 			requestMethod: "GET",
 			expectedCode:  http.StatusUnsupportedMediaType,
 		},
 		{
 			name:          "grpc, unknown codec",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+text"},
@@ -245,7 +245,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, unknown codec",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+text"},
@@ -264,7 +264,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown compression",
-			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
+			requestURL:    "/vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":             {"application/connect+proto"},
@@ -274,7 +274,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, unknown compression",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -285,13 +285,13 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect get, unknown compression",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
 			requestMethod: "GET",
 			expectedCode:  http.StatusUnsupportedMediaType,
 		},
 		{
 			name:          "grpc, unknown compression",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc+proto"},
@@ -301,7 +301,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "grpc-web, unknown compression",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type":  {"application/grpc-web+proto"},
@@ -312,7 +312,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "connect stream, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
+			requestURL:    "/vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
@@ -322,7 +322,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "grpc, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
+			requestURL:    "/vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc+proto"},
@@ -332,7 +332,7 @@ func TestHandler_Errors(t *testing.T) {
 		{
 			name:          "grpc-web, bidi and http 1.1",
 			useHTTP1:      true,
-			requestURL:    "/buf.vanguard.test.v1.ContentService/Subscribe",
+			requestURL:    "/vanguard.test.v1.ContentService/Subscribe",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/grpc-web+proto"},
@@ -341,7 +341,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect post, stream method",
-			requestURL:    "/buf.vanguard.test.v1.ContentService/Download",
+			requestURL:    "/vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Connect-Protocol-Version": {"1"},
@@ -351,7 +351,7 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unary method",
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/GetBook",
+			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
@@ -365,7 +365,7 @@ func TestHandler_Errors(t *testing.T) {
 					writer.WriteHeader(http.StatusTeapot)
 				}),
 			},
-			requestURL:    "/buf.vanguard.test.v1.LibraryService/UnknownMethod",
+			requestURL:    "/vanguard.test.v1.LibraryService/UnknownMethod",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
