@@ -38,6 +38,7 @@ type handler struct {
 	canDecompress []string
 }
 
+//nolint:contextcheck
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op := h.newOperation(writer, request)
 	err := op.validate(h.mux, h.codecs)
@@ -63,7 +64,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 
 	if err != nil {
-		asHTTPError(err).Encode(op.writer)
+		op.reportError(err)
 		return
 	}
 
@@ -78,7 +79,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	op.handle() //nolint:contextcheck
+	op.handle()
 }
 
 func (h *handler) newOperation(writer http.ResponseWriter, request *http.Request) *operation {
@@ -641,14 +642,22 @@ func (op *operation) resolveMethod(mux *Mux) error {
 // must be used instead.
 func (op *operation) reportError(err error) {
 	defer op.cancel()
+
+	if !op.isValid {
+		// We don't have enough operation details to render an RPC error,
+		// so just send a simple HTTP error.
+		asHTTPError(err).Encode(op.writer)
+		return
+	}
+
 	rw, ok := op.writer.(*responseWriter)
 	if ok {
 		rw.reportError(err)
 		return
 	}
 	// No responseWriter created yet, so we duplicate some of its behavior to write an error.
-	if op.hooks.OnOperationEnd != nil {
-		if hookErr := op.hooks.OnOperationEnd(op.request.Context(), op, nil, err); hookErr != nil {
+	if op.hooks.OnOperationFail != nil {
+		if hookErr := op.hooks.OnOperationFail(op.request.Context(), op, nil, err); hookErr != nil {
 			// report the error returned by the hook
 			err = hookErr
 		}
@@ -1017,6 +1026,12 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	}
 	rw.headersWritten = true
 	rw.code = statusCode
+
+	if rw.endWritten {
+		// Nothing to do: we already sent RPC error to client.
+		return
+	}
+
 	var err error
 	rw.contentLen, err = httpExtractContentLength(rw.Header())
 	if err != nil {
@@ -1184,12 +1199,6 @@ func (rw *responseWriter) reportEnd(end *responseEnd) {
 		// add any pending trailers to the end
 		end.trailers = rw.respMeta.pendingTrailers
 	}
-	if rw.op.hooks.OnOperationEnd != nil {
-		if hookErr := rw.op.hooks.OnOperationEnd(rw.op.request.Context(), rw.op, end.trailers, end.err); hookErr != nil {
-			// report the error returned by the hook
-			end.err = asConnectError(hookErr)
-		}
-	}
 	switch {
 	case rw.headersFlushed:
 		// write error to body or trailers
@@ -1269,6 +1278,14 @@ func (rw *responseWriter) close() {
 }
 
 func (rw *responseWriter) writeEnd(end *responseEnd, wasInHeaders bool) {
+	if end.err == nil && rw.op.hooks.OnOperationFinish != nil {
+		rw.op.hooks.OnOperationFinish(rw.op.request.Context(), rw.op, end.trailers)
+	} else if end.err != nil && rw.op.hooks.OnOperationFail != nil {
+		if hookErr := rw.op.hooks.OnOperationFail(rw.op.request.Context(), rw.op, end.trailers, end.err); hookErr != nil {
+			// report the error returned by the hook
+			end.err = asConnectError(hookErr)
+		}
+	}
 	trailers := rw.op.client.protocol.encodeEnd(rw.op, end, rw.delegate, wasInHeaders)
 	httpMergeTrailers(rw.Header(), trailers)
 	rw.endWritten = true

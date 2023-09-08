@@ -616,11 +616,17 @@ type Hooks struct {
 	// re-encoding messages to a different format, or applying a different
 	// compression algorithm.
 	OnServerResponseMessage func(ctx context.Context, op Operation, rsp proto.Message, compressed bool, wireSize int) error
-	// OnOperationEnd is called when the operation completes. If the RPC
-	// was successful, the given err will be nil. If a non-nil error is
-	// returned, it will replace the given err when the error is sent to
-	// the client.
-	OnOperationEnd func(ctx context.Context, op Operation, trailers http.Header, err error) error
+	// OnOperationFinish is called if and when the operation completes
+	// successfully. If the operation does not complete successfully, then
+	// OnOperationFail will be called instead.
+	//
+	// This is the only callback that does not return an error. At this point
+	// the RPC has completed successfully, so it is too late to inject an error.
+	OnOperationFinish func(ctx context.Context, op Operation, trailers http.Header)
+	// OnOperationFail is called when the operation completes unsuccessfully.
+	// If a non-nil error is returned, it will replace the given err when the
+	// error is sent to the client.
+	OnOperationFail func(ctx context.Context, op Operation, trailers http.Header, err error) error
 }
 
 func (h Hooks) isEmpty() bool {
@@ -628,7 +634,8 @@ func (h Hooks) isEmpty() bool {
 		h.OnClientRequestMessage == nil &&
 		h.OnServerResponseHeaders == nil &&
 		h.OnServerResponseMessage == nil &&
-		h.OnOperationEnd == nil
+		h.OnOperationFinish == nil &&
+		h.OnOperationFail == nil
 }
 
 // TypeResolver can resolve message and extension types and is used to instantiate
