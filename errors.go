@@ -38,26 +38,50 @@ func asConnectError(err error) *connect.Error {
 type httpError struct {
 	code   int
 	header http.Header
+	err    error
+}
+
+func newHTTPError(statusCode int, msgFormat string, args ...any) *httpError {
+	return &httpError{
+		code: statusCode,
+		err:  fmt.Errorf(msgFormat, args...),
+	}
 }
 
 func (e *httpError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
 	return http.StatusText(e.code)
 }
+
+func (e *httpError) Unwrap() error {
+	return e.err
+}
+
 func (e *httpError) EncodeHeaders(header http.Header) {
+	if e == nil {
+		return
+	}
 	for key, vals := range e.header {
 		for _, val := range vals {
 			header.Add(key, val)
 		}
 	}
 }
+
 func (e *httpError) Encode(writer http.ResponseWriter) {
+	if e == nil {
+		writer.WriteHeader(http.StatusOK)
+		return
+	}
 	e.EncodeHeaders(writer.Header())
 	http.Error(writer, e.Error(), e.code)
 }
 
 func asHTTPError(err error) *httpError {
 	if err == nil {
-		return &httpError{code: http.StatusOK}
+		return nil
 	}
 	var httpErr *httpError
 	if errors.As(err, &httpErr) {
@@ -68,9 +92,10 @@ func asHTTPError(err error) *httpError {
 		return &httpError{
 			code:   httpStatusCodeFromRPC(ce.Code()),
 			header: ce.Meta(),
+			err:    err,
 		}
 	}
-	return &httpError{code: http.StatusInternalServerError}
+	return &httpError{code: http.StatusInternalServerError, err: err}
 }
 
 func protocolError(msg string, args ...any) error {

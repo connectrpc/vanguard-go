@@ -666,11 +666,31 @@ func TestMux_Hooks(t *testing.T) {
 	var reqMsgs sync.Map
 	var respMsgs sync.Map
 	type testCaseName struct{}
-	hookFactory := func(msgsRecorded *sync.Map) func(context.Context, proto.Message) error {
-		return func(ctx context.Context, msg proto.Message) error {
+	hookFactory := func(req bool) func(context.Context, Operation, proto.Message, bool, int) error {
+		var msgsRecorded *sync.Map
+		if req {
+			msgsRecorded = &reqMsgs
+		} else {
+			msgsRecorded = &respMsgs
+		}
+		return func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
 			name, ok := ctx.Value(testCaseName{}).(string)
 			if !ok {
 				return errors.New("no testCaseName in context")
+			}
+			if size <= 0 {
+				return fmt.Errorf("invalid wire size: %d", size)
+			}
+			var expectCompressed bool
+			if req {
+				// For gzip test cases, we expect the request to be compressed.
+				expectCompressed = strings.Contains(name, "gzip")
+			} else {
+				// But all responses can be compressed
+				expectCompressed = true
+			}
+			if compressed != expectCompressed {
+				return fmt.Errorf("invalid compressed: expecting %v, got %v", expectCompressed, compressed)
 			}
 			var slice []proto.Message
 			val, exists := msgsRecorded.Load(name)
@@ -687,6 +707,18 @@ func TestMux_Hooks(t *testing.T) {
 			slice = append(slice, msg)
 			msgsRecorded.Store(name, slice)
 			return nil
+		}
+	}
+	makeHooks := func(req, resp bool) func(context.Context, Operation) (Hooks, error) {
+		return func(_ context.Context, _ Operation) (Hooks, error) {
+			var hooks Hooks
+			if req {
+				hooks.OnClientRequestMessage = hookFactory(true)
+			}
+			if resp {
+				hooks.OnServerResponseMessage = hookFactory(false)
+			}
+			return hooks, nil
 		}
 	}
 
@@ -712,12 +744,8 @@ func TestMux_Hooks(t *testing.T) {
 	}
 	for i := range svrCases {
 		svrCase := &svrCases[i]
-		mux := &Mux{}
-		if svrCase.reqHook {
-			mux.RequestHook = hookFactory(&reqMsgs)
-		}
-		if svrCase.respHook {
-			mux.ResponseHook = hookFactory(&respMsgs)
+		mux := &Mux{
+			HooksCallback: makeHooks(svrCase.reqHook, svrCase.respHook),
 		}
 		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
 		handler := mux.AsHandler()
