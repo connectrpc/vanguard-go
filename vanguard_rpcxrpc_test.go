@@ -24,8 +24,8 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	testv1 "github.com/bufbuild/vanguard-go/internal/gen/vanguard/test/v1"
-	"github.com/bufbuild/vanguard-go/internal/gen/vanguard/test/v1/testv1connect"
+	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
+	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"

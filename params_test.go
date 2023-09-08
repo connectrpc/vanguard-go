@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	testv1 "github.com/bufbuild/vanguard-go/internal/gen/vanguard/test/v1"
+	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
