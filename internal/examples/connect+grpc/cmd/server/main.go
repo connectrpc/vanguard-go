@@ -8,8 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/bufbuild/vanguard-go"
-	elizav1 "github.com/bufbuild/vanguard-go/tmp/gen/connectrpc/eliza/v1"
 	"io"
 	"math/rand"
 	"net"
@@ -18,12 +16,15 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"buf.build/gen/go/connectrpc/eliza/grpc/go/connectrpc/eliza/v1/elizav1grpc"
+	elizav1 "buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
+	"connectrpc.com/vanguard"
 	"google.golang.org/grpc"
 )
 
 func main() {
 	svr := grpc.NewServer()
-	elizav1.RegisterElizaServiceServer(svr, elizaImpl{})
+	elizav1grpc.RegisterElizaServiceServer(svr, elizaImpl{})
 	mux := vanguard.Mux{
 		Protocols: []vanguard.Protocol{vanguard.ProtocolGRPC},
 		Codecs:    []string{vanguard.CodecProto},
@@ -46,10 +47,10 @@ func main() {
 }
 
 type elizaImpl struct {
-	elizav1.UnimplementedElizaServiceServer
+	elizav1grpc.UnimplementedElizaServiceServer
 }
 
-func (e elizaImpl) Say(ctx context.Context, request *elizav1.SayRequest) (*elizav1.SayResponse, error) {
+func (e elizaImpl) Say(_ context.Context, request *elizav1.SayRequest) (*elizav1.SayResponse, error) {
 	sentence := strings.TrimSpace(strings.Replace(request.Sentence, "\n", " ", -1))
 	var reply string
 	if len(sentence) == 0 {
@@ -80,7 +81,7 @@ func (e elizaImpl) Say(ctx context.Context, request *elizav1.SayRequest) (*eliza
 	}, nil
 }
 
-func (e elizaImpl) Converse(server elizav1.ElizaService_ConverseServer) error {
+func (e elizaImpl) Converse(server elizav1grpc.ElizaService_ConverseServer) error {
 	for {
 		_, err := server.Recv()
 		if errors.Is(err, io.EOF) {
@@ -94,7 +95,7 @@ func (e elizaImpl) Converse(server elizav1.ElizaService_ConverseServer) error {
 	}
 }
 
-func (e elizaImpl) Introduce(request *elizav1.IntroduceRequest, server elizav1.ElizaService_IntroduceServer) error {
+func (e elizaImpl) Introduce(request *elizav1.IntroduceRequest, server elizav1grpc.ElizaService_IntroduceServer) error {
 	name := strings.TrimRight(strings.TrimSpace(strings.Replace(request.Name, "\n", " ", -1)), ".!?,:")
 	if err := server.Send(&elizav1.IntroduceResponse{
 		Sentence: "Hello, " + name + "!",
