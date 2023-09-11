@@ -26,6 +26,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +54,12 @@ func main() {
 		},
 	}
 	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:30304"})
+	proxy.Transport = h2cIfGRPCTransport{h2c: &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}}
 	listeners := make([]net.Listener, len(muxes))
 	svrs := make([]*http.Server, len(muxes))
 	for i, mux := range muxes {
@@ -118,4 +125,18 @@ func main() {
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Server failed: %v", err)
 	}
+}
+
+type h2cIfGRPCTransport struct {
+	h2c http.RoundTripper
+}
+
+func (h h2cIfGRPCTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.Header.Get("Content-Type") == "application/grpc" ||
+		strings.HasPrefix(request.Header.Get("Content-Type"), "application/grpc+") {
+		// For gRPC, we must use HTTP/2.
+		return h.h2c.RoundTrip(request)
+	}
+	// Otherwise, we can use HTTP 1.1.
+	return http.DefaultTransport.RoundTrip(request)
 }

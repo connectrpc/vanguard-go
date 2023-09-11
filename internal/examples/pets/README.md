@@ -40,11 +40,11 @@ You can try out these servers by running both and then issuing the following `cu
 command:
 
 ```shell
-curl 'http://localhost:30302/pet/findByStatus?status=available' -v -X GET
+curl 'http://localhost:30303/pet/findByStatus?status=available' -v -X GET
 ```
 
 The above sends a simple REST request to the frontend. This will get translated to
-gRPC and sent to the backend. The backend will then turn it _back_ into a REST
+gRPC-Web and sent to the backend. The backend will then turn it _back_ into a REST
 request and send to petstore.swagger.io. And all of this activity can be seen in
 the log output from the servers.
 
