@@ -94,36 +94,49 @@ func main() {
 		}
 	}
 
+	grp, ctx := errgroup.WithContext(context.Background())
 	signals := make(chan os.Signal, 1)
-	go func() {
-		<-signals
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	grp.Go(func() error {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-signals:
+		}
+
 		log.Println("Shutting down...")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		grp, ctx := errgroup.WithContext(ctx)
+		shutdownGroup, ctx := errgroup.WithContext(ctx)
 		for i := range svrs {
 			svr := svrs[i]
-			grp.Go(func() error {
-				return svr.Shutdown(ctx)
+			shutdownGroup.Go(func() error {
+				if err := svr.Shutdown(ctx); err != nil {
+					return errors.New("failed to shutdown gracefully after 5 seconds")
+				}
+				return nil
 			})
 		}
-		if err := grp.Wait(); err != nil {
-			log.Fatal("Failed to shutdown gracefully after 5 seconds.")
+		err := shutdownGroup.Wait()
+		if err == nil {
+			log.Println("Shutdown complete.")
 		}
-	}()
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+		return err
+	})
 
-	grp, _ := errgroup.WithContext(context.Background())
 	for i := range svrs {
 		listener := listeners[i]
 		svr := svrs[i]
 		grp.Go(func() error {
-			return svr.Serve(listener)
+			err := svr.Serve(listener)
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("server failed: %w", err)
+			}
+			return nil
 		})
 	}
-	err := grp.Wait()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("Server failed: %v", err)
+	if err := grp.Wait(); err != nil {
+		log.Fatal(err)
 	}
 }
 

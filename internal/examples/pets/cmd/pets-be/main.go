@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -33,6 +34,7 @@ import (
 	"connectrpc.com/vanguard/internal/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -65,20 +67,33 @@ func main() {
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 
+	grp, ctx := errgroup.WithContext(context.Background())
 	signals := make(chan os.Signal, 1)
-	go func() {
-		<-signals
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	grp.Go(func() error {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-signals:
+		}
+
 		log.Println("Shutting down...")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := svr.Shutdown(ctx); err != nil {
-			log.Fatal("Failed to shutdown gracefully after 5 seconds.")
+			return errors.New("failed to shutdown gracefully after 5 seconds")
 		}
-	}()
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-
-	err = svr.Serve(listener)
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("Server failed: %v", err)
+		log.Println("Shutdown complete.")
+		return nil
+	})
+	grp.Go(func() error {
+		err := svr.Serve(listener)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("server failed: %w", err)
+		}
+		return nil
+	})
+	if err := grp.Wait(); err != nil {
+		log.Fatal(err)
 	}
 }
