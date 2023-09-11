@@ -15,13 +15,16 @@
 package vanguard
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
 	"sort"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -128,6 +131,26 @@ type Mux struct {
 	// that has not been registered. If nil, the default is to return a 404 Not Found
 	// error.
 	UnknownHandler http.Handler
+	// HooksCallback, if non-nil, is called at the beginning of an operation. If the
+	// callback is interested in more details about the operation, it can return Hooks,
+	// whose methods will be called as the operation progresses. If it returns an error,
+	// the operation is immediately failed with the returned error, and the server
+	// handler will never be invoked.
+	//
+	// For invalid requests (where Operation.IsValid returns false), if non-nil Hooks
+	// are returned, they are ignored; no other hooks will be invoked. For valid
+	// operations, the Hooks.OnClientRequestHeaders and Hooks.OnOperationEnd hooks
+	// will always be invoked, even when a hook aborts the operation with an error.
+	//
+	// This callback can be overridden on a per-service level. But the function defined
+	// in this field will always be used for operations that are invalid when the RPC
+	// method has not been determined.
+	//
+	// If the operation is invalid because the method could not be determined and both
+	// the HooksCallback and the UnknownHandler are defined, the HooksCallback will be
+	// invoked first. The UnknownHandler will only be invoked if the callback returns
+	// a nil error.
+	HooksCallback func(context.Context, Operation) (Hooks, error)
 
 	init             sync.Once
 	codecImpls       map[string]func(TypeResolver) Codec
@@ -231,6 +254,10 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		svcOpts.maxMsgBufferBytes = DefaultMaxMessageBufferBytes
 	}
 
+	if svcOpts.hooksCallback == nil {
+		svcOpts.hooksCallback = m.HooksCallback
+	}
+
 	if svcOpts.resolver == nil {
 		svcOpts.resolver = m.TypeResolver
 		if svcOpts.resolver == nil {
@@ -293,6 +320,7 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 		compressorNames:   opts.compressorNames,
 		maxMsgBufferBytes: opts.maxMsgBufferBytes,
 		maxGetURLBytes:    opts.maxGetURLBytes,
+		hooksCallback:     opts.hooksCallback,
 	}
 	m.methods[methodPath] = methodConf
 
@@ -455,6 +483,161 @@ func WithMaxGetURLBytes(limit uint32) ServiceOption {
 	})
 }
 
+// WithHooksCallback sets the given callback for hooking into the RPC flow.
+// This overrides any callback defined on the Mux.
+//
+// See Mux.HooksCallback for more information.
+func WithHooksCallback(callback func(context.Context, Operation) (Hooks, error)) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.hooksCallback = callback
+	})
+}
+
+// Operation represents an in-progress RPC operation. This is supplied to
+// hook callback methods.
+//
+// Operation is not thread-safe. These methods should only be invoked from
+// the goroutine that runs the Hooks callback method.
+type Operation interface {
+	// IsValid returns true if the operation is valid. If it returns
+	// false, then there was an error in the incoming request that
+	// prevents some of hte operation details from being ascertained.
+	//
+	// When this returns false, Method may return nil and ClientInfo
+	// and HandlerInfo may report invalid attributes (like unknown
+	// protocol or blank codec name).
+	IsValid() bool
+
+	// HTTPRequestLine provides access to properties of the client's
+	// HTTP request line. These are available, even if IsValid returns
+	// false.
+	HTTPRequestLine() (method, path, queryString, httpVersion string)
+
+	// Method returns the descriptor of the RPC method being invoked.
+	Method() protoreflect.MethodDescriptor
+	// Deadline returns the time at which this operation must complete,
+	// per a deadline sent by the client. It returns a zero time and false
+	// when the client did not include a deadline.
+	Deadline() (time.Time, bool)
+	// ClientInfo returns information about the client side of the operation.
+	// This includes the incoming protocol, codec, and compression.
+	ClientInfo() PeerInfo
+	// HandlerInfo returns information about the server handler side of the
+	// operation. These properties will vary from those returned by ClientInfo
+	// when the middleware is transcoding the protocol, re-encoding messages,
+	// or using a different compression algorithm.
+	HandlerInfo() PeerInfo
+
+	doNotImplement() // allows us to add methods to this interface in the future
+}
+
+// PeerInfo describes operation attributes for one of peers. Every operation has
+// two peers: the client that initiated the request, and the server handler that
+// will act on the request.
+//
+// PeerInfo is not thread-safe. These methods should only be invoked from the
+// goroutine that runs the Hooks callback method.
+type PeerInfo interface {
+	// Protocol indicates the protocol this peer uses.
+	Protocol() Protocol
+	// Codec indicates the name of the codec that this peer uses.
+	Codec() string
+	// RequestCompression indicates the name of the compression algorithm that
+	// this peer uses. If no compression is used, this returns the empty string.
+	RequestCompression() string
+	// ResponseCompression will not be known until after response headers have
+	// been received. If this method is invoked before then, it will return
+	// the empty string, even if compression ultimately is used in the response.
+	ResponseCompression() string
+
+	doNotImplement() // allows us to add methods to this interface in the future
+}
+
+// Hooks represents a set of observability/validation hooks that are invoked
+// as an RPC operation is executed.
+//
+// When any of them is non-nil, that function will be invoked when the relevant
+// occurs when processing an RPC.
+type Hooks struct {
+	// OnClientRequestHeaders is invoked immediately at the start of an
+	// operation, providing access to the request headers. If it returns
+	// an error, the operation is immediately aborted, and the server
+	// handler is never invoked.
+	//
+	// The headers can vary from the actual headers sent by the client as
+	// protocol-specific headers (like those indicating the protocol, the
+	// message encoding format, compression algorithm, and timeout) will
+	// have already been removed. The relevant information is instead
+	// available via attributes of the Operation.
+	OnClientRequestHeaders func(context.Context, Operation, http.Header) error
+	// OnClientRequestMessage is invoked for each request message received
+	// from the client. For unary RPCs, this will always be exactly one per
+	// operation. For client and bidirectional streaming RPCs, this can be
+	// called zero or more times.
+	//
+	// If an error is returned, the operation is immediately aborted, and
+	// the message is not sent to the server. The client will observe the
+	// returned error (as translated to an RPC error), but the server will
+	// observe a cancelled error.
+	//
+	// The provided compressed flag and wireSize are the details of the
+	// message sent by the client. The wire size of the data sent to the
+	// server handler may differ if the middleware is transcoding the
+	// protocol, re-encoding messages to a different format, or applying
+	// a different compression algorithm.
+	//
+	// The reported wireSize is based on the data read from the request
+	// body. If the request was constructed from components of the URL
+	// path or the query string, those bytes are not reported, and the
+	// size could be reported as zero even if the request is not empty.
+	// If the client protocol uses envelopes to delimit messages, the
+	// envelope size is NOT included in the reported wireSize.
+	OnClientRequestMessage func(ctx context.Context, op Operation, req proto.Message, compressed bool, wireSize int) error
+	// OnServerResponseHeaders is invoked when response headers are received
+	// from the server.  If it returns an error, the operation is immediately
+	// aborted. The client will observe the returned error (as translated to
+	// an RPC error), but the server will observe a cancelled error.
+	OnServerResponseHeaders func(ctx context.Context, op Operation, statusCode int, headers http.Header) error
+	// OnServerResponseMessage is invoked for each response message received
+	// from the server. For unary RPCs, this will always be either zero (on
+	// failure) or one (on success) per operation. For server and
+	// bidirectional streaming RPCs, this can be called zero or more times.
+	//
+	// If an error is returned, the operation is immediately aborted, and the
+	// message is not sent to the client. The client and server will both
+	// observe the returned error (as translated to an RPC error for the
+	// client). The server will receive the error from the corresponding call
+	// to [http.ResponseWriter.Write]. Subsequent attempts to write to the
+	// response will observe a cancelled error.
+	//
+	// The provided compressed flag and wireSize are the details of the
+	// message sent by the server. The wire size of the data sent to the
+	// client may differ if the middleware is transcoding the protocol,
+	// re-encoding messages to a different format, or applying a different
+	// compression algorithm.
+	OnServerResponseMessage func(ctx context.Context, op Operation, rsp proto.Message, compressed bool, wireSize int) error
+	// OnOperationFinish is called if and when the operation completes
+	// successfully. If the operation does not complete successfully, then
+	// OnOperationFail will be called instead.
+	//
+	// This is the only callback that does not return an error. At this point
+	// the RPC has completed successfully, so it is too late to inject an error.
+	OnOperationFinish func(ctx context.Context, op Operation, trailers http.Header)
+	// OnOperationFail is called when the operation completes unsuccessfully.
+	// If a non-nil error is returned, it will replace the given err when the
+	// error is sent to the client.
+	OnOperationFail func(ctx context.Context, op Operation, trailers http.Header, err error) error
+}
+
+func (h Hooks) isEmpty() bool {
+	return h.OnClientRequestHeaders == nil &&
+		h.OnClientRequestMessage == nil &&
+		h.OnServerResponseHeaders == nil &&
+		h.OnServerResponseMessage == nil &&
+		h.OnOperationFinish == nil &&
+		h.OnOperationFail == nil
+}
+
 // TypeResolver can resolve message and extension types and is used to instantiate
 // messages as needed for the middleware to serialize/de-serialize request and
 // response payloads.
@@ -490,6 +673,7 @@ type serviceOptions struct {
 	preferredCodec              string
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
+	hooksCallback               func(context.Context, Operation) (Hooks, error)
 }
 
 type methodConfig struct {
@@ -504,6 +688,7 @@ type methodConfig struct {
 	httpRule                    *routeTarget // First HTTP rule, if any.
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
+	hooksCallback               func(context.Context, Operation) (Hooks, error)
 }
 
 // computeSet returns a resolved set of values of type T, preferring the given values if

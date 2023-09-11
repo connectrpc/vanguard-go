@@ -37,6 +37,7 @@ import (
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 //nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
@@ -646,6 +647,925 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
 			_, err = client.GetBook(context.Background(), req)
 			require.ErrorContains(t, err, "server should only see POST; instead got GET")
+		})
+	}
+}
+
+//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
+func TestMux_MessageHooks(t *testing.T) {
+	t.Parallel()
+	// NB: These cases are identical to the pass-through cases, but should
+	// not just pass through when a request or response hook is configured.
+
+	var interceptor testInterceptor
+	_, contentHandler := testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	)
+
+	var reqMsgs sync.Map
+	var respMsgs sync.Map
+	hookFactory := func(req bool) func(context.Context, Operation, proto.Message, bool, int) error {
+		var msgsRecorded *sync.Map
+		if req {
+			msgsRecorded = &reqMsgs
+		} else {
+			msgsRecorded = &respMsgs
+		}
+		return func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
+			name, ok := ctx.Value(testCaseNameContextKey{}).(string)
+			if !ok {
+				return errors.New("no testCaseNameContextKey in context")
+			}
+
+			if size <= 0 {
+				return fmt.Errorf("invalid wire size: %d", size)
+			}
+			var expectCompressed bool
+			if req {
+				// For gzip test cases, we expect the request to be compressed.
+				expectCompressed = strings.Contains(name, "gzip")
+			} else {
+				// But all responses can be compressed
+				expectCompressed = true
+			}
+			if compressed != expectCompressed {
+				return fmt.Errorf("invalid compressed: expecting %v, got %v", expectCompressed, compressed)
+			}
+			if op.Method() == nil {
+				return errors.New("method descriptor must not be nil")
+			}
+			method, path, query, version := op.HTTPRequestLine()
+			// these test cases all use basic RPC protocols that share all of these details
+			if method != http.MethodPost {
+				return fmt.Errorf("HTTP method should be POST, not %s", method)
+			}
+			expectedPath := "/" + string(op.Method().Parent().FullName()) + "/" + string(op.Method().Name())
+			if path != expectedPath {
+				return fmt.Errorf("URI path was %s (expecting %s)", path, expectedPath)
+			}
+			if query != "" {
+				return fmt.Errorf("query string should be blank but got %s", query)
+			}
+			if version != "HTTP/2.0" {
+				return fmt.Errorf("HTTP version should be HTTP/2.0 but got %s", version)
+			}
+
+			var slice []proto.Message
+			val, exists := msgsRecorded.Load(name)
+			if exists {
+				var isSlice bool
+				slice, isSlice = val.([]proto.Message)
+				if !isSlice {
+					return fmt.Errorf("val in map is wrong type: %T", val)
+				}
+			}
+			// must make defensive copy since middleware re-uses same message
+			// for each value in the stream
+			msg = proto.Clone(msg)
+			slice = append(slice, msg)
+			msgsRecorded.Store(name, slice)
+			return nil
+		}
+	}
+	makeHooks := func(req, resp bool) func(context.Context, Operation) (Hooks, error) {
+		return func(_ context.Context, _ Operation) (Hooks, error) {
+			var hooks Hooks
+			if req {
+				hooks.OnClientRequestMessage = hookFactory(true)
+			}
+			if resp {
+				hooks.OnServerResponseMessage = hookFactory(false)
+			}
+			return hooks, nil
+		}
+	}
+
+	svrCases := []struct {
+		name     string
+		reqHook  bool
+		respHook bool
+		svr      *httptest.Server
+	}{
+		{
+			name:    "request_hook",
+			reqHook: true,
+		},
+		{
+			name:     "response_hook",
+			respHook: true,
+		},
+		{
+			name:     "both_hooks",
+			reqHook:  true,
+			respHook: true,
+		},
+	}
+	for i := range svrCases {
+		svrCase := &svrCases[i]
+		mux := &Mux{
+			HooksCallback: makeHooks(svrCase.reqHook, svrCase.respHook),
+		}
+		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
+		handler := mux.AsHandler()
+		// propagate test name into context so that request and response hooks can access it
+		setContextHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
+			testName := request.Header.Get("Test")
+			ctx := context.WithValue(request.Context(), testCaseNameContextKey{}, testName)
+			handler.ServeHTTP(respWriter, request.WithContext(ctx))
+		})
+		// Use HTTP/2 so we can test a bidi stream.
+		server := httptest.NewUnstartedServer(setContextHandler)
+		server.EnableHTTP2 = true
+		server.StartTLS()
+		t.Cleanup(server.Close)
+
+		svrCase.svr = server
+	}
+
+	ctx := context.Background()
+
+	type connectClientCase struct {
+		name string
+		opts []connect.ClientOption
+	}
+	compressionOptions := []connectClientCase{
+		{
+			name: "identity",
+		},
+		{
+			name: "gzip",
+			opts: []connect.ClientOption{connect.WithSendCompression(CompressionGzip)},
+		},
+	}
+	encodingOptions := []connectClientCase{
+		{
+			name: "proto",
+		},
+		{
+			name: "json",
+			opts: []connect.ClientOption{connect.WithProtoJSON()},
+		},
+	}
+	protocolOptions := []connectClientCase{
+		{
+			name: "connect",
+		},
+		{
+			name: "grpc",
+			opts: []connect.ClientOption{connect.WithGRPC()},
+		},
+		{
+			name: "grpc-web",
+			opts: []connect.ClientOption{connect.WithGRPCWeb()},
+		},
+	}
+	testRequests := []struct {
+		name   string
+		invoke func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error)
+		stream testStream
+	}{
+		{
+			name: "unary success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.IndexRequest{Page: "abcdef"},
+					}},
+					{out: &testMsgOut{
+						msg: &httpbody.HttpBody{
+							ContentType: "text/html",
+							Data:        ([]byte)(`<html><title>Foo</title><body><h1>Foo</h1></html>`),
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "unary fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.IndexRequest{Page: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "client stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &emptypb.Empty{},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "client stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "server stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "server stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+		{
+			name: "bidi stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz2.foo"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "test.test"},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+		},
+		{
+			name: "bidi stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+					}},
+				},
+			},
+		},
+	}
+
+	checkHookResults := func(t *testing.T, expected []proto.Message, actualsMap *sync.Map) {
+		t.Helper()
+		// Make sure the hook recorded exactly the expected messages.
+		var slice []proto.Message
+		vals, exists := actualsMap.LoadAndDelete(t.Name())
+		if exists {
+			var ok bool
+			slice, ok = vals.([]proto.Message)
+			require.True(t, ok)
+		}
+		require.Len(t, slice, len(expected))
+		for i, msg := range slice {
+			want := expected[i]
+			assert.Empty(t, cmp.Diff(want, msg, protocmp.Transform()))
+		}
+	}
+
+	for _, protocolCase := range protocolOptions {
+		protocolCase := protocolCase
+		t.Run(protocolCase.name, func(t *testing.T) {
+			t.Parallel()
+			for _, encodingCase := range encodingOptions {
+				encodingCase := encodingCase
+				t.Run(encodingCase.name, func(t *testing.T) {
+					t.Parallel()
+					for _, compressionCase := range compressionOptions {
+						compressionCase := compressionCase
+						t.Run(compressionCase.name, func(t *testing.T) {
+							t.Parallel()
+							for _, testReq := range testRequests {
+								testReq := testReq
+								t.Run(testReq.name, func(t *testing.T) {
+									t.Parallel()
+									for _, svrCase := range svrCases {
+										svrCase := svrCase
+										t.Run(svrCase.name, func(t *testing.T) {
+											clientOptions := make([]connect.ClientOption, 0, 4)
+											clientOptions = append(clientOptions, protocolCase.opts...)
+											clientOptions = append(clientOptions, encodingCase.opts...)
+											clientOptions = append(clientOptions, compressionCase.opts...)
+											client := testv1connect.NewContentServiceClient(svrCase.svr.Client(), svrCase.svr.URL, clientOptions...)
+
+											runRPCTestCase(t, &interceptor, client, testReq.invoke, testReq.stream)
+
+											if svrCase.reqHook {
+												var reqs []proto.Message
+												for _, msg := range testReq.stream.msgs {
+													if msg.in != nil {
+														reqs = append(reqs, msg.in.msg)
+													}
+												}
+												checkHookResults(t, reqs, &reqMsgs)
+											}
+											if svrCase.respHook {
+												var resps []proto.Message
+												for _, msg := range testReq.stream.msgs {
+													if msg.out != nil && msg.out.msg != nil {
+														resps = append(resps, msg.out.msg)
+													}
+												}
+												checkHookResults(t, resps, &respMsgs)
+											}
+										})
+									}
+								})
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
+func TestMux_HookOrder(t *testing.T) {
+	t.Parallel()
+
+	var interceptor testInterceptor
+	_, contentHandler := testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	)
+
+	var hooks testHooks
+	errorCases := []struct {
+		name    string
+		failure hookKind
+		svr     *httptest.Server
+	}{
+		{
+			name: "normal",
+		},
+		{
+			name:    "hooks_callback_fails",
+			failure: hookKindInit,
+		},
+		{
+			name:    "hook_client_req_headers_fails",
+			failure: hookKindRequestHeaders,
+		},
+		{
+			name:    "hook_client_req_message_fails",
+			failure: hookKindRequestMessage,
+		},
+		{
+			name:    "hook_server_resp_headers_fails",
+			failure: hookKindResponseHeaders,
+		},
+		{
+			name:    "hook_server_resp_message_fails",
+			failure: hookKindResponseMessage,
+		},
+		{
+			name:    "hook_end_err_fails",
+			failure: hookKindFail,
+		},
+	}
+	errHookFailed := connect.NewError(connect.CodeAlreadyExists, errors.New("hook failed"))
+	for i := range errorCases {
+		errCase := errorCases[i]
+		var callback func(context.Context, Operation) (Hooks, error)
+		if errCase.failure == 0 {
+			callback = hooks.init
+		} else {
+			callback = func(ctx context.Context, op Operation) (Hooks, error) {
+				hooks, err := hooks.init(ctx, op)
+				switch errCase.failure {
+				case hookKindInit:
+					err = errHookFailed
+				case hookKindRequestHeaders:
+					prev := hooks.OnClientRequestHeaders
+					hooks.OnClientRequestHeaders = func(ctx context.Context, op Operation, headers http.Header) error {
+						_ = prev(ctx, op, headers)
+						return errHookFailed
+					}
+				case hookKindRequestMessage:
+					prev := hooks.OnClientRequestMessage
+					hooks.OnClientRequestMessage = func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
+						_ = prev(ctx, op, msg, compressed, size)
+						return errHookFailed
+					}
+				case hookKindResponseHeaders:
+					prev := hooks.OnServerResponseHeaders
+					hooks.OnServerResponseHeaders = func(ctx context.Context, op Operation, statusCode int, headers http.Header) error {
+						_ = prev(ctx, op, statusCode, headers)
+						return errHookFailed
+					}
+				case hookKindResponseMessage:
+					prev := hooks.OnServerResponseMessage
+					hooks.OnServerResponseMessage = func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
+						_ = prev(ctx, op, msg, compressed, size)
+						return errHookFailed
+					}
+				case hookKindFail:
+					prev := hooks.OnOperationFail
+					hooks.OnOperationFail = func(ctx context.Context, op Operation, trailers http.Header, err error) error {
+						_ = prev(ctx, op, trailers, err)
+						return errHookFailed
+					}
+				}
+				return hooks, err
+			}
+		}
+		mux := &Mux{HooksCallback: callback}
+		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
+		handler := mux.AsHandler()
+		// propagate test name into context so that hooks can access it
+		setContextHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
+			testName := request.Header.Get("Test")
+			ctx := context.WithValue(request.Context(), testCaseNameContextKey{}, testName)
+			handler.ServeHTTP(respWriter, request.WithContext(ctx))
+		})
+		// Use HTTP/2 so we can test a bidi stream.
+		server := httptest.NewUnstartedServer(setContextHandler)
+		server.EnableHTTP2 = true
+		server.StartTLS()
+		t.Cleanup(server.Close)
+
+		errorCases[i].svr = server
+	}
+
+	ctx := context.Background()
+
+	testRequests := []struct {
+		name   string
+		invoke func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error)
+		stream testStream
+		events []hookKind
+	}{
+		{
+			name: "unary success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.IndexRequest{Page: "abcdef"},
+					}},
+					{out: &testMsgOut{
+						msg: &httpbody.HttpBody{
+							ContentType: "text/html",
+							Data:        ([]byte)(`<html><title>Foo</title><body><h1>Foo</h1></html>`),
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindResponseMessage,
+				hookKindFinish,
+			},
+		},
+		{
+			name: "unary fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromUnary(ctx, client.Index, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceIndexProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.IndexRequest{Page: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
+					}},
+				},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindFail,
+			},
+		},
+		{
+			name: "client stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &emptypb.Empty{},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindResponseMessage,
+				hookKindFinish,
+			},
+		},
+		{
+			name: "client stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromClientStream(ctx, client.Upload, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceUploadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.UploadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+					}},
+				},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindFail,
+			},
+		},
+		{
+			name: "server stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindResponseMessage,
+				hookKindResponseMessage,
+				hookKindResponseMessage,
+				hookKindFinish,
+			},
+		},
+		{
+			name: "server stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromServerStream(ctx, client.Download, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceDownloadProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.DownloadRequest{Filename: "xyz"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.DownloadResponse{
+							File: &httpbody.HttpBody{
+								ContentType: "application/octet-stream",
+								Data:        ([]byte)("abcdef"),
+							},
+						},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+					}},
+				},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindResponseMessage,
+				hookKindFail,
+			},
+		},
+		{
+			name: "bidi stream success",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz2.foo"},
+					}},
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "test.test"},
+					}},
+				},
+				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindResponseMessage,
+				hookKindResponseMessage,
+				hookKindRequestMessage,
+				hookKindResponseMessage,
+				hookKindFinish,
+			},
+		},
+		{
+			name: "bidi stream fail",
+			invoke: func(client testv1connect.ContentServiceClient, headers http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+				return outputFromBidiStream(ctx, client.Subscribe, headers, msgs)
+			},
+			stream: testStream{
+				method:    testv1connect.ContentServiceSubscribeProcedure,
+				reqHeader: http.Header{"Message": []string{"hello"}},
+				rspHeader: http.Header{"Message": []string{"world"}},
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
+					}},
+					{out: &testMsgOut{
+						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+					}},
+				},
+			},
+			events: []hookKind{
+				hookKindInit,
+				hookKindRequestHeaders,
+				hookKindRequestMessage,
+				hookKindResponseHeaders,
+				hookKindResponseMessage,
+				hookKindFail,
+			},
+		},
+	}
+
+	for _, errorCase := range errorCases {
+		errorCase := errorCase
+		t.Run(errorCase.name, func(t *testing.T) {
+			t.Parallel()
+			for _, testReq := range testRequests {
+				testReq := testReq
+				t.Run(testReq.name, func(t *testing.T) {
+					t.Parallel()
+					client := testv1connect.NewContentServiceClient(errorCase.svr.Client(), errorCase.svr.URL)
+
+					awaitServer := interceptor.set(t, testReq.stream)
+					defer interceptor.del(t)
+					reqHeaders := http.Header{}
+					reqHeaders.Set("Test", t.Name()) // test header
+					for k, v := range testReq.stream.reqHeader {
+						reqHeaders[k] = v
+					}
+					var reqMsgs []proto.Message
+					for _, streamMsg := range testReq.stream.msgs {
+						if streamMsg.in != nil {
+							reqMsgs = append(reqMsgs, streamMsg.in.msg)
+						}
+					}
+					_, msgs, _, err := testReq.invoke(client, reqHeaders, reqMsgs)
+					_, _ = awaitServer(t, false)
+					var expectHookError bool
+					if errorCase.failure != 0 {
+						for _, event := range testReq.events {
+							if event == errorCase.failure {
+								expectHookError = true
+								break
+							}
+						}
+					}
+					if errorCase.failure == hookKindResponseMessage {
+						assert.Empty(t, msgs)
+					}
+					switch {
+					case expectHookError:
+						require.ErrorContains(t, err, errHookFailed.Error())
+						require.Equal(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+					case testReq.events[len(testReq.events)-1] == hookKindFail:
+						require.Error(t, err)
+						require.NotContains(t, err.Error(), errHookFailed.Error())
+						require.NotEqual(t, connect.CodeAlreadyExists, connect.CodeOf(err))
+					default:
+						require.NoError(t, err)
+					}
+
+					// Now we inspect the hooks that were called.
+					op, events := hooks.getEvents(t)
+					require.Equal(t, testReq.stream.method, "/"+string(op.Method().Parent().FullName())+"/"+string(op.Method().Name()))
+					require.LessOrEqual(t, len(events), len(testReq.events))
+					for i, event := range events {
+						expected := testReq.events[i]
+						require.Equal(t, expected, event)
+						if event == errorCase.failure && event != hookKindFinish && event != hookKindFail {
+							// If the hook was supposed to return an error before the end,
+							// the only remaining events should be the one failure event.
+							require.Len(t, events, i+2)
+							require.Equal(t, events[i+1], hookKindFail)
+							break
+						}
+					}
+				})
+			}
 		})
 	}
 }
@@ -1452,4 +2372,112 @@ func runRPCTestCase[Client any](
 func disableCompression(svr *httptest.Server) {
 	transport := svr.Client().Transport.(*http.Transport) //nolint:errcheck,forcetypeassert
 	transport.DisableCompression = true
+}
+
+type testCaseNameContextKey struct{}
+
+type hookKind int
+
+const (
+	hookKindInit = hookKind(iota + 1)
+	hookKindRequestHeaders
+	hookKindRequestMessage
+	hookKindResponseHeaders
+	hookKindResponseMessage
+	hookKindFinish
+	hookKindFail
+)
+
+func (k hookKind) String() string {
+	switch k {
+	case hookKindInit:
+		return "init"
+	case hookKindRequestHeaders:
+		return "request headers"
+	case hookKindRequestMessage:
+		return "request message"
+	case hookKindResponseHeaders:
+		return "response headers"
+	case hookKindResponseMessage:
+		return "response message"
+	case hookKindFinish:
+		return "end (ok)"
+	case hookKindFail:
+		return "end (err)"
+	default:
+		return fmt.Sprintf("unknown (%d)", k)
+	}
+}
+
+type testHooks struct {
+	mu     sync.Mutex
+	events map[string]map[Operation][]hookKind
+}
+
+func (h *testHooks) addEvent(ctx context.Context, op Operation, kind hookKind) error {
+	name, ok := ctx.Value(testCaseNameContextKey{}).(string)
+	if !ok {
+		return errors.New("no testCaseNameContextKey in context")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.events == nil {
+		h.events = map[string]map[Operation][]hookKind{}
+	}
+	ops := h.events[name]
+	if ops == nil {
+		ops = map[Operation][]hookKind{}
+		h.events[name] = ops
+	}
+	ops[op] = append(ops[op], kind)
+	return nil
+}
+
+func (h *testHooks) init(ctx context.Context, op Operation) (Hooks, error) {
+	err := h.addEvent(ctx, op, hookKindInit)
+	return Hooks{
+		OnClientRequestHeaders:  h.requestHeaders,
+		OnClientRequestMessage:  h.requestMessage,
+		OnServerResponseHeaders: h.responseHeaders,
+		OnServerResponseMessage: h.responseMessage,
+		OnOperationFinish:       h.finish,
+		OnOperationFail:         h.fail,
+	}, err
+}
+
+func (h *testHooks) requestHeaders(ctx context.Context, op Operation, _ http.Header) error {
+	return h.addEvent(ctx, op, hookKindRequestHeaders)
+}
+
+func (h *testHooks) requestMessage(ctx context.Context, op Operation, _ proto.Message, _ bool, _ int) error {
+	return h.addEvent(ctx, op, hookKindRequestMessage)
+}
+
+func (h *testHooks) responseHeaders(ctx context.Context, op Operation, _ int, _ http.Header) error {
+	return h.addEvent(ctx, op, hookKindResponseHeaders)
+}
+
+func (h *testHooks) responseMessage(ctx context.Context, op Operation, _ proto.Message, _ bool, _ int) error {
+	return h.addEvent(ctx, op, hookKindResponseMessage)
+}
+
+func (h *testHooks) finish(ctx context.Context, op Operation, _ http.Header) {
+	_ = h.addEvent(ctx, op, hookKindFinish)
+}
+
+func (h *testHooks) fail(ctx context.Context, op Operation, _ http.Header, _ error) error {
+	return h.addEvent(ctx, op, hookKindFail)
+}
+
+func (h *testHooks) getEvents(t *testing.T) (Operation, []hookKind) {
+	t.Helper()
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ops := h.events[t.Name()]
+	require.Len(t, ops, 1, "expected exactly one operation")
+	for op, kinds := range ops {
+		return op, kinds
+	}
+	panic("should not be able to get here") //nolint:forbidigo
 }

@@ -25,8 +25,8 @@ linters-settings:
       - sb strings.Builder
       - sb *strings.Builder
       - ok bool
-      - op operation
       - op *operation
+      - op Operation
       - t *ttStream
       - rw *responseWriter
 linters:

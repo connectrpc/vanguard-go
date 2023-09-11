@@ -24,9 +24,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 type handler struct {
@@ -36,173 +38,144 @@ type handler struct {
 	canDecompress []string
 }
 
-func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) { //nolint:gocyclo
-	// Identify the protocol.
-	clientProtoHandler, originalContentType, queryVars := classifyRequest(request)
-	if clientProtoHandler == nil {
-		http.Error(writer, "could not classify protocol", http.StatusUnsupportedMediaType)
-		return
-	}
-	ctx, cancel := context.WithCancel(request.Context())
-	defer cancel()
-	request = request.WithContext(ctx)
-	op := operation{
-		muxConfig:      h.mux,
-		writer:         writer,
-		request:        request,
-		reqContentType: originalContentType,
-		cancel:         cancel,
-		bufferPool:     h.bufferPool,
-		canDecompress:  h.canDecompress,
-	}
-	op.client.protocol = clientProtoHandler
-	if queryVars != nil {
-		// memoize this, so we don't have to parse query string again later
-		op.queryVars = queryVars
-	}
-	originalHeaders := request.Header.Clone()
-	op.contentLen = request.ContentLength
-	request.ContentLength = -1 // transforming it will likely change it
+//nolint:contextcheck
+func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	op := h.newOperation(writer, request)
+	err := op.validate(h.mux, h.codecs)
 
-	// Identify the method being invoked.
-	err := op.resolveMethod(h.mux)
-	if err != nil {
-		// If the method is not found, we'll try the unknown handler, if there is one.
-		if h.mux.UnknownHandler != nil && errors.Is(err, errNotFound) {
-			h.mux.UnknownHandler.ServeHTTP(writer, request)
-			return
-		}
-		asHTTPError(err).Encode(writer)
-		return
-	}
-	if !op.client.protocol.acceptsStreamType(&op, op.methodConf.streamType) {
-		http.Error(
-			writer,
-			fmt.Sprintf("stream type %s not supported with %s protocol", op.methodConf.streamType, op.client.protocol),
-			http.StatusUnsupportedMediaType)
-		return
-	}
-	if op.methodConf.streamType == connect.StreamTypeBidi && request.ProtoMajor < 2 {
-		http.Error(writer, "bidi streams require HTTP/2", http.StatusHTTPVersionNotSupported)
-		return
-	}
-	if clientProtoHandler.protocol() == ProtocolGRPC && request.ProtoMajor != 2 {
-		http.Error(writer, "gRPC requires HTTP/2", http.StatusHTTPVersionNotSupported)
-		return
-	}
-
-	// Identify the request encoding and compression.
-	reqMeta, err := clientProtoHandler.extractProtocolRequestHeaders(&op, request.Header)
-	if err != nil {
-		http.Error(writer, err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Remove other headers that might mess up the next leg
-	if enc := request.Header.Get("Content-Encoding"); enc != "" && enc != CompressionIdentity {
-		// If the protocol didn't remove the "Content-Encoding" header in above step,
-		// that's because it models encoding in a different way. In that case, encoding
-		// of the whole response with this header is not valid.
-		http.Error(writer, err.Error(), http.StatusUnsupportedMediaType)
-		return
-	}
-	request.Header.Del("Content-Encoding")
-	request.Header.Del("Accept-Encoding")
-	request.Header.Del("Content-Length")
-
-	op.reqMeta = reqMeta
-	var cannotDecompressRequest bool
-	if reqMeta.compression == CompressionIdentity {
-		reqMeta.compression = "" // normalize to empty string
-	}
-	if reqMeta.compression != "" {
-		var ok bool
-		op.client.reqCompression, ok = h.mux.compressionPools[reqMeta.compression]
-		if !ok {
-			// This might be okay, like if the transformation doesn't require decoding.
-			op.client.reqCompression = nil
-			cannotDecompressRequest = true
-		}
-	}
-	op.client.codec = h.codecs[codecKey{res: op.methodConf.resolver, name: reqMeta.codec}]
-	if op.client.codec == nil {
-		http.Error(writer, fmt.Sprintf("%q sub-format not supported", reqMeta.codec), http.StatusUnsupportedMediaType)
-		return
-	}
-
-	// Now we can determine the destination protocol details
-	if _, supportsProtocol := op.methodConf.protocols[clientProtoHandler.protocol()]; supportsProtocol {
-		op.server.protocol = clientProtoHandler.protocol().serverHandler(&op)
+	useUnknownHandler := h.mux.UnknownHandler != nil && errors.Is(err, errNotFound)
+	var callback func(context.Context, Operation) (Hooks, error)
+	if op.methodConf != nil {
+		callback = op.methodConf.hooksCallback
 	} else {
-		for protocol := protocolMin; protocol <= protocolMax; protocol++ {
-			if _, supportsProtocol := op.methodConf.protocols[protocol]; supportsProtocol {
-				op.server.protocol = protocol.serverHandler(&op)
-				break
-			}
+		callback = h.mux.HooksCallback
+	}
+	if callback != nil {
+		var hookErr error
+		if op.hooks, hookErr = callback(op.request.Context(), op); hookErr != nil { //nolint:contextcheck
+			useUnknownHandler = false
+			err = hookErr
 		}
 	}
-
-	// Now that we've ruled out the use of bidi streaming above, it's safe to simulate HTTP/2
-	// for the benefit of gRPC handlers, which require HTTP/2.
-	if op.server.protocol.protocol() == ProtocolGRPC {
-		request.Proto, request.ProtoMajor, request.ProtoMinor = "HTTP/2", 2, 0
+	if useUnknownHandler {
+		request.Header = op.originalHeaders // restore headers, just in case initialization removed keys
+		h.mux.UnknownHandler.ServeHTTP(writer, request)
+		return
 	}
 
-	if op.server.protocol.protocol() == ProtocolREST {
-		// REST always uses JSON.
-		// TODO: allow non-JSON encodings with REST? Would require registering content-types with codecs.
-		//
-		// NB: This is fine to set even if a custom content-type is used via
-		//     the use of google.api.HttpBody. The actual content-type and body
-		//     data will be written via serverBodyPreparer implementation.
-		op.server.codec = h.mux.codecImpls[CodecJSON](op.methodConf.resolver)
-	} else if _, supportsCodec := op.methodConf.codecNames[reqMeta.codec]; supportsCodec {
-		op.server.codec = op.client.codec
-	} else {
-		op.server.codec = h.codecs[codecKey{res: op.methodConf.resolver, name: op.methodConf.preferredCodec}]
+	if err != nil {
+		op.reportError(err)
+		return
 	}
 
-	if reqMeta.compression != "" && !cannotDecompressRequest {
-		if _, supportsCompression := op.methodConf.compressorNames[reqMeta.compression]; supportsCompression {
-			op.server.reqCompression = op.client.reqCompression
-		}
-		// else: we'll just decompress and not recompress
-		// TODO: should we instead pick a supported compression scheme (if there is one)?
-	}
-
-	// Now we know enough to handle the request.
-	if op.client.protocol.protocol() == op.server.protocol.protocol() &&
+	if op.hooks.isEmpty() &&
+		op.client.protocol.protocol() == op.server.protocol.protocol() &&
 		op.client.codec.Name() == op.server.codec.Name() &&
-		(cannotDecompressRequest || op.client.reqCompression.Name() == op.server.reqCompression.Name()) {
-		// No transformation needed. But we do  need to restore the original headers first
+		op.client.reqCompression.Name() == op.server.reqCompression.Name() {
+		// No transformation needed. But we do need to restore the original headers first
 		// since extracting request metadata may have removed keys.
-		request.Header = originalHeaders
+		request.Header = op.originalHeaders
 		op.methodConf.handler.ServeHTTP(writer, request)
-		return
-	}
-
-	if cannotDecompressRequest {
-		// At this point, we have to perform some transformation, so we'll need to
-		// be able to decompress/compress.
-		http.Error(writer, fmt.Sprintf("%q compression not supported", reqMeta.compression), http.StatusUnsupportedMediaType)
 		return
 	}
 
 	op.handle()
 }
 
-type clientProtocolDetails struct {
-	protocol       clientProtocolHandler
-	codec          Codec
-	reqCompression *compressionPool
+func (h *handler) newOperation(writer http.ResponseWriter, request *http.Request) *operation {
+	ctx, cancel := context.WithCancel(request.Context())
+	request = request.WithContext(ctx)
+	op := &operation{
+		writer:           writer,
+		request:          request,
+		cancel:           cancel,
+		bufferPool:       h.bufferPool,
+		canDecompress:    h.canDecompress,
+		compressionPools: h.mux.compressionPools,
+	}
+	op.requestLine.fromRequest(request)
+	return op
 }
+
+type clientProtocolDetails struct {
+	protocol        clientProtocolHandler
+	codec           Codec
+	reqCompression  *compressionPool
+	respCompression *compressionPool
+}
+
+var _ PeerInfo = (*clientProtocolDetails)(nil)
+
+func (c *clientProtocolDetails) Protocol() Protocol {
+	if c.protocol == nil {
+		return ProtocolUnknown
+	}
+	return c.protocol.protocol()
+}
+
+func (c *clientProtocolDetails) Codec() string {
+	if c.codec == nil {
+		return ""
+	}
+	return c.codec.Name()
+}
+
+func (c *clientProtocolDetails) RequestCompression() string {
+	if c.reqCompression == nil {
+		return ""
+	}
+	return c.reqCompression.Name()
+}
+
+func (c *clientProtocolDetails) ResponseCompression() string {
+	if c.respCompression == nil {
+		return ""
+	}
+	return c.respCompression.Name()
+}
+
+func (c *clientProtocolDetails) doNotImplement() {}
 
 type serverProtocolDetails struct {
-	protocol       serverProtocolHandler
-	codec          Codec
-	reqCompression *compressionPool
+	protocol        serverProtocolHandler
+	codec           Codec
+	reqCompression  *compressionPool
+	respCompression *compressionPool
 }
 
-func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType string, values url.Values) {
+var _ PeerInfo = (*serverProtocolDetails)(nil)
+
+func (s *serverProtocolDetails) Protocol() Protocol {
+	if s.protocol == nil {
+		return ProtocolUnknown
+	}
+	return s.protocol.protocol()
+}
+
+func (s *serverProtocolDetails) Codec() string {
+	if s.codec == nil {
+		return ""
+	}
+	return s.codec.Name()
+}
+
+func (s *serverProtocolDetails) RequestCompression() string {
+	if s.reqCompression == nil {
+		return ""
+	}
+	return s.reqCompression.Name()
+}
+
+func (s *serverProtocolDetails) ResponseCompression() string {
+	if s.respCompression == nil {
+		return ""
+	}
+	return s.respCompression.Name()
+}
+
+func (s *serverProtocolDetails) doNotImplement() {}
+
+func classifyRequest(req *http.Request) (clientProtocolHandler, url.Values) {
 	contentTypes := req.Header["Content-Type"]
 
 	if len(contentTypes) == 0 { //nolint:nestif
@@ -214,51 +187,52 @@ func classifyRequest(req *http.Request) (h clientProtocolHandler, contentType st
 		// requests should actually encode this via query string (see below).
 		if len(connectVersion) == 1 && connectVersion[0] == "1" {
 			if req.Method == http.MethodGet {
-				return connectUnaryGetClientProtocol{}, "", nil
+				return connectUnaryGetClientProtocol{}, nil
 			}
-			return nil, "", nil
+			return nil, nil
 		}
-		values = req.URL.Query()
+		values := req.URL.Query()
 		if values.Get("connect") == "v1" {
 			if req.Method != http.MethodGet {
-				return nil, "", nil
+				return nil, nil
 			}
-			return connectUnaryGetClientProtocol{}, "", values
+			return connectUnaryGetClientProtocol{}, values
 		}
-		return restClientProtocol{}, "", values
+		return restClientProtocol{}, values
 	}
 
 	if len(contentTypes) > 1 {
-		return nil, "", nil // Ick. Don't allow this.
+		return nil, nil // Ick. Don't allow this.
 	}
-	contentType = contentTypes[0]
+	contentType := contentTypes[0]
+	var values url.Values
 	switch {
 	case strings.HasPrefix(contentType, "application/connect+"):
-		return connectStreamClientProtocol{}, contentType, nil
+		return connectStreamClientProtocol{}, nil
 	case contentType == "application/grpc" || strings.HasPrefix(contentType, "application/grpc+"):
-		return grpcClientProtocol{}, contentType, nil
+		return grpcClientProtocol{}, nil
 	case contentType == "application/grpc-web" || strings.HasPrefix(contentType, "application/grpc-web+"):
-		return grpcWebClientProtocol{}, contentType, nil
+		return grpcWebClientProtocol{}, nil
 	case strings.HasPrefix(contentType, "application/"):
 		connectVersion := req.Header["Connect-Protocol-Version"]
 		if len(connectVersion) == 1 && connectVersion[0] == "1" {
 			if req.Method == http.MethodGet {
-				return connectUnaryGetClientProtocol{}, contentType, nil
+				return connectUnaryGetClientProtocol{}, nil
 			}
-			return connectUnaryPostClientProtocol{}, contentType, nil
+			return connectUnaryPostClientProtocol{}, nil
 		}
 		values = req.URL.Query()
 		if values.Get("connect") == "v1" {
 			if req.Method != http.MethodGet {
-				return nil, "", nil
+				return nil, nil
 			}
-			return connectUnaryGetClientProtocol{}, "", values
+			return connectUnaryGetClientProtocol{}, values
 		}
 		// REST usually uses application/json, but use of google.api.HttpBody means it could
 		// also use *any* content-type.
 		fallthrough
 	default:
-		return restClientProtocol{}, contentType, values
+		return restClientProtocol{}, values
 	}
 }
 
@@ -283,31 +257,32 @@ func newCodecMap(methodConfigs map[string]*methodConfig, codecs map[string]func(
 // operation represents a single HTTP operation, which maps to an incoming HTTP request.
 // It tracks properties needed to implement protocol transformation.
 type operation struct {
-	muxConfig      *Mux
-	writer         http.ResponseWriter
-	request        *http.Request
-	queryVars      url.Values
-	reqContentType string // original content-type in incoming request headers
-	rspContentType string // original content-type in outging response headers
-	contentLen     int64  // original content-length in incoming request headers or -1
-	reqMeta        requestMeta
-	cancel         context.CancelFunc
-	bufferPool     *bufferPool
-	canDecompress  []string
+	writer           http.ResponseWriter
+	request          *http.Request
+	cancel           context.CancelFunc
+	bufferPool       *bufferPool
+	canDecompress    []string
+	compressionPools map[string]*compressionPool
 
-	methodConf *methodConfig
+	queryVars       url.Values
+	originalHeaders http.Header
+	reqContentType  string      // original content-type in incoming request headers
+	rspContentType  string      // original content-type in outgoing response headers
+	contentLen      int64       // original content-length in incoming request headers or -1
+	requestLine     requestLine // properties of the original incoming request line
+	reqMeta         requestMeta
+	deadline        time.Time
+	methodConf      *methodConfig
 
 	client clientProtocolDetails
 	server serverProtocolDetails
-	// response compression won't vary between response received from
-	// server and response sent to client because we tell server handler
-	// that we only accept encodings that both the middleware and the
-	// client can decompress.
-	respCompression *compressionPool
 
 	// only used when clientProtocolDetails.protocol == ProtocolREST
 	restTarget *routeTarget
 	restVars   []routeTargetVarMatch
+
+	hooks   Hooks
+	isValid bool
 
 	// these fields memoize the results of type assertions and some method calls
 	clientEnveloper     envelopedProtocolHandler
@@ -320,6 +295,149 @@ type operation struct {
 	serverRespNeedsPrep bool
 }
 
+var _ Operation = (*operation)(nil)
+
+func (op *operation) IsValid() bool {
+	return op.isValid
+}
+
+func (op *operation) HTTPRequestLine() (method, path, queryString, httpVersion string) {
+	return op.requestLine.method, op.requestLine.path, op.requestLine.queryString, op.requestLine.httpVersion
+}
+
+func (op *operation) Method() protoreflect.MethodDescriptor {
+	if op.methodConf == nil {
+		return nil
+	}
+	return op.methodConf.descriptor
+}
+
+func (op *operation) Deadline() (time.Time, bool) {
+	return op.deadline, op.reqMeta.hasTimeout
+}
+
+func (op *operation) ClientInfo() PeerInfo {
+	return &op.client
+}
+
+func (op *operation) HandlerInfo() PeerInfo {
+	return &op.server
+}
+
+func (op *operation) doNotImplement() {}
+
+func (op *operation) validate(mux *Mux, codecs map[codecKey]Codec) error {
+	// Identify the protocol.
+	clientProtoHandler, queryVars := classifyRequest(op.request)
+	if clientProtoHandler == nil {
+		return newHTTPError(http.StatusUnsupportedMediaType, "could not classify protocol")
+	}
+	op.client.protocol = clientProtoHandler
+	if queryVars != nil {
+		// memoize this, so we don't have to parse query string again later
+		op.queryVars = queryVars
+	}
+	op.originalHeaders = op.request.Header.Clone()
+	op.reqContentType = op.originalHeaders.Get("Content-Type")
+	op.contentLen = op.request.ContentLength
+	op.request.ContentLength = -1 // transforming it will likely change it
+
+	// Identify the method being invoked.
+	err := op.resolveMethod(mux)
+	if err != nil {
+		return err
+	}
+	if !op.client.protocol.acceptsStreamType(op, op.methodConf.streamType) {
+		return newHTTPError(http.StatusUnsupportedMediaType, "stream type %s not supported with %s protocol", op.methodConf.streamType, op.client.protocol)
+	}
+	if op.methodConf.streamType == connect.StreamTypeBidi && op.request.ProtoMajor < 2 {
+		return newHTTPError(http.StatusHTTPVersionNotSupported, "bidi streams require HTTP/2")
+	}
+	if clientProtoHandler.protocol() == ProtocolGRPC && op.request.ProtoMajor != 2 {
+		return newHTTPError(http.StatusHTTPVersionNotSupported, "gRPC requires HTTP/2")
+	}
+
+	// Identify the request encoding and compression.
+	reqMeta, err := clientProtoHandler.extractProtocolRequestHeaders(op, op.request.Header)
+	if err != nil {
+		return newHTTPError(http.StatusBadRequest, err.Error())
+	}
+	// Remove other headers that might mess up the next leg
+	if enc := op.request.Header.Get("Content-Encoding"); enc != "" && enc != CompressionIdentity {
+		// If the protocol didn't remove the "Content-Encoding" header in above step,
+		// that's because it models encoding in a different way. In that case, encoding
+		// of the whole response with this header is not valid.
+		return newHTTPError(http.StatusUnsupportedMediaType, "content-encoding %q not allowed for this protocol", enc)
+	}
+	op.request.Header.Del("Content-Encoding")
+	op.request.Header.Del("Accept-Encoding")
+	op.request.Header.Del("Content-Length")
+
+	op.reqMeta = reqMeta
+	if reqMeta.hasTimeout {
+		op.deadline = time.Now().Add(reqMeta.timeout)
+	}
+	if reqMeta.compression == CompressionIdentity {
+		reqMeta.compression = "" // normalize to empty string
+	}
+	if reqMeta.compression != "" {
+		var ok bool
+		op.client.reqCompression, ok = op.compressionPools[reqMeta.compression]
+		if !ok {
+			return newHTTPError(http.StatusUnsupportedMediaType, "%q compression not supported", reqMeta.compression)
+		}
+	}
+	op.client.codec = codecs[codecKey{res: op.methodConf.resolver, name: reqMeta.codec}]
+	if op.client.codec == nil {
+		return newHTTPError(http.StatusUnsupportedMediaType, "%q sub-format not supported", reqMeta.codec)
+	}
+
+	// Now we can determine the destination protocol details
+	if _, supportsProtocol := op.methodConf.protocols[clientProtoHandler.protocol()]; supportsProtocol {
+		op.server.protocol = clientProtoHandler.protocol().serverHandler(op)
+	} else {
+		for protocol := protocolMin; protocol <= protocolMax; protocol++ {
+			if _, supportsProtocol := op.methodConf.protocols[protocol]; supportsProtocol {
+				op.server.protocol = protocol.serverHandler(op)
+				break
+			}
+		}
+	}
+
+	// Now that we've ruled out the use of bidi streaming above, it's safe to simulate HTTP/2
+	// for the benefit of gRPC handlers, which require HTTP/2.
+	if op.server.protocol.protocol() == ProtocolGRPC {
+		op.request.Proto, op.request.ProtoMajor, op.request.ProtoMinor = "HTTP/2", 2, 0
+	}
+
+	if op.server.protocol.protocol() == ProtocolREST {
+		// REST always uses JSON.
+		// TODO: Allow non-JSON encodings with REST? Would require registering content-types with codecs.
+		//       Would also require figuring out how to (un)marshal things other than messages when a body
+		//       path indicates a non-message field (do-able with JSON, but maybe non-starter with proto?)
+		//
+		// NB: This is fine to set even if a custom content-type is used via
+		//     the use of google.api.HttpBody. The actual content-type and body
+		//     data will be written via serverBodyPreparer implementation.
+		op.server.codec = codecs[codecKey{res: op.methodConf.resolver, name: CodecJSON}]
+	} else if _, supportsCodec := op.methodConf.codecNames[reqMeta.codec]; supportsCodec {
+		op.server.codec = op.client.codec
+	} else {
+		op.server.codec = codecs[codecKey{res: op.methodConf.resolver, name: op.methodConf.preferredCodec}]
+	}
+
+	if reqMeta.compression != "" {
+		if _, supportsCompression := op.methodConf.compressorNames[reqMeta.compression]; supportsCompression {
+			op.server.reqCompression = op.client.reqCompression
+		}
+		// else: we'll just decompress and not recompress
+		// TODO: should we instead pick a supported compression scheme (if there is one)?
+	}
+
+	op.isValid = true // Successfully validated!
+	return nil
+}
+
 func (op *operation) queryValues() url.Values {
 	if op.queryVars == nil && op.request.URL.RawQuery != "" {
 		op.queryVars = op.request.URL.Query()
@@ -327,7 +445,14 @@ func (op *operation) queryValues() url.Values {
 	return op.queryVars
 }
 
-func (op *operation) handle() {
+func (op *operation) handle() { //nolint:gocyclo
+	if op.hooks.OnClientRequestHeaders != nil {
+		if err := op.hooks.OnClientRequestHeaders(op.request.Context(), op, op.request.Header); err != nil {
+			op.reportError(err)
+			return
+		}
+	}
+
 	op.clientEnveloper, _ = op.client.protocol.(envelopedProtocolHandler)
 	op.clientPreparer, _ = op.client.protocol.(clientBodyPreparer)
 	if op.clientPreparer != nil {
@@ -350,7 +475,7 @@ func (op *operation) handle() {
 	// even if body encoding uses same content type, we can't treat them as the same
 	// (which means re-using encoded data) if either side needs to prep the data first
 	sameRequestCodec := sameCodec && !op.clientReqNeedsPrep && !op.serverReqNeedsPrep
-	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine
+	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine || op.hooks.OnClientRequestMessage != nil
 
 	reqMsg := message{
 		sameCompression: sameRequestCompression,
@@ -367,23 +492,33 @@ func (op *operation) handle() {
 		reqMsg.msg = messageType.New().Interface()
 	}
 
-	var skipBody bool
-	if serverRequestBuilder != nil { //nolint:nestif
-		if requireMessageForRequestLine {
-			if err := op.readRequestMessage(nil, op.request.Body, &reqMsg); err != nil {
-				if errors.Is(err, io.EOF) {
-					// okay for the first message: means empty message data
-					reqMsg.stage = stageRead
-				} else {
-					op.reportError(err)
-					return
-				}
-			}
-			if err := reqMsg.advanceToStage(op, stageDecoded); err != nil {
+	if (op.hooks.OnClientRequestMessage != nil && op.methodConf.streamType == connect.StreamTypeUnary) ||
+		requireMessageForRequestLine {
+		// Go ahead and process first request message
+		switch err := op.readRequestMessage(nil, op.request.Body, &reqMsg); {
+		case errors.Is(err, io.EOF):
+			// okay for the first message: means empty message data
+			reqMsg.markReady()
+		case err != nil:
+			op.reportError(err)
+			return
+		}
+		if err := reqMsg.advanceToStage(op, stageDecoded); err != nil {
+			op.reportError(err)
+			return
+		}
+		if op.hooks.OnClientRequestMessage != nil {
+			compressed := reqMsg.wasCompressed && op.client.reqCompression != nil
+			err := op.hooks.OnClientRequestMessage(op.request.Context(), op, reqMsg.msg, compressed, reqMsg.size)
+			if err != nil {
 				op.reportError(err)
 				return
 			}
 		}
+	}
+
+	var skipBody bool
+	if serverRequestBuilder != nil {
 		var hasBody bool
 		var err error
 		op.request.URL.Path, op.request.URL.RawQuery, op.request.Method, hasBody, err =
@@ -506,12 +641,27 @@ func (op *operation) resolveMethod(mux *Mux) error {
 // once the underlying server handler has been invoked. For those errors, responseWriter.reportError
 // must be used instead.
 func (op *operation) reportError(err error) {
+	defer op.cancel()
+
+	if !op.isValid {
+		// We don't have enough operation details to render an RPC error,
+		// so just send a simple HTTP error.
+		asHTTPError(err).Encode(op.writer)
+		return
+	}
+
 	rw, ok := op.writer.(*responseWriter)
 	if ok {
 		rw.reportError(err)
 		return
 	}
-	// No responseWriter created yet, so we duplicate some of its behavior to write an error
+	// No responseWriter created yet, so we duplicate some of its behavior to write an error.
+	if op.hooks.OnOperationFail != nil {
+		if hookErr := op.hooks.OnOperationFail(op.request.Context(), op, nil, err); hookErr != nil {
+			// report the error returned by the hook
+			err = hookErr
+		}
+	}
 	httpErr := asHTTPError(err)
 	httpErr.EncodeHeaders(op.writer.Header())
 	connErr := asConnectError(err)
@@ -568,7 +718,7 @@ func (op *operation) readRequestMessage(rw *responseWriter, reader io.Reader, ms
 	if err != nil {
 		return err
 	}
-	msg.stage = stageRead
+	msg.markReady()
 	return nil
 }
 
@@ -748,44 +898,57 @@ func (tr *transformingReader) Read(data []byte) (n int, err error) {
 	if tr.err != nil {
 		return 0, tr.err
 	}
-	if tr.buffer != nil {
-		n, err := tr.buffer.Read(data)
-		if n > 0 {
-			return n, err
+
+	for {
+		if len(data) < tr.envRemain {
+			copy(data, tr.env[envelopeLen-tr.envRemain:])
+			tr.envRemain -= len(data)
+			return len(data), nil
 		}
-		// otherwise EOF, fall through
-	}
-	if err := tr.rw.op.readRequestMessage(tr.rw, tr.r, tr.msg); err != nil {
-		// If this is the first request message, the error is EOF, and there's a body
-		// preparer, we'll allow it and let the preparer produce a message from zero
-		// request bytes.
-		if !tr.consumedFirst && errors.Is(err, io.EOF) && tr.rw.op.clientReqNeedsPrep {
-			tr.msg.stage = stageRead
-		} else {
+		var offset int
+		if tr.envRemain > 0 {
+			copy(data, tr.env[envelopeLen-tr.envRemain:])
+			offset = tr.envRemain
+			tr.envRemain = 0
+		}
+		var err error
+		if len(data) > offset && tr.buffer != nil {
+			n, err = tr.buffer.Read(data[offset:])
+		}
+		if offset+n > 0 {
+			return offset + n, err
+		}
+
+		// If we get here, there was nothing in tr.buffer to read, so
+		// we need to prepare the next message and try again.
+
+		if err := tr.rw.op.readRequestMessage(tr.rw, tr.r, tr.msg); err != nil {
+			// If this is the first request message, the error is EOF, and there's a body
+			// preparer, we'll allow it and let the preparer produce a message from zero
+			// request bytes.
+			if !tr.consumedFirst && errors.Is(err, io.EOF) && tr.rw.op.clientReqNeedsPrep {
+				tr.msg.markReady()
+			} else {
+				tr.err = err
+				return 0, err
+			}
+		}
+		if tr.rw.op.hooks.OnClientRequestMessage != nil {
+			if err := tr.msg.advanceToStage(tr.rw.op, stageDecoded); err != nil {
+				tr.err = err
+				return 0, err
+			}
+			compressed := tr.msg.wasCompressed && tr.rw.op.client.reqCompression != nil
+			if err := tr.rw.op.hooks.OnClientRequestMessage(tr.rw.op.request.Context(), tr.rw.op, tr.msg.msg, compressed, tr.msg.size); err != nil {
+				tr.rw.reportError(err)
+				return 0, context.Canceled
+			}
+		}
+		if err := tr.prepareMessage(); err != nil {
 			tr.err = err
 			return 0, err
 		}
 	}
-	if err := tr.prepareMessage(); err != nil {
-		tr.err = err
-		return 0, err
-	}
-
-	if len(data) < tr.envRemain {
-		copy(data, tr.env[envelopeLen-tr.envRemain:])
-		tr.envRemain -= len(data)
-		return len(data), nil
-	}
-	var offset int
-	if tr.envRemain > 0 {
-		copy(data, tr.env[envelopeLen-tr.envRemain:])
-		offset = tr.envRemain
-		tr.envRemain = 0
-	}
-	if len(data) > offset {
-		n, err = tr.buffer.Read(data[offset:])
-	}
-	return offset + n, err
 }
 
 func (tr *transformingReader) Close() error {
@@ -863,6 +1026,12 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	}
 	rw.headersWritten = true
 	rw.code = statusCode
+
+	if rw.endWritten {
+		// Nothing to do: we already sent RPC error to client.
+		return
+	}
+
 	var err error
 	rw.contentLen, err = httpExtractContentLength(rw.Header())
 	if err != nil {
@@ -894,18 +1063,26 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 		respMeta.compression = "" // normalize to empty string
 	}
 	if respMeta.compression != "" {
-		var ok bool
-		rw.op.respCompression, ok = rw.op.muxConfig.compressionPools[respMeta.compression]
+		respCompression, ok := rw.op.compressionPools[respMeta.compression]
 		if !ok {
 			rw.reportError(fmt.Errorf("response indicates unsupported compression encoding %q", respMeta.compression))
 			return
 		}
+		rw.op.client.respCompression = respCompression
+		rw.op.server.respCompression = respCompression
 	}
 	if respMeta.codec != "" && respMeta.codec != rw.op.server.codec.Name() &&
 		!restHTTPBodyResponse(rw.op) {
 		// unexpected content-type for reply
 		rw.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", rw.op.server.codec.Name(), respMeta.codec))
 		return
+	}
+
+	if rw.op.hooks.OnServerResponseHeaders != nil {
+		if err := rw.op.hooks.OnServerResponseHeaders(rw.op.request.Context(), rw.op, statusCode, rw.Header()); err != nil {
+			rw.reportError(err)
+			return
+		}
 	}
 
 	if respMeta.end != nil {
@@ -937,10 +1114,11 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	// even if body encoding uses same content type, we can't treat them as the same
 	// (which means re-using encoded data) if either side needs to prep the data first
 	sameResponseCodec := sameCodec && !rw.op.clientRespNeedsPrep && !rw.op.serverRespNeedsPrep
+	mustDecodeResponse := !sameResponseCodec || rw.op.hooks.OnServerResponseMessage != nil
 
 	respMsg := message{sameCompression: true, sameCodec: sameResponseCodec}
 
-	if !sameResponseCodec {
+	if mustDecodeResponse {
 		// We will have to decode and re-encode, so we need the message type.
 		messageType, err := rw.op.methodConf.resolver.FindMessageByName(rw.op.methodConf.descriptor.Output().FullName())
 		if err != nil {
@@ -967,7 +1145,7 @@ func (rw *responseWriter) WriteHeader(statusCode int) {
 	}
 
 	// Now we can define the transformed response body.
-	if sameResponseCodec {
+	if sameResponseCodec && !mustDecodeResponse {
 		// we do not need to decompress or decode
 		rw.w = &envelopingWriter{rw: rw, w: delegate}
 	} else {
@@ -1012,7 +1190,9 @@ func (rw *responseWriter) reportError(err error) {
 
 func (rw *responseWriter) reportEnd(end *responseEnd) {
 	if rw.endWritten {
-		// ruh-roh... this should not happen
+		// It's possible this could be called in the event of a cascading error,
+		// where various receivers all call reportEnd. We will only respect the
+		// first such call and ignore the others.
 		return
 	}
 	if rw.respMeta != nil && len(rw.respMeta.pendingTrailers) > 0 && len(end.trailers) == 0 {
@@ -1042,7 +1222,7 @@ func (rw *responseWriter) flushHeaders() {
 	}
 	cliRespMeta := *rw.respMeta
 	cliRespMeta.codec = rw.op.client.codec.Name()
-	cliRespMeta.compression = rw.op.respCompression.Name()
+	cliRespMeta.compression = rw.op.client.respCompression.Name()
 	cliRespMeta.acceptCompression = intersect(rw.respMeta.acceptCompression, rw.op.canDecompress)
 	statusCode := rw.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, rw.Header())
 	hasErr := rw.respMeta.end != nil && rw.respMeta.end.err != nil
@@ -1098,6 +1278,14 @@ func (rw *responseWriter) close() {
 }
 
 func (rw *responseWriter) writeEnd(end *responseEnd, wasInHeaders bool) {
+	if end.err == nil && rw.op.hooks.OnOperationFinish != nil {
+		rw.op.hooks.OnOperationFinish(rw.op.request.Context(), rw.op, end.trailers)
+	} else if end.err != nil && rw.op.hooks.OnOperationFail != nil {
+		if hookErr := rw.op.hooks.OnOperationFail(rw.op.request.Context(), rw.op, end.trailers, end.err); hookErr != nil {
+			// report the error returned by the hook
+			end.err = asConnectError(hookErr)
+		}
+	}
 	trailers := rw.op.client.protocol.encodeEnd(rw.op, end, rw.delegate, wasInHeaders)
 	httpMergeTrailers(rw.Header(), trailers)
 	rw.endWritten = true
@@ -1242,7 +1430,7 @@ func (ew *envelopingWriter) Close() error {
 	if ew.remainingBytes == -1 && ew.mustReleaseCurrent && ew.err == nil {
 		// We were buffering in order to measure size and create envelope,
 		// so do that now.
-		env := envelope{compressed: ew.rw.op.respCompression != nil, length: uint32(buf.Len())}
+		env := envelope{compressed: ew.rw.op.client.respCompression != nil, length: uint32(buf.Len())}
 		envBytes := ew.rw.op.clientEnveloper.encodeEnvelope(env)
 		_, err := ew.w.Write(envBytes[:])
 		if err != nil {
@@ -1301,7 +1489,7 @@ func (ew *envelopingWriter) maybeInit() {
 	}
 	// synthesize envelope
 	var env envelope
-	env.compressed = ew.rw.op.respCompression != nil
+	env.compressed = ew.rw.op.client.respCompression != nil
 	env.length = uint32(ew.rw.contentLen)
 	envBytes := ew.rw.op.clientEnveloper.encodeEnvelope(envelope{})
 	_, err := ew.w.Write(envBytes[:])
@@ -1324,7 +1512,7 @@ func (ew *envelopingWriter) handleTrailer() error {
 	if ew.trailerIsCompressed {
 		uncompressed := ew.rw.op.bufferPool.Get()
 		defer ew.rw.op.bufferPool.Put(uncompressed)
-		if err := ew.rw.op.respCompression.decompress(uncompressed, data); err != nil {
+		if err := ew.rw.op.server.respCompression.decompress(uncompressed, data); err != nil {
 			return err
 		}
 		data = uncompressed
@@ -1449,7 +1637,7 @@ func (tw *transformingWriter) flushMessage() error {
 		if tw.latestEnvelope.compressed {
 			data = tw.rw.op.bufferPool.Get()
 			defer tw.rw.op.bufferPool.Put(data)
-			if err := tw.rw.op.respCompression.decompress(data, tw.buffer); err != nil {
+			if err := tw.rw.op.server.respCompression.decompress(data, tw.buffer); err != nil {
 				return err
 			}
 		}
@@ -1465,14 +1653,23 @@ func (tw *transformingWriter) flushMessage() error {
 	}
 
 	// We've finished reading the message, so we can manually set the stage
-	tw.msg.stage = stageRead
+	tw.msg.markReady()
+	if tw.rw.op.hooks.OnServerResponseMessage != nil {
+		if err := tw.msg.advanceToStage(tw.rw.op, stageDecoded); err != nil {
+			return err
+		}
+		compressed := tw.msg.wasCompressed && tw.rw.op.server.respCompression != nil
+		if err := tw.rw.op.hooks.OnServerResponseMessage(tw.rw.op.request.Context(), tw.rw.op, tw.msg.msg, compressed, tw.msg.size); err != nil {
+			return err
+		}
+	}
 	if err := tw.msg.advanceToStage(tw.rw.op, stageSend); err != nil {
 		return err
 	}
 	buffer := tw.msg.sendBuffer()
 	if enveloper := tw.rw.op.clientEnveloper; enveloper != nil {
 		env := envelope{
-			compressed: tw.msg.wasCompressed && tw.rw.op.respCompression != nil,
+			compressed: tw.msg.wasCompressed && tw.rw.op.client.respCompression != nil,
 			length:     uint32(buffer.Len()),
 		}
 		envBytes := enveloper.encodeEnvelope(env)
@@ -1530,7 +1727,7 @@ func (ew *errorWriter) Close() error {
 	bufferPool := ew.rw.op.bufferPool
 	defer bufferPool.Put(ew.buffer)
 	body := ew.buffer
-	if compressPool := ew.rw.op.respCompression; compressPool != nil {
+	if compressPool := ew.rw.op.server.respCompression; compressPool != nil {
 		uncompressed := bufferPool.Get()
 		defer bufferPool.Put(uncompressed)
 		if err := compressPool.decompress(uncompressed, body); err != nil {
@@ -1667,6 +1864,8 @@ type message struct {
 	// wasCompressed is true if the data was originally compressed; this can
 	// be false in a stream when the stream envelope's compressed bit is unset.
 	wasCompressed bool
+	// original size of the message on the wire, in bytes
+	size int
 
 	stage messageStage
 
@@ -1708,6 +1907,7 @@ func (m *message) release(pool *bufferPool) {
 // buffer.
 func (m *message) reset(pool *bufferPool, isRequest, isCompressed bool) *bytes.Buffer {
 	m.stage = stageEmpty
+	m.size = -1
 	m.isRequest = isRequest
 	m.wasCompressed = isCompressed
 	// we only need one buffer to start, so put
@@ -1733,6 +1933,15 @@ func (m *message) reset(pool *bufferPool, isRequest, isCompressed bool) *bytes.B
 	return buffer1
 }
 
+func (m *message) markReady() {
+	m.stage = stageRead
+	if m.wasCompressed {
+		m.size = m.compressed.Len()
+	} else {
+		m.size = m.data.Len()
+	}
+}
+
 func (m *message) advanceToStage(op *operation, newStage messageStage) error {
 	if m.stage == stageEmpty {
 		return errors.New("message has not yet been read")
@@ -1740,6 +1949,7 @@ func (m *message) advanceToStage(op *operation, newStage messageStage) error {
 	if m.stage > newStage {
 		return fmt.Errorf("cannot advance message stage backwards: stage %v > target %v", m.stage, newStage)
 	}
+
 	if newStage == m.stage {
 		return nil // no-op
 	}
@@ -1819,7 +2029,7 @@ func (m *message) decompress(op *operation, saveBuffer bool) error {
 	if m.isRequest {
 		pool = op.client.reqCompression
 	} else {
-		pool = op.respCompression
+		pool = op.client.respCompression
 	}
 	if pool == nil {
 		// identity compression, so nothing to do
@@ -1860,7 +2070,7 @@ func (m *message) compress(op *operation) error {
 	if m.isRequest {
 		pool = op.server.reqCompression
 	} else {
-		pool = op.respCompression
+		pool = op.server.respCompression
 	}
 	if pool == nil {
 		// identity compression, so nothing to do
@@ -1945,28 +2155,6 @@ func (m *message) encode(op *operation) error {
 	return nil
 }
 
-func intersect(setA, setB []string) []string {
-	length := len(setA)
-	if len(setB) < length {
-		length = len(setB)
-	}
-	if length == 0 {
-		// If either set is empty, the intersection is empty.
-		// We don't use nil since it is used in places as a sentinel.
-		return make([]string, 0)
-	}
-	result := make([]string, 0, length)
-	for _, item := range setA {
-		for _, other := range setB {
-			if other == item {
-				result = append(result, item)
-				break
-			}
-		}
-	}
-	return result
-}
-
 type errorFlusher interface {
 	FlushError() error
 }
@@ -1994,4 +2182,37 @@ func asFlusher(respWriter http.ResponseWriter) http.Flusher {
 			return nil
 		}
 	}
+}
+
+type requestLine struct {
+	method, path, queryString, httpVersion string
+}
+
+func (line *requestLine) fromRequest(req *http.Request) {
+	line.method = req.Method
+	line.path = req.URL.Path
+	line.queryString = req.URL.RawQuery
+	line.httpVersion = req.Proto
+}
+
+func intersect(setA, setB []string) []string {
+	length := len(setA)
+	if len(setB) < length {
+		length = len(setB)
+	}
+	if length == 0 {
+		// If either set is empty, the intersection is empty.
+		// We don't use nil since it is used in places as a sentinel.
+		return make([]string, 0)
+	}
+	result := make([]string, 0, length)
+	for _, item := range setA {
+		for _, other := range setB {
+			if other == item {
+				result = append(result, item)
+				break
+			}
+		}
+	}
+	return result
 }

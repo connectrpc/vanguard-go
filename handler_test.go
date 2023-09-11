@@ -253,18 +253,6 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
-			name:          "connect stream, unknown compression, pass-through",
-			requestURL:    "/vanguard.test.v1.ContentService/Download",
-			requestMethod: "POST",
-			requestHeaders: map[string][]string{
-				"Content-Type":             {"application/connect+proto"},
-				"Connect-Content-Encoding": {"blah"},
-			},
-			// When a supported protocol and codec, middleware will pass through
-			// with unsupported compression and let underlying handler complain.
-			expectedCode: http.StatusTeapot,
-		},
-		{
 			name:          "rest, unknown compression",
 			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
 			requestMethod: "GET",
@@ -276,7 +264,6 @@ func TestHandler_Errors(t *testing.T) {
 		},
 		{
 			name:          "connect stream, unknown compression",
-			mux:           grpcMux, // must target different protocol for the error
 			requestURL:    "/vanguard.test.v1.ContentService/Download",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -286,19 +273,7 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
-			name:          "connect post, unknown compression, pass-through",
-			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
-			requestMethod: "POST",
-			requestHeaders: map[string][]string{
-				"Connect-Protocol-Version": {"1"},
-				"Content-Type":             {"application/proto"},
-				"Content-Encoding":         {"blah"},
-			},
-			expectedCode: http.StatusTeapot,
-		},
-		{
 			name:          "connect post, unknown compression",
-			mux:           grpcMux,
 			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -309,31 +284,13 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
-			name:          "connect get, unknown compression, pass-through",
-			requestURL:    "/vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
-			requestMethod: "GET",
-			expectedCode:  http.StatusTeapot,
-		},
-		{
 			name:          "connect get, unknown compression",
-			mux:           grpcMux,
 			requestURL:    "/vanguard.test.v1.LibraryService/GetBook?connect=v1&encoding=proto&compression=blah",
 			requestMethod: "GET",
 			expectedCode:  http.StatusUnsupportedMediaType,
 		},
 		{
-			name:          "grpc, unknown compression, pass-through",
-			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
-			requestMethod: "POST",
-			requestHeaders: map[string][]string{
-				"Content-Type":  {"application/grpc+proto"},
-				"Grpc-Encoding": {"blah"},
-			},
-			expectedCode: http.StatusTeapot,
-		},
-		{
 			name:          "grpc, unknown compression",
-			mux:           connectMux,
 			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -343,18 +300,7 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
-			name:          "grpc-web, unknown compression, pass-through",
-			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
-			requestMethod: "POST",
-			requestHeaders: map[string][]string{
-				"Content-Type":  {"application/grpc-web+proto"},
-				"Grpc-Encoding": {"blah"},
-			},
-			expectedCode: http.StatusTeapot,
-		},
-		{
 			name:          "grpc-web, unknown compression",
-			mux:           connectMux,
 			requestURL:    "/vanguard.test.v1.LibraryService/GetBook",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
@@ -719,22 +665,16 @@ func TestHandler_PassThrough(t *testing.T) {
 						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "xyz1.foo",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "xyz2.foo",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz2.foo"},
 					}},
 					{in: &testMsgIn{
 						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "test.test",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "test.test"},
 					}},
 				},
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
@@ -754,9 +694,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
 					}},
 					{out: &testMsgOut{
-						msg: &testv1.SubscribeResponse{
-							FilenameChanged: "xyz1.foo",
-						},
+						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
 					}},
 					{out: &testMsgOut{
 						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
@@ -833,14 +771,15 @@ func TestMessage_AdvanceStage(t *testing.T) {
 		op := &operation{
 			bufferPool: newBufferPool(),
 			client: clientProtocolDetails{
-				codec:          clientCodec,
-				reqCompression: clientReqComp,
+				codec:           clientCodec,
+				reqCompression:  clientReqComp,
+				respCompression: respComp,
 			},
 			server: serverProtocolDetails{
-				codec:          serverCodec,
-				reqCompression: serverReqComp,
+				codec:           serverCodec,
+				reqCompression:  serverReqComp,
+				respCompression: respComp,
 			},
-			respCompression: respComp,
 		}
 		return &testEnviron{
 			abcCodec:         abcCodec,
