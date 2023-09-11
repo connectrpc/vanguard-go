@@ -1,3 +1,17 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 syntax = "proto3";
 
 package io.swagger.petstore.v2;
@@ -53,9 +67,13 @@ message Tag {
 }
 
 enum Status {
-  available = 0;
-  pending = 1;
-  sold = 2;
+  // NB: These do not use standard naming practices in order to match
+  //     the JSON format of the Pet Store Open API schema, which uses
+  //     lower-case names for these constants.
+  unknown = 0;
+  available = 1;
+  pending = 2;
+  sold = 3;
 }
 
 message PetID {

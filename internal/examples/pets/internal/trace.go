@@ -1,3 +1,17 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package internal
 
 import (
@@ -10,21 +24,22 @@ import (
 	"sync/atomic"
 )
 
-var id atomic.Int64
+//nolint:gochecknoglobals
+var idSource atomic.Int64
 
 func TraceHandler(handler http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reqId := id.Add(1)
-		tr := &tracer{reqId: reqId}
-		if r.RemoteAddr != "" {
-			tr.traceReq("(from %s)", r.RemoteAddr)
+	return http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		reqID := idSource.Add(1)
+		trc := &tracer{reqID: reqID}
+		if request.RemoteAddr != "" {
+			trc.traceReq("(from %s)", request.RemoteAddr)
 		}
-		traceRequest(tr, r)
-		r.Body = &traceReader{r: r.Body, trace: tr.traceReq}
-		r = r.WithContext(context.WithValue(r.Context(), traceRequestId{}, reqId))
-		tw := &traceWriter{w: w, trace: tr.traceResp}
+		traceRequest(trc, request)
+		request.Body = &traceReader{r: request.Body, trace: trc.traceReq}
+		request = request.WithContext(context.WithValue(request.Context(), traceRequestID{}, reqID))
+		tw := &traceWriter{w: responseWriter, trace: trc.traceResp}
 		defer tw.traceTrailers()
-		handler.ServeHTTP(tw, r)
+		handler.ServeHTTP(tw, request)
 	})
 }
 
@@ -36,34 +51,34 @@ type traceTransport struct {
 	transport http.RoundTripper
 }
 
-type traceRequestId struct{}
+type traceRequestID struct{}
 
 func (t traceTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	reqId, ok := request.Context().Value(traceRequestId{}).(int64)
+	reqID, ok := request.Context().Value(traceRequestID{}).(int64)
 	if !ok {
-		reqId = id.Add(1)
+		reqID = idSource.Add(1)
 	}
-	tr := &tracer{reqId: reqId, prefix: "    "}
-	traceRequest(tr, request)
-	request.Body = &traceReader{r: request.Body, trace: tr.traceReq}
+	trc := &tracer{reqID: reqID, prefix: "    "}
+	traceRequest(trc, request)
+	request.Body = &traceReader{r: request.Body, trace: trc.traceReq}
 	resp, err := t.transport.RoundTrip(request)
 	if err != nil {
-		tr.traceResp("ERROR: %v", err)
+		trc.traceResp("ERROR: %v", err)
 		return nil, err
 	}
-	tr.traceResp("%s", resp.Status)
-	traceHeaders(tr.traceResp, resp.Header)
+	trc.traceResp("%s", resp.Status)
+	traceHeaders(trc.traceResp, resp.Header)
 	resp.Body = &traceReader{
 		r:     resp.Body,
-		trace: tr.traceResp,
+		trace: trc.traceResp,
 		onEnd: func() {
-			traceTrailers(tr.traceResp, resp.Trailer)
+			traceTrailers(trc.traceResp, resp.Trailer)
 		},
 	}
 	return resp, nil
 }
 
-func traceRequest(tr *tracer, req *http.Request) {
+func traceRequest(trc *tracer, req *http.Request) {
 	var queryString string
 	if req.URL.RawQuery != "" {
 		queryString = "?" + req.URL.RawQuery
@@ -72,9 +87,9 @@ func traceRequest(tr *tracer, req *http.Request) {
 	if scheme == "" {
 		scheme = "http"
 	}
-	tr.traceReq("%s %s://%s%s%s %s", req.Method, scheme, req.Host, req.URL.Path, queryString, req.Proto)
-	traceHeaders(tr.traceReq, req.Header)
-	tr.traceReq("")
+	trc.traceReq("%s %s://%s%s%s %s", req.Method, scheme, req.Host, req.URL.Path, queryString, req.Proto)
+	traceHeaders(trc.traceReq, req.Header)
+	trc.traceReq("")
 }
 
 func traceHeaders(trace func(string, ...any), header http.Header) {
@@ -194,14 +209,14 @@ func (t *traceWriter) Flush() {
 }
 
 type tracer struct {
-	reqId  int64
+	reqID  int64
 	prefix string
 }
 
-func (tr *tracer) traceReq(msg string, args ...interface{}) {
-	fmt.Printf("%s#%04d>> %s\n", tr.prefix, tr.reqId, fmt.Sprintf(msg, args...))
+func (trc *tracer) traceReq(msg string, args ...interface{}) {
+	fmt.Printf("%s#%04d>> %s\n", trc.prefix, trc.reqID, fmt.Sprintf(msg, args...))
 }
 
-func (tr *tracer) traceResp(msg string, args ...interface{}) {
-	fmt.Printf("%s#%04d<< %s\n", tr.prefix, tr.reqId, fmt.Sprintf(msg, args...))
+func (trc *tracer) traceResp(msg string, args ...interface{}) {
+	fmt.Printf("%s#%04d<< %s\n", trc.prefix, trc.reqID, fmt.Sprintf(msg, args...))
 }

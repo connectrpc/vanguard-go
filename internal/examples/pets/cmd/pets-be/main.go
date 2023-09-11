@@ -1,3 +1,17 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -14,9 +28,9 @@ import (
 	"time"
 
 	"connectrpc.com/grpcreflect"
-	"github.com/bufbuild/vanguard-go"
-	"github.com/bufbuild/vanguard-go/examples/pets/internal"
-	"github.com/bufbuild/vanguard-go/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
+	"connectrpc.com/vanguard"
+	"connectrpc.com/vanguard/internal/examples/pets/internal"
+	"connectrpc.com/vanguard/internal/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -46,11 +60,12 @@ func main() {
 		log.Fatal(err)
 	}
 	svr := &http.Server{
-		Addr:    ":http",
-		Handler: h2c.NewHandler(serveMux, &http2.Server{}),
+		Addr:              ":http",
+		Handler:           h2c.NewHandler(serveMux, &http2.Server{}),
+		ReadHeaderTimeout: 15 * time.Second,
 	}
 
-	signals := make(chan os.Signal)
+	signals := make(chan os.Signal, 1)
 	go func() {
 		<-signals
 		log.Println("Shutting down...")
