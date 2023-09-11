@@ -232,7 +232,7 @@ func (c connectUnaryPostClientProtocol) encodeEnd(op *operation, end *responseEn
 	wireErr := connectErrorToWireError(end.err, op.methodConf.resolver)
 	data, err := json.Marshal(wireErr)
 	if err != nil {
-		data = ([]byte)(`{"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}`)
+		data = ([]byte)(`{"code": "internal", "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
 	}
 	_, _ = writer.Write(data)
 	return nil

@@ -1,0 +1,14 @@
+version: v1
+managed:
+  enabled: true
+  go_package_prefix:
+    default: connectrpc.com/vanguard/internal/examples/pets/internal/gen
+    except:
+      - buf.build/googleapis/googleapis
+plugins:
+  - plugin: buf.build/protocolbuffers/go:v1.31.0
+    out: internal/gen
+    opt: paths=source_relative
+  - plugin: buf.build/connectrpc/go:v1.11.0
+    out: internal/gen
+    opt: paths=source_relative

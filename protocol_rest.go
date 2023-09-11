@@ -129,7 +129,7 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 		// TODO: This is always uses JSON whereas above we use the given codec.
 		//       If/when we support codecs for REST other than JSON, what should
 		//       we do here?
-		bin = []byte(`{"code": 13, "message": ` + strconv.Quote(err.Error()) + `}`)
+		bin = []byte(`{"code": 13, "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
 	}
 	// TODO: compress?
 	_, _ = writer.Write(bin)

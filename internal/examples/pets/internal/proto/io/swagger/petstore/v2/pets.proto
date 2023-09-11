@@ -1,0 +1,125 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package io.swagger.petstore.v2;
+
+import "google/api/annotations.proto";
+import "google/protobuf/empty.proto";
+
+service PetService {
+  rpc GetPetByID(PetID) returns (Pet) {
+    option (google.api.http).get = "/pet/{pet_id}";
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc UpdatePetWithForm(UpdatePetWithFormReq) returns (google.protobuf.Empty) {
+    option (google.api.http).post = "/pet/{pet_id}";
+    option (google.api.http).body = "*";
+  }
+  rpc DeletePet(PetID) returns (google.protobuf.Empty) {
+    option (google.api.http).delete = "/pet/{pet_id}";
+  }
+  rpc UploadFile(UploadFileReq) returns (ApiResponse) {
+    option (google.api.http).post = "/pet/{pet_id}/uploadImage";
+    option (google.api.http).body = "*";
+  }
+  rpc AddPet(Pet) returns (Pet) {
+    option (google.api.http).post = "/pet";
+    option (google.api.http).body = "*";
+  }
+  rpc UpdatePet(Pet) returns (Pet) {
+    option (google.api.http).put = "/pet";
+    option (google.api.http).body = "*";
+  }
+  rpc FindPetsByTag(TagReq) returns (Pets) {
+    option deprecated = true;
+    option (google.api.http).get = "/pet/findByTags";
+    option (google.api.http).response_body = "pets";
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+  rpc FindPetsByStatus(StatusReq) returns (Pets) {
+    option (google.api.http).get = "/pet/findByStatus";
+    option (google.api.http).response_body = "pets";
+    option idempotency_level = NO_SIDE_EFFECTS;
+  }
+}
+
+message Category {
+  int64 id = 1;
+  string name = 2;
+}
+
+message Tag {
+  int64 id = 1;
+  string name = 2;
+}
+
+enum Status {
+  // NB: These do not use standard naming practices in order to match
+  //     the JSON format of the Pet Store Open API schema, which uses
+  //     lower-case names for these constants.
+  unknown = 0;
+  available = 1;
+  pending = 2;
+  sold = 3;
+}
+
+message PetID {
+  int64 pet_id = 1;
+}
+
+message Pet {
+  int64 id = 1;
+  Category category = 2;
+  string name = 3;
+  repeated string photo_urls = 4;
+  repeated Tag tags = 5;
+  string status = 6;
+}
+
+message UpdatePetWithFormReq {
+  int64 pet_id = 1;
+  string name = 2;
+  string status = 3;
+}
+
+message UploadFileReq {
+  int64 pet_id = 1;
+  string additional_metadata = 2;
+  string file = 3;
+}
+
+message PetBody {
+  int64 pet_id = 1;
+  string body = 2;
+}
+
+message StatusReq {
+  repeated string status = 1;
+}
+
+message TagReq {
+  repeated string tag = 1;
+}
+
+message Pets {
+  repeated Pet pets = 1;
+}
+
+message ApiResponse {
+  int32 code = 1;
+  string type = 2;
+  string message = 3;
+}
