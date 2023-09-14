@@ -16,7 +16,6 @@ package vanguard
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -204,7 +203,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 						msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeFailedPrecondition, errors.New("foo")),
+						err: newConnectError(connect.CodeFailedPrecondition, "foo"),
 					}},
 				},
 			},
@@ -249,7 +248,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+						err: newConnectError(connect.CodeAborted, "foobar"),
 					}},
 				},
 			},
@@ -317,7 +316,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 						},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+						err: newConnectError(connect.CodeDataLoss, "foobar"),
 					}},
 				},
 			},
@@ -376,7 +375,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 						},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+						err: newConnectError(connect.CodePermissionDenied, "foobar"),
 					}},
 				},
 			},
