@@ -1151,7 +1151,7 @@ func TestMux_HookOrder(t *testing.T) {
 			failure: hookKindFail,
 		},
 	}
-	errHookFailed := connect.NewError(connect.CodeAlreadyExists, errors.New("hook failed"))
+	errHookFailed := newConnectError(connect.CodeAlreadyExists, "hook failed")
 	for i := range errorCases {
 		errCase := errorCases[i]
 		var callback func(context.Context, Operation) (Hooks, error)
