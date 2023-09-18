@@ -16,7 +16,6 @@ package vanguard
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -533,7 +532,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						msg: &testv1.IndexRequest{Page: "xyz"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
+						err: newConnectError(connect.CodeResourceExhausted, "foobar"),
 					}},
 				},
 			},
@@ -578,7 +577,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+						err: newConnectError(connect.CodeAborted, "foobar"),
 					}},
 				},
 			},
@@ -646,7 +645,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+						err: newConnectError(connect.CodeDataLoss, "foobar"),
 					}},
 				},
 			},
@@ -697,7 +696,7 @@ func TestHandler_PassThrough(t *testing.T) {
 						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+						err: newConnectError(connect.CodePermissionDenied, "foobar"),
 					}},
 				},
 			},

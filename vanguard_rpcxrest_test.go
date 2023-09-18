@@ -192,16 +192,12 @@ func TestMux_RPCxREST(t *testing.T) {
 					msg: nil, // GET request.
 				}},
 				{out: &testMsgOut{
-					err: connect.NewError(
-						connect.CodePermissionDenied,
-						fmt.Errorf("permission denied")),
+					err: newConnectError(connect.CodePermissionDenied, "permission denied"),
 				}},
 			},
 		},
 		output: output{
-			wantErr: connect.NewError(
-				connect.CodePermissionDenied,
-				fmt.Errorf("permission denied")),
+			wantErr: newConnectError(connect.CodePermissionDenied, "permission denied"),
 		},
 	}, {
 		name: "CreateBook",
