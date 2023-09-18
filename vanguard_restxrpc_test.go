@@ -229,9 +229,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 				}},
 				{out: &testMsgOut{
-					err: connect.NewError(
-						connect.CodePermissionDenied,
-						fmt.Errorf("permission denied")),
+					err: newConnectError(connect.CodePermissionDenied, "permission denied"),
 				}},
 			},
 		},

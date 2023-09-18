@@ -108,7 +108,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 						method: testv1connect.LibraryServiceGetBookProcedure,
 						msgs: []testMsg{{in: &testMsgIn{
 							msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 1000)},
-							err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+							err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 						}}},
 					},
 				},
@@ -143,7 +143,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 								msg: &testv1.Book{Name: strings.Repeat("foo/", 1000)},
 							}},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -167,7 +167,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 						rspTrailer: map[string][]string{
 							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -188,10 +188,10 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
 							}},
 							{out: &testMsgOut{
-								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
 							}},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -216,7 +216,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 						rspTrailer: map[string][]string{
 							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -238,10 +238,10 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
 							}},
 							{out: &testMsgOut{
-								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
 							}},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 			},
@@ -266,7 +266,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 						method: testv1connect.LibraryServiceGetBookProcedure,
 						msgs: []testMsg{{in: &testMsgIn{
 							msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 1000)},
-							err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+							err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 						}}},
 					},
 				},
@@ -285,7 +285,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 							}},
 							{in: &testMsgIn{
 								msg: &testv1.UploadRequest{File: &httpbody.HttpBody{Data: bytes.Repeat([]byte{0, 1, 2, 3}, 1000)}},
-								err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+								err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 							}},
 						},
 					},
@@ -320,7 +320,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 								msg: &testv1.Book{Name: strings.Repeat("foo/", 1000)},
 							}},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -341,7 +341,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 							}},
 							{out: &testMsgOut{
 								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{Data: bytes.Repeat([]byte{0, 1, 2, 3}, 1000)}},
-								err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+								err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 							}},
 						},
 					},
@@ -367,7 +367,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 						rspTrailer: map[string][]string{
 							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -388,10 +388,10 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
 							}},
 							{out: &testMsgOut{
-								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
 							}},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -415,7 +415,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 						rspTrailer: map[string][]string{
 							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 				{
@@ -436,10 +436,10 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
 							}},
 							{out: &testMsgOut{
-								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
 							}},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 			},
@@ -470,10 +470,10 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 								msg: &testv1.GetBookRequest{Name: "foo/bar"},
 							}},
 							{out: &testMsgOut{
-								err: connect.NewError(connect.CodeDataLoss, errors.New(strings.Repeat("foo/", 1000))),
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
 							}},
 						},
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("buffer limit exceeded")),
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
 					},
 				},
 			},
@@ -862,7 +862,7 @@ func TestMux_MessageHooks(t *testing.T) {
 						msg: &testv1.IndexRequest{Page: "xyz"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
+						err: newConnectError(connect.CodeResourceExhausted, "foobar"),
 					}},
 				},
 			},
@@ -907,7 +907,7 @@ func TestMux_MessageHooks(t *testing.T) {
 						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+						err: newConnectError(connect.CodeAborted, "foobar"),
 					}},
 				},
 			},
@@ -975,7 +975,7 @@ func TestMux_MessageHooks(t *testing.T) {
 						},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+						err: newConnectError(connect.CodeDataLoss, "foobar"),
 					}},
 				},
 			},
@@ -1026,7 +1026,7 @@ func TestMux_MessageHooks(t *testing.T) {
 						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+						err: newConnectError(connect.CodePermissionDenied, "foobar"),
 					}},
 				},
 			},
@@ -1151,7 +1151,7 @@ func TestMux_HookOrder(t *testing.T) {
 			failure: hookKindFail,
 		},
 	}
-	errHookFailed := connect.NewError(connect.CodeAlreadyExists, errors.New("hook failed"))
+	errHookFailed := newConnectError(connect.CodeAlreadyExists, "hook failed")
 	for i := range errorCases {
 		errCase := errorCases[i]
 		var callback func(context.Context, Operation) (Hooks, error)
@@ -1268,7 +1268,7 @@ func TestMux_HookOrder(t *testing.T) {
 						msg: &testv1.IndexRequest{Page: "xyz"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeResourceExhausted, errors.New("foobar")),
+						err: newConnectError(connect.CodeResourceExhausted, "foobar"),
 					}},
 				},
 			},
@@ -1329,7 +1329,7 @@ func TestMux_HookOrder(t *testing.T) {
 						msg: &testv1.UploadRequest{Filename: "xyz"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeAborted, errors.New("foobar")),
+						err: newConnectError(connect.CodeAborted, "foobar"),
 					}},
 				},
 			},
@@ -1415,7 +1415,7 @@ func TestMux_HookOrder(t *testing.T) {
 						},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodeDataLoss, errors.New("foobar")),
+						err: newConnectError(connect.CodeDataLoss, "foobar"),
 					}},
 				},
 			},
@@ -1485,7 +1485,7 @@ func TestMux_HookOrder(t *testing.T) {
 						msg: &testv1.SubscribeResponse{FilenameChanged: "xyz1.foo"},
 					}},
 					{out: &testMsgOut{
-						err: connect.NewError(connect.CodePermissionDenied, errors.New("foobar")),
+						err: newConnectError(connect.CodePermissionDenied, "foobar"),
 					}},
 				},
 			},
@@ -2480,4 +2480,12 @@ func (h *testHooks) getEvents(t *testing.T) (Operation, []hookKind) {
 		return op, kinds
 	}
 	panic("should not be able to get here") //nolint:forbidigo
+}
+
+func newConnectError(code connect.Code, msg string) *connect.Error {
+	err := connect.NewError(code, errors.New(msg))
+	// Meta is initialized lazily. We need to trigger it, via the Meta() accessor,
+	// so it doesn't happen in thread-unsafe way later.
+	err.Meta()
+	return err
 }
