@@ -152,6 +152,18 @@ func TestHTTPEncodePathValues(t *testing.T) {
 		tmpl:      "/v1/{string_value=books/*}:get",
 		wantPath:  "/v1/books/%2F%2F%20%E4%B8%96%E7%95%8C:get",
 		wantQuery: url.Values{},
+	}, {
+		// Non capture variables should be left as is.
+		input:     &testv1.ParameterValues{},
+		tmpl:      "/v2/*",
+		wantPath:  "/v2/*",
+		wantQuery: url.Values{},
+	}, {
+		// Same with multicatpure.
+		input:     &testv1.ParameterValues{},
+		tmpl:      "/v2/**",
+		wantPath:  "/v2/**",
+		wantQuery: url.Values{},
 	}}
 	for _, testCase := range testCases {
 		testCase := testCase
