@@ -6,47 +6,45 @@
 [![Report Card](https://goreportcard.com/badge/connectrpc.com/vanguard)](https://goreportcard.com/report/github.com/connectrpc/vanguard-go)
 [![GoDoc](https://pkg.go.dev/badge/connectrpc.com/vanguard.svg)](https://pkg.go.dev/github.com/connectrpc/vanguard-go)
 
-This repo provides middleware for Go `net/http` servers that can translate between various
-RPC protocols. It can seamlessly translate between gRPC, gRPC-Web, and Connect protocols,
-and it can also translate to/from REST if your Protobuf services are annotated with Google's
-[HTTP transcoding options](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L44).
+Vanguard is a powerful middleware library for Go `net/http` servers that enables seamless
+translation between REST and RPC protocols. Whether you need to bridge the gap 
+between gRPC, gRPC-Web, Connect, or REST, Vanguard has got you covered. With support for
+Google's [HTTP transcoding options](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L44),
+it can effortlessly translate protocols using strongly typed Protobuf definitions.
 
 [See an example in action!](internal/examples/fileserver/main.go)
 
-There are a handful of key use cases for such middleware:
-1. Using the above mentioned HTTP transcoding annotations allows you to support REST
-   clients. This can be particularly useful when migrating from a REST API to a schema-driven
-   RPC API. With the right annotations, existing REST clients can continue to access
-   your API, even after the server implementations have been migrated to Protobuf and RPC.
+## Why Vanguard?
 
-   This middleware can effectively replace the use of [gRPC-Gateway](https://github.com/grpc-ecosystem/grpc-gateway#readme)
-   when it's used in-process in a Go server. In particular, this middleware is compatible
-   with _all_ kinds of handlers -- Connect RPC, gRPC, etc. gRPC-Gateway, on the other hand,
-   requires the use of gRPC handlers and both the [gRPC Protobuf plugin](https://pkg.go.dev/google.golang.org/grpc/cmd/protoc-gen-go-grpc)
-   as well as a bespoke [gRPC-Gateway Protobuf plugin](https://pkg.go.dev/github.com/grpc-ecosystem/grpc-gateway/protoc-gen-grpc-gateway).
-   Unlike gRPC-Gateway, this middleware does not require any additional code generation.
+Vanguard offers a range of compelling use cases that make it an invaluable addition
+to your services:
 
-   Since it does not rely on code generation, Vanguard can be used in dynamic situations,
-   where service definitions are loaded from configuration, a schema registry, or via
-   [gRPC Server Reflection](https://github.com/grpc/grpc/blob/master/doc/server-reflection.md).
-   This allows it to be used in proxies without needing to recompile and redeploy the proxy
-   whenever an RPC service schema is changed.
+1. **RESTful Transformation**: By leveraging HTTP transcoding annotations, you can effortlessly 
+support REST clients. This feature is especially handy during the migration from a REST API 
+to a schema-driven RPC API. With the right annotations, your existing REST clients can 
+seamlessly access your API, even as you transition your server implementations to Protobuf 
+and RPC.
 
-2. The HTTP transcoding annotations also allow you to support legacy REST API servers
-   from clients that are use Protobuf RPC. This allows you to adopt RPC in some teams,
-   like for web or mobile clients, without having to first migrate all of the backend
-   API services.
+2. **Efficiency and Code Generation**: Unlike traditional approaches like [gRPC-Gateway](https://github.com/grpc-ecosystem/grpc-gateway#readme), 
+Vanguard operates efficiently within Go servers, compatible with various servers such as 
+[Connect](https://github.com/connectrpc/connect-go) and [gRPC](https://github.com/grpc/grpc-go). 
+It doesn't rely on extensive code generation, eliminating the need for additional code 
+generation steps. This flexibility ensures that your code can adapt dynamically, loading 
+service definitions from configuration, schema registries, or via 
+[gRPC Server Reflection](https://github.com/grpc/grpc/blob/master/doc/server-reflection.md), 
+making it a perfect fit for proxies without the hassle of recompilation and redeployment 
+each time an RPC service schema changes.
 
-3. If your organization is in the process of migrating from gRPC to Connect, you can use
-   this middleware to bridge the protocols. This allows you to use your existing gRPC
-   service handlers with Connect clients. (The reverse works without any middleware:
-   Connect servers can natively handle gRPC clients.)
+3. **Legacy Compatibility**: The HTTP transcoding annotations also empower you to support 
+legacy REST API servers when clients are accustomed to using Protobuf RPC. This lets 
+you embrace RPC in specific teams, such as for web or mobile clients, without the 
+prerequisite of migrating all backend API services.
 
-   This is particularly valuable since a big draw of the Connect protocol over gRPC is its
-   usability and inspectability with web browser and mobile device clients, and this
-   middleware allows you to migrate clients to Connect without having to first migrate
-   your server handler logic.
-
+4. **Seamless Protocol Bridging**: If your organization is transitioning from gRPC to Connect, 
+Vanguard acts as a bridge between the protocols. This facilitates the use of your existing 
+gRPC service handlers with Connect clients, allowing you to smoothly adapt to Connect's 
+enhanced usability and inspectability with web browsers and mobile devices. No need to 
+overhaul your server handler logic before migrating clients to Connect.
 
 ## Usage
 
