@@ -280,18 +280,18 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 }
 
 func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
+	contentType := headers.Get("Content-Type")
 	if statusCode/100 != 2 {
 		return responseMeta{
 				end: &responseEnd{httpCode: statusCode},
 			}, func(_ Codec, src io.Reader, end *responseEnd) {
-				if err := httpErrorFromResponse(src); err != nil {
+				if err := httpErrorFromResponse(statusCode, contentType, src); err != nil {
 					end.err = err
 					end.httpCode = httpStatusCodeFromRPC(err.Code())
 				}
 			}, nil
 	}
 	var meta responseMeta
-	contentType := headers.Get("Content-Type")
 	switch {
 	case contentType == "application/json":
 		meta.codec = CodecJSON
