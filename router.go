@@ -235,9 +235,21 @@ func makeTarget(
 	if err != nil {
 		return nil, err
 	}
+	if len(requestBodyFields) > 1 {
+		return nil, fmt.Errorf(
+			"unexpected request body path %q: must be a single field",
+			requestBody,
+		)
+	}
 	responseBodyFields, err := resolvePathToDescriptors(config.descriptor.Output(), responseBody)
 	if err != nil {
 		return nil, err
+	}
+	if len(responseBodyFields) > 1 {
+		return nil, fmt.Errorf(
+			"unexpected response body path %q: must be a single field",
+			requestBody,
+		)
 	}
 	routeTargetVars := make([]routeTargetVar, len(variables))
 	for i, variable := range variables {
