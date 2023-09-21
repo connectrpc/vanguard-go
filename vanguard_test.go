@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,11 +30,12 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
+	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -1568,6 +1570,148 @@ func TestMux_HookOrder(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuleSelector(t *testing.T) {
+	t.Parallel()
+	rule := &annotations.HttpRule{
+		Selector: "vanguard.Service.Get",
+		Pattern: &annotations.HttpRule_Get{
+			Get: "/v1/{name=projects/*/instances/*}",
+		},
+	}
+	healthzRule := &annotations.HttpRule{
+		Selector: "grpc.health.v1.Health.Check",
+		Pattern: &annotations.HttpRule_Get{
+			Get: "/healthz",
+		},
+	}
+	t.Run("fullMatch", func(t *testing.T) {
+		t.Parallel()
+		selector := newRuleSelector([]*annotations.HttpRule{rule, healthzRule})
+		rules, err := selector.getRules("vanguard.Service.Get")
+		require.NoError(t, err)
+		require.Len(t, rules, 1)
+		require.Equal(t, rule, rules[0])
+	})
+	t.Run("wildcard", func(t *testing.T) {
+		t.Parallel()
+		fullRule := &annotations.HttpRule{
+			Selector: "wildcard.Service.Get",
+			Pattern: &annotations.HttpRule_Get{
+				Get: "/v1/*",
+			},
+		}
+		wildcardRule := &annotations.HttpRule{
+			Selector: "wildcard.Service.*",
+			Pattern: &annotations.HttpRule_Get{
+				Get: "/*",
+			},
+		}
+		selector := newRuleSelector([]*annotations.HttpRule{
+			rule, fullRule, wildcardRule,
+		})
+		rules, err := selector.getRules("wildcard.Service.Get")
+		require.NoError(t, err)
+		require.Len(t, rules, 2)
+		assert.Equal(t, wildcardRule, rules[0])
+		assert.Equal(t, fullRule, rules[1])
+		rules, err = selector.getRules("wildcard.Service.Put")
+		require.NoError(t, err)
+		require.Len(t, rules, 1)
+		assert.Equal(t, wildcardRule, rules[0])
+	})
+	t.Run("invalidWildcard", func(t *testing.T) {
+		t.Parallel()
+		invalidRule := &annotations.HttpRule{
+			Selector: "invalid.*.Get",
+			Pattern: &annotations.HttpRule_Get{
+				Get: "/v1/*",
+			},
+		}
+		rules := newRuleSelector([]*annotations.HttpRule{invalidRule})
+		_, err := rules.getRules("invalid.Service.Get")
+		assert.Error(t, err)
+		invalidRule = &annotations.HttpRule{
+			Selector: "invalid.some*.Get",
+			Pattern: &annotations.HttpRule_Get{
+				Get: "/v1/*",
+			},
+		}
+		rules = newRuleSelector([]*annotations.HttpRule{invalidRule})
+		_, err = rules.getRules("invalid.Service.Get")
+		assert.Error(t, err)
+	})
+	t.Run("missingSelector", func(t *testing.T) {
+		t.Parallel()
+		missingRule := &annotations.HttpRule{
+			Pattern: &annotations.HttpRule_Get{
+				Get: "/v1/*",
+			},
+		}
+		rules := newRuleSelector([]*annotations.HttpRule{missingRule})
+		_, err := rules.getRules("any.Service.Get")
+		assert.Error(t, err)
+	})
+
+	// Apply to mux and test that a request is routed to the correct handler.
+	t.Run("e2e", func(t *testing.T) {
+		t.Parallel()
+		var interceptor testInterceptor
+		serveMux := http.NewServeMux()
+		serveMux.Handle(testv1connect.NewLibraryServiceHandler(
+			testv1connect.UnimplementedLibraryServiceHandler{},
+			connect.WithInterceptors(&interceptor),
+		))
+		mux := &Mux{
+			Rules: []*annotations.HttpRule{{
+				Selector: "vanguard.test.v1.LibraryService.GetBook",
+				Pattern: &annotations.HttpRule_Get{
+					Get: "/v1/selector/{name=shelves/*/books/*}",
+				},
+			}},
+		}
+		assert.NoError(t, mux.RegisterServiceByName(serveMux, testv1connect.LibraryServiceName))
+
+		ctx := context.Background()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/v1/selector/shelves/123/books/456", http.NoBody)
+		require.NoError(t, err)
+		req.Header.Set("Message", "hello")
+		req.Header.Set("Test", t.Name()) // for interceptor
+		req.Header.Set("Content-Type", "application/json")
+		rsp := httptest.NewRecorder()
+
+		interceptor.set(t, testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			reqHeader: http.Header{
+				"Message": []string{"hello"},
+			},
+			rspHeader: http.Header{
+				"Message": []string{"world"},
+			},
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/123/books/456"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/123/books/456"},
+				}},
+			},
+		})
+		defer interceptor.del(t)
+
+		mux.AsHandler().ServeHTTP(rsp, req)
+		result := rsp.Result()
+		defer result.Body.Close()
+
+		dump, err := httputil.DumpResponse(result, true)
+		require.NoError(t, err)
+		t.Log(string(dump))
+
+		assert.Equal(t, http.StatusOK, result.StatusCode)
+		assert.Equal(t, "application/json", result.Header.Get("Content-Type"))
+		assert.Equal(t, "world", result.Header.Get("Message"))
+	})
 }
 
 type testStream struct {

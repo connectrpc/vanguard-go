@@ -17,13 +17,16 @@ package vanguard
 import (
 	"context"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -151,12 +154,18 @@ type Mux struct {
 	// invoked first. The UnknownHandler will only be invoked if the callback returns
 	// a nil error.
 	HooksCallback func(context.Context, Operation) (Hooks, error)
+	// Rules is the set of HTTP rules that apply to RPC methods via selectors.
+	// The rules are used in addition to any rules defined in the service's proto
+	// file.
+	// See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
+	Rules []*annotations.HttpRule
 
 	init             sync.Once
 	codecImpls       map[string]func(TypeResolver) Codec
 	compressionPools map[string]*compressionPool
 	methods          map[string]*methodConfig
 	restRoutes       routeTrie
+	rules            ruleSelector
 }
 
 // AsHandler returns HTTP middleware that applies the given configuration
@@ -336,18 +345,36 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 	}
 
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
-		if err != nil {
-			return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
+		if err := m.addRule(httpRule, methodConf); err != nil {
+			return err
 		}
-		methodConf.httpRule = firstTarget
-		for i, rule := range httpRule.AdditionalBindings {
-			if len(rule.AdditionalBindings) > 0 {
-				return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
-			}
-			if _, err := m.restRoutes.addRoute(methodConf, rule); err != nil {
-				return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
-			}
+	}
+
+	rules, err := m.rules.getRules(string(methodDesc.FullName()))
+	if err != nil {
+		return fmt.Errorf("failed to select rules for method %s: %w", methodPath, err)
+	}
+	for _, httpRule := range rules {
+		if err := m.addRule(httpRule, methodConf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Mux) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) error {
+	methodPath := methodConf.methodPath
+	firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
+	if err != nil {
+		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
+	}
+	methodConf.httpRule = firstTarget
+	for i, rule := range httpRule.AdditionalBindings {
+		if len(rule.AdditionalBindings) > 0 {
+			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
+		}
+		if _, err := m.restRoutes.addRoute(methodConf, rule); err != nil {
+			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 		}
 	}
 	return nil
@@ -366,6 +393,10 @@ func (m *Mux) maybeInit() {
 			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
 		}
 		m.methods = map[string]*methodConfig{}
+		// initialize rule selector
+		for _, rule := range m.Rules {
+			m.rules.addRule(rule)
+		}
 	})
 }
 
@@ -715,4 +746,93 @@ func computeSet[T comparable](values map[T]struct{}, defaults []T, backupDefault
 		result[t] = struct{}{}
 	}
 	return result
+}
+
+// ruleSelector is a trie of HTTP rules that can be queried to find the rules
+// that apply to a given RPC method.
+// See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
+type ruleSelector struct {
+	path  map[string]*ruleSelector
+	rules []*annotations.HttpRule
+	err   error // if non-nil, this is the error to return for all RPCs
+}
+
+func (r *ruleSelector) write(w io.Writer, indent string) {
+	for key, rs := range r.path {
+		fmt.Fprintf(w, "%s%s: \n", indent, key)
+		rs.write(w, indent+"  ")
+	}
+	fmt.Fprintf(w, "%srules: %v\n", indent, r.rules)
+}
+
+// String returns the string representation of the ruleSelector.
+func (r *ruleSelector) String() string {
+	buf := strings.Builder{}
+	r.write(&buf, "")
+	return buf.String()
+}
+
+func (r *ruleSelector) getRules(name string) (rules []*annotations.HttpRule, err error) {
+	if r == nil {
+		return rules, nil
+	}
+	rules = append(rules, r.rules...)
+	if name == "" {
+		return rules, r.err
+	}
+	tag, name, _ := strings.Cut(name, ".")
+	if r := r.path[tag]; r != nil {
+		additional, err := r.getRules(name)
+		rules = append(rules, additional...)
+		if err != nil {
+			return rules, err
+		}
+	}
+	return rules, r.err
+}
+
+func (r *ruleSelector) addRule(rule *annotations.HttpRule) {
+	selector := rule.GetSelector()
+	if selector == "" {
+		r.err = fmt.Errorf("invalid selector: empty %q", rule.GetSelector())
+		return
+	}
+	next := r
+	for selector != "" {
+		tag, name, _ := strings.Cut(selector, ".")
+		switch tag {
+		case "*":
+			if name != "" {
+				next.err = fmt.Errorf("invalid selector: wildcard must be last %q", rule.GetSelector())
+				return
+			}
+			next.rules = append(next.rules, rule)
+		default:
+			if strings.ContainsAny(tag, ".*") {
+				next.err = fmt.Errorf("invalid selector: wildcard in %q", rule.GetSelector())
+				return
+			}
+			leaf := next.path[tag]
+			if leaf == nil {
+				leaf = &ruleSelector{}
+			}
+			if next.path == nil {
+				next.path = make(map[string]*ruleSelector)
+			}
+			next.path[tag] = leaf
+			next = leaf
+			if name == "" {
+				next.rules = append(next.rules, rule)
+			}
+		}
+		selector = name
+	}
+}
+
+func newRuleSelector(rules []*annotations.HttpRule) *ruleSelector {
+	root := &ruleSelector{}
+	for _, rule := range rules {
+		root.addRule(rule)
+	}
+	return root
 }
