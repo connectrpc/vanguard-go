@@ -289,13 +289,15 @@ func (m *Mux) RegisterRules(rules ...*annotations.HttpRule) error {
 		if selector == "" {
 			return fmt.Errorf("rule missing selector")
 		}
-		if i := strings.Index(selector, ".*"); i >= 0 {
-			if i != len(selector)-2 {
-				return fmt.Errorf("wildcard selector %q must be at the end", selector)
+		if i := strings.Index(selector, "*"); i >= 0 {
+			if i != len(selector)-1 {
+				return fmt.Errorf("wildcard selector %q must be at the end", rule.GetSelector())
 			}
-			selector = selector[:len(selector)-2]
+			selector = selector[:len(selector)-1]
+			if len(selector) > 0 && !strings.HasSuffix(selector, ".") {
+				return fmt.Errorf("wildcard selector %q must be whole component", rule.GetSelector())
+			}
 		}
-
 		for _, methodConf := range m.methods {
 			methodName := string(methodConf.descriptor.FullName())
 			if !strings.HasPrefix(methodName, selector) {
