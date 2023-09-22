@@ -17,7 +17,6 @@ package vanguard
 import (
 	"context"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"sort"
@@ -154,18 +153,12 @@ type Mux struct {
 	// invoked first. The UnknownHandler will only be invoked if the callback returns
 	// a nil error.
 	HooksCallback func(context.Context, Operation) (Hooks, error)
-	// Rules is the set of HTTP rules that apply to RPC methods via selectors.
-	// The rules are used in addition to any rules defined in the service's proto
-	// file.
-	// See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
-	Rules []*annotations.HttpRule
 
 	init             sync.Once
 	codecImpls       map[string]func(TypeResolver) Codec
 	compressionPools map[string]*compressionPool
 	methods          map[string]*methodConfig
 	restRoutes       routeTrie
-	rules            ruleSelector
 }
 
 // AsHandler returns HTTP middleware that applies the given configuration
@@ -284,6 +277,42 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 	return nil
 }
 
+// RegisterRules is the set of HTTP rules that apply to RPC methods via selectors.
+// The rules are used in addition to any rules defined in the service's proto
+// file. If a rule doesn't match any methods, an error is returned.
+// See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
+func (m *Mux) RegisterRules(rules ...*annotations.HttpRule) error {
+	m.maybeInit()
+	for _, rule := range rules {
+		var applied bool
+		selector := rule.GetSelector()
+		if selector == "" {
+			return fmt.Errorf("rule missing selector")
+		}
+		if i := strings.Index(selector, ".*"); i >= 0 {
+			if i != len(selector)-2 {
+				return fmt.Errorf("wildcard selector %q must be at the end", selector)
+			}
+			selector = selector[:len(selector)-2]
+		}
+
+		for _, methodConf := range m.methods {
+			methodName := string(methodConf.descriptor.FullName())
+			if !strings.HasPrefix(methodName, selector) {
+				continue
+			}
+			if err := m.addRule(rule, methodConf); err != nil {
+				return err
+			}
+			applied = true
+		}
+		if !applied {
+			return fmt.Errorf("rule %q does not match any methods", rule.GetSelector())
+		}
+	}
+	return nil
+}
+
 // AddCodec adds the given codec implementation.
 //
 // By default, the mux already understands "proto", "json", and "text" codecs. The
@@ -349,16 +378,6 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 			return err
 		}
 	}
-
-	rules, err := m.rules.getRules(string(methodDesc.FullName()))
-	if err != nil {
-		return fmt.Errorf("failed to select rules for method %s: %w", methodPath, err)
-	}
-	for _, httpRule := range rules {
-		if err := m.addRule(httpRule, methodConf); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -393,10 +412,6 @@ func (m *Mux) maybeInit() {
 			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
 		}
 		m.methods = map[string]*methodConfig{}
-		// initialize rule selector
-		for _, rule := range m.Rules {
-			m.rules.addRule(rule)
-		}
 	})
 }
 
@@ -746,93 +761,4 @@ func computeSet[T comparable](values map[T]struct{}, defaults []T, backupDefault
 		result[t] = struct{}{}
 	}
 	return result
-}
-
-// ruleSelector is a trie of HTTP rules that can be queried to find the rules
-// that apply to a given RPC method.
-// See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
-type ruleSelector struct {
-	path  map[string]*ruleSelector
-	rules []*annotations.HttpRule
-	err   error // if non-nil, this is the error to return for all RPCs
-}
-
-func (r *ruleSelector) write(w io.Writer, indent string) {
-	for key, rs := range r.path {
-		fmt.Fprintf(w, "%s%s: \n", indent, key)
-		rs.write(w, indent+"  ")
-	}
-	fmt.Fprintf(w, "%srules: %v\n", indent, r.rules)
-}
-
-// String returns the string representation of the ruleSelector.
-func (r *ruleSelector) String() string {
-	buf := strings.Builder{}
-	r.write(&buf, "")
-	return buf.String()
-}
-
-func (r *ruleSelector) getRules(name string) (rules []*annotations.HttpRule, err error) {
-	if r == nil {
-		return rules, nil
-	}
-	rules = append(rules, r.rules...)
-	if name == "" {
-		return rules, r.err
-	}
-	tag, name, _ := strings.Cut(name, ".")
-	if r := r.path[tag]; r != nil {
-		additional, err := r.getRules(name)
-		rules = append(rules, additional...)
-		if err != nil {
-			return rules, err
-		}
-	}
-	return rules, r.err
-}
-
-func (r *ruleSelector) addRule(rule *annotations.HttpRule) {
-	selector := rule.GetSelector()
-	if selector == "" {
-		r.err = fmt.Errorf("invalid selector: empty %q", rule.GetSelector())
-		return
-	}
-	next := r
-	for selector != "" {
-		tag, name, _ := strings.Cut(selector, ".")
-		switch tag {
-		case "*":
-			if name != "" {
-				next.err = fmt.Errorf("invalid selector: wildcard must be last %q", rule.GetSelector())
-				return
-			}
-			next.rules = append(next.rules, rule)
-		default:
-			if strings.ContainsAny(tag, ".*") {
-				next.err = fmt.Errorf("invalid selector: wildcard in %q", rule.GetSelector())
-				return
-			}
-			leaf := next.path[tag]
-			if leaf == nil {
-				leaf = &ruleSelector{}
-			}
-			if next.path == nil {
-				next.path = make(map[string]*ruleSelector)
-			}
-			next.path[tag] = leaf
-			next = leaf
-			if name == "" {
-				next.rules = append(next.rules, rule)
-			}
-		}
-		selector = name
-	}
-}
-
-func newRuleSelector(rules []*annotations.HttpRule) *ruleSelector {
-	root := &ruleSelector{}
-	for _, rule := range rules {
-		root.addRule(rule)
-	}
-	return root
 }
