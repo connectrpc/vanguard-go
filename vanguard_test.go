@@ -591,15 +591,15 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 
 	testCases := []struct {
 		name string
-		svr  *httptest.Server
+		server  *httptest.Server
 	}{
 		{
 			name: "with_mux_setting",
-			svr:  serverWithSetting,
+			server:  serverWithSetting,
 		},
 		{
 			name: "with_svc_option",
-			svr:  serverWithSvcOption,
+			server:  serverWithSvcOption,
 		},
 	}
 
@@ -623,8 +623,8 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			defer interceptor.del(t)
 
 			client := testv1connect.NewLibraryServiceClient(
-				testCase.svr.Client(),
-				testCase.svr.URL,
+				testCase.server.Client(),
+				testCase.server.URL,
 				connect.WithHTTPGet(),
 				connect.WithHTTPGetMaxURLSize(512, false),
 				connect.WithSendGzip(),
@@ -743,11 +743,11 @@ func TestMux_MessageHooks(t *testing.T) {
 		}
 	}
 
-	svrCases := []struct {
+	serverCases := []struct {
 		name     string
 		reqHook  bool
 		respHook bool
-		svr      *httptest.Server
+		server      *httptest.Server
 	}{
 		{
 			name:    "request_hook",
@@ -763,10 +763,10 @@ func TestMux_MessageHooks(t *testing.T) {
 			respHook: true,
 		},
 	}
-	for i := range svrCases {
-		svrCase := &svrCases[i]
+	for i := range serverCases {
+		serverCase := &serverCases[i]
 		mux := &Mux{
-			HooksCallback: makeHooks(svrCase.reqHook, svrCase.respHook),
+			HooksCallback: makeHooks(serverCase.reqHook, serverCase.respHook),
 		}
 		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
 		handler := mux.AsHandler()
@@ -782,7 +782,7 @@ func TestMux_MessageHooks(t *testing.T) {
 		server.StartTLS()
 		t.Cleanup(server.Close)
 
-		svrCase.svr = server
+		serverCase.server = server
 	}
 
 	ctx := context.Background()
@@ -1068,18 +1068,18 @@ func TestMux_MessageHooks(t *testing.T) {
 								testReq := testReq
 								t.Run(testReq.name, func(t *testing.T) {
 									t.Parallel()
-									for _, svrCase := range svrCases {
-										svrCase := svrCase
-										t.Run(svrCase.name, func(t *testing.T) {
+									for _, serverCase := range serverCases {
+										serverCase := serverCase
+										t.Run(serverCase.name, func(t *testing.T) {
 											clientOptions := make([]connect.ClientOption, 0, 4)
 											clientOptions = append(clientOptions, protocolCase.opts...)
 											clientOptions = append(clientOptions, encodingCase.opts...)
 											clientOptions = append(clientOptions, compressionCase.opts...)
-											client := testv1connect.NewContentServiceClient(svrCase.svr.Client(), svrCase.svr.URL, clientOptions...)
+											client := testv1connect.NewContentServiceClient(serverCase.server.Client(), serverCase.server.URL, clientOptions...)
 
 											runRPCTestCase(t, &interceptor, client, testReq.invoke, testReq.stream)
 
-											if svrCase.reqHook {
+											if serverCase.reqHook {
 												var reqs []proto.Message
 												for _, msg := range testReq.stream.msgs {
 													if msg.in != nil {
@@ -1088,7 +1088,7 @@ func TestMux_MessageHooks(t *testing.T) {
 												}
 												checkHookResults(t, reqs, &reqMsgs)
 											}
-											if svrCase.respHook {
+											if serverCase.respHook {
 												var resps []proto.Message
 												for _, msg := range testReq.stream.msgs {
 													if msg.out != nil && msg.out.msg != nil {
@@ -1123,7 +1123,7 @@ func TestMux_HookOrder(t *testing.T) {
 	errorCases := []struct {
 		name    string
 		failure hookKind
-		svr     *httptest.Server
+		server     *httptest.Server
 	}{
 		{
 			name: "normal",
@@ -1214,7 +1214,7 @@ func TestMux_HookOrder(t *testing.T) {
 		server.StartTLS()
 		t.Cleanup(server.Close)
 
-		errorCases[i].svr = server
+		errorCases[i].server = server
 	}
 
 	ctx := context.Background()
@@ -1510,7 +1510,7 @@ func TestMux_HookOrder(t *testing.T) {
 				testReq := testReq
 				t.Run(testReq.name, func(t *testing.T) {
 					t.Parallel()
-					client := testv1connect.NewContentServiceClient(errorCase.svr.Client(), errorCase.svr.URL)
+					client := testv1connect.NewContentServiceClient(errorCase.server.Client(), errorCase.server.URL)
 
 					awaitServer := interceptor.set(t, testReq.stream)
 					defer interceptor.del(t)
@@ -1734,7 +1734,7 @@ func (str *ttStream) finish(result error) {
 	close(str.done)
 }
 
-func (str *ttStream) await(t *testing.T, expectServerDone bool) (svrInvoked bool, svrErr error) {
+func (str *ttStream) await(t *testing.T, expectServerDone bool) (serverInvoked bool, serverErr error) {
 	t.Helper()
 	// Called from test code to make sure server handler has completed.
 	// Returns any error that the interceptor finished with.
@@ -2106,7 +2106,7 @@ func getDecompressor(t *testing.T, name string) connect.Decompressor {
 
 type testServer struct {
 	name string
-	svr  *httptest.Server
+	server  *httptest.Server
 }
 
 func appendClientProtocolOptions(t *testing.T, opts []connect.ClientOption, protocol Protocol) []connect.ClientOption {
@@ -2403,7 +2403,7 @@ func runRPCTestCase[Client any](
 			break
 		}
 	}
-	svrInvoked, svrErr := awaitServer(t, expectServerDone)
+	serverInvoked, serverErr := awaitServer(t, expectServerDone)
 	// Verify the error received by the client.
 	receivedErr := expectedErr
 	if stream.err != nil {
@@ -2417,19 +2417,19 @@ func runRPCTestCase[Client any](
 	// Also check the error observed by the server.
 	switch {
 	case expectedErr == nil:
-		assert.NoError(t, svrErr)
+		assert.NoError(t, serverErr)
 	case expectServerCancel:
-		if svrInvoked && svrErr != nil {
+		if serverInvoked && serverErr != nil {
 			// We expect the server to either have seen the same error or it later
 			// observed a cancel error (since the middleware cancels the request
 			// after it aborts the operation).
-			if connect.CodeOf(svrErr) != connect.CodeOf(expectedErr) && !errors.Is(svrErr, context.Canceled) {
-				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(svrErr))
+			if connect.CodeOf(serverErr) != connect.CodeOf(expectedErr) && !errors.Is(serverErr, context.Canceled) {
+				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(serverErr))
 			}
 		}
 	default:
-		assert.Error(t, svrErr)
-		assert.Equal(t, expectedErr.Code(), connect.CodeOf(svrErr))
+		assert.Error(t, serverErr)
+		assert.Equal(t, expectedErr.Code(), connect.CodeOf(serverErr))
 	}
 	assert.Subset(t, headers, stream.rspHeader)
 	if stream.err == nil {
@@ -2454,8 +2454,8 @@ func runRPCTestCase[Client any](
 	}
 }
 
-func disableCompression(svr *httptest.Server) {
-	transport := svr.Client().Transport.(*http.Transport) //nolint:errcheck,forcetypeassert
+func disableCompression(server *httptest.Server) {
+	transport := server.Client().Transport.(*http.Transport) //nolint:errcheck,forcetypeassert
 	transport.DisableCompression = true
 }
 

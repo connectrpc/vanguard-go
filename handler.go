@@ -540,11 +540,11 @@ func (op *operation) handle() { //nolint:gocyclo
 		op.request.Method = http.MethodPost
 	}
 	op.request.URL.ForceQuery = false
-	svrReqMeta := op.reqMeta
-	svrReqMeta.codec = op.server.codec.Name()
-	svrReqMeta.compression = op.server.reqCompression.Name()
-	svrReqMeta.acceptCompression = intersect(op.reqMeta.acceptCompression, op.canDecompress)
-	op.server.protocol.addProtocolRequestHeaders(svrReqMeta, op.request.Header)
+	serverReqMeta := op.reqMeta
+	serverReqMeta.codec = op.server.codec.Name()
+	serverReqMeta.compression = op.server.reqCompression.Name()
+	serverReqMeta.acceptCompression = intersect(op.reqMeta.acceptCompression, op.canDecompress)
+	op.server.protocol.addProtocolRequestHeaders(serverReqMeta, op.request.Header)
 
 	// Now we can define the transformed response writer (which delays
 	// much of its logic until it sees the response headers).

@@ -88,7 +88,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 		server.StartTLS()
 		disableCompression(server)
 		t.Cleanup(server.Close)
-		return testServer{name: name, svr: server}
+		return testServer{name: name, server: server}
 	}
 	var servers []testServer
 	for _, protocol := range protocols {
@@ -101,7 +101,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 
 	type testOpt struct {
 		name string
-		svr  *httptest.Server
+		server  *httptest.Server
 		opts []connect.ClientOption
 	}
 	var testOpts []testOpt
@@ -128,7 +128,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 						copy(copyOpts, opts)
 						testOpts = append(testOpts, testOpt{
 							name: fmt.Sprintf("%s%s_%s_%s/%s", protocol, suffix, codec, compression, server.name),
-							svr:  server.svr,
+							server:  server.server,
 							opts: copyOpts,
 						})
 					}
@@ -389,10 +389,10 @@ func TestMux_RPCxRPC(t *testing.T) {
 		opts := opts
 		clients := testClients{
 			libClient: testv1connect.NewLibraryServiceClient(
-				opts.svr.Client(), opts.svr.URL, opts.opts...,
+				opts.server.Client(), opts.server.URL, opts.opts...,
 			),
 			contentClient: testv1connect.NewContentServiceClient(
-				opts.svr.Client(), opts.svr.URL, opts.opts...,
+				opts.server.Client(), opts.server.URL, opts.opts...,
 			),
 		}
 		t.Run(opts.name, func(t *testing.T) {
