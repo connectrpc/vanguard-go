@@ -279,10 +279,17 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 
 // RegisterRules is the set of HTTP rules that apply to RPC methods via selectors.
 // The rules are used in addition to any rules defined in the service's proto
-// file. If a rule doesn't match any methods, an error is returned.
+// file.
+//
+// Services should be registered first. If a given rule doesn't match any
+// already-registered method, an error is returned.
 // See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
 func (m *Mux) RegisterRules(rules ...*annotations.HttpRule) error {
 	m.maybeInit()
+	if len(rules) == 0 {
+		return nil
+	}
+	methodRules := make(map[*methodConfig][]*annotations.HttpRule)
 	for _, rule := range rules {
 		var applied bool
 		selector := rule.GetSelector()
@@ -303,13 +310,19 @@ func (m *Mux) RegisterRules(rules ...*annotations.HttpRule) error {
 			if !strings.HasPrefix(methodName, selector) {
 				continue
 			}
-			if err := m.addRule(rule, methodConf); err != nil {
-				return err
-			}
+			methodRules[methodConf] = append(methodRules[methodConf], rule)
 			applied = true
 		}
 		if !applied {
 			return fmt.Errorf("rule %q does not match any methods", rule.GetSelector())
+		}
+	}
+	for methodConf, rules := range methodRules {
+		for _, rule := range rules {
+			if err := m.addRule(rule, methodConf); err != nil {
+				// TODO: use the multi-error type errors.Join()
+				return err
+			}
 		}
 	}
 	return nil
