@@ -289,7 +289,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 	trailers := connectExtractUnaryTrailers(headers)
 
 	var endUnmarshaller responseEndUnmarshaller
-	if statusCode == http.StatusOK { //nolint:nestif
+	if statusCode == http.StatusOK {
 		respMeta.pendingTrailers = trailers
 	} else {
 		// Content-Type must be application/json for errors or else it's invalid
@@ -302,15 +302,9 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 			wasCompressed: respMeta.compression != "",
 			trailers:      trailers,
 		}
-		endUnmarshaller = func(_ Codec, r io.Reader, end *responseEnd) {
-			// TODO: buffer size limit; use op.bufferPool
-			data, err := io.ReadAll(r)
-			if err != nil {
-				end.err = connect.NewError(connect.CodeInternal, err)
-				return
-			}
+		endUnmarshaller = func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
 			var wireErr connectWireError
-			if err := json.Unmarshal(data, &wireErr); err != nil {
+			if err := json.Unmarshal(buf.Bytes(), &wireErr); err != nil {
 				end.err = connect.NewError(connect.CodeInternal, err)
 				return
 			}

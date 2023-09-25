@@ -50,7 +50,7 @@ func TestHTTPErrorWriter(t *testing.T) {
 	assert.NoError(t, json.Compact(&out, rec.Body.Bytes()))
 	assert.Equal(t, `{"code":16,"message":"test error: Hello, 世界","details":[]}`, out.String())
 
-	body := bytes.NewReader(rec.Body.Bytes())
+	body := bytes.NewBuffer(rec.Body.Bytes())
 	got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", body)
 	assert.Equal(t, cerr, got)
 }
@@ -78,13 +78,13 @@ func TestHTTPErrorFromResponse(t *testing.T) {
 		}
 		out, err := protojson.Marshal(&stat)
 		require.Nil(t, err)
-		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewReader(out))
+		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewBuffer(out))
 		assert.Equal(t, connect.CodeUnauthenticated, got.Code())
 		assert.Equal(t, "auth error", got.Message())
 	})
 	t.Run("invalidStatus", func(t *testing.T) {
 		t.Parallel()
-		body := bytes.NewReader([]byte("unauthorized"))
+		body := bytes.NewBufferString("unauthorized")
 		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", body)
 		assert.Equal(t, connect.CodeUnauthenticated, got.Code())
 		assert.Equal(t, "Unauthorized", got.Message())
@@ -105,7 +105,7 @@ func TestHTTPErrorFromResponse(t *testing.T) {
 		out, err := protojson.Marshal(&stat)
 		require.Nil(t, err)
 		out = append(out[:len(out)-1], []byte(`,"details":{"@type":"foo","value":"bar"}`)...)
-		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewReader(out))
+		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewBuffer(out))
 		t.Log(got)
 		assert.Equal(t, connect.CodeUnauthenticated, got.Code())
 		assert.Equal(t, "Unauthorized", got.Message())

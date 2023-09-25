@@ -15,9 +15,9 @@
 package vanguard
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -100,21 +100,16 @@ func httpWriteError(rsp http.ResponseWriter, err error) {
 	_, _ = rsp.Write(bin)
 }
 
-func httpErrorFromResponse(statusCode int, contentType string, body io.Reader) *connect.Error {
+func httpErrorFromResponse(statusCode int, contentType string, src *bytes.Buffer) *connect.Error {
 	if statusCode == http.StatusOK {
 		return nil
 	}
 	codec := protojson.UnmarshalOptions{}
-	body = io.LimitReader(body, 1024)
-	bin, err := io.ReadAll(body)
-	if err != nil {
-		return connect.NewError(connect.CodeInternal, err)
-	}
 	var stat status.Status
-	if err := codec.Unmarshal(bin, &stat); err != nil {
+	if err := codec.Unmarshal(src.Bytes(), &stat); err != nil {
 		body, err := anypb.New(&httpbody.HttpBody{
 			ContentType: contentType,
-			Data:        bin,
+			Data:        src.Bytes(),
 		})
 		if err != nil {
 			return connect.NewError(connect.CodeInternal, err)

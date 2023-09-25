@@ -16,6 +16,7 @@
 package vanguard
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -284,8 +285,8 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 	if statusCode/100 != 2 {
 		return responseMeta{
 				end: &responseEnd{httpCode: statusCode},
-			}, func(_ Codec, src io.Reader, end *responseEnd) {
-				if err := httpErrorFromResponse(statusCode, contentType, src); err != nil {
+			}, func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
+				if err := httpErrorFromResponse(statusCode, contentType, buf); err != nil {
 					end.err = err
 					end.httpCode = httpStatusCodeFromRPC(err.Code())
 				}

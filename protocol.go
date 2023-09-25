@@ -15,6 +15,7 @@
 package vanguard
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -219,9 +220,9 @@ type serverProtocolHandler interface {
 }
 
 // responseEndUnmarshaller populates the given responseEnd by unmarshalling
-// information from the given reader. If unmarshalling needs to know the
+// information from the given buffer. If unmarshalling needs to know the
 // server's codec, it also provided as the first argument.
-type responseEndUnmarshaller func(Codec, io.Reader, *responseEnd)
+type responseEndUnmarshaller func(Codec, *bytes.Buffer, *responseEnd)
 
 // clientProtocolEndMustBeInHeaders is an optional interface implemented
 // by clientProtocolHandler instances to indicate if the end of an RPC
