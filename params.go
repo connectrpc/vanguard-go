@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//nolint:goconst
 package vanguard
 
 import (
@@ -29,33 +30,33 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-//nolint:gochecknoglobals
-var isScalarWellKnownType = map[protoreflect.FullName]bool{
-	"google.protobuf.Duration":    true,
-	"google.protobuf.Empty":       true,
-	"google.protobuf.FieldMask":   true,
-	"google.protobuf.Timestamp":   true,
-	"google.protobuf.NullValue":   true,
-	"google.protobuf.StringValue": true,
-	"google.protobuf.BytesValue":  true,
-	"google.protobuf.Int32Value":  true,
-	"google.protobuf.Int64Value":  true,
-	"google.protobuf.UInt32Value": true,
-	"google.protobuf.UInt64Value": true,
-	"google.protobuf.FloatValue":  true,
-	"google.protobuf.DoubleValue": true,
-	"google.protobuf.BoolValue":   true,
-}
-
+// isParameterType returns true if the field is a primitive type, or a
+// well-known-type that can be represented as a scalar in JSON.
+// These are valid leaf fields for use in URL paths and query parameters.
 func isParameterType(field protoreflect.FieldDescriptor) bool {
 	kind := field.Kind()
 	return kind != protoreflect.GroupKind &&
-		(kind != protoreflect.MessageKind || isScalarWKT(field))
+		(kind != protoreflect.MessageKind || isWKTWithScalarJSONMapping(field))
 }
 
-func isScalarWKT(field protoreflect.FieldDescriptor) bool {
-	return field.Kind() == protoreflect.MessageKind &&
-		isScalarWellKnownType[field.Message().FullName()]
+// isWKTWithScalarJSONMapping returns true if the field is a well-known type that
+// maps to a scalar JSON type. These are also valid parameter types alongside
+// primitives.
+func isWKTWithScalarJSONMapping(field protoreflect.FieldDescriptor) bool {
+	const wellKnownTypePrefix = "google.protobuf."
+	if field.Kind() != protoreflect.MessageKind || !strings.HasPrefix(
+		string(field.Message().FullName()), wellKnownTypePrefix,
+	) {
+		return false
+	}
+	switch field.Message().Name() {
+	case "BoolValue", "BytesValue", "DoubleValue", "Duration", "Empty",
+		"FieldMask", "FloatValue", "Int32Value", "Int64Value", "NullValue",
+		"StringValue", "Timestamp", "UInt32Value", "UInt64Value":
+		return true
+	default:
+		return false
+	}
 }
 
 // setParameter sets the value of a field on a message using the ident fields.
@@ -177,7 +178,7 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 
 // unmarshalFieldWKT unmarshals well known JSON scalars to their message types.
 func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
-	if !isScalarWKT(field) {
+	if !isWKTWithScalarJSONMapping(field) {
 		return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
 	switch field.Message().Name() {
@@ -308,7 +309,7 @@ func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Va
 }
 
 func marshalFieldWKT(field protoreflect.FieldDescriptor, value protoreflect.Value) ([]byte, error) {
-	if !isScalarWKT(field) {
+	if !isWKTWithScalarJSONMapping(field) {
 		return nil, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
 	msgName := field.Message().Name()
