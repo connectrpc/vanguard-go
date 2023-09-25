@@ -15,9 +15,9 @@
 package vanguard
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -25,10 +25,12 @@ import (
 
 	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/api/annotations"
+	httpbody "google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func httpStatusCodeFromRPC(code connect.Code) int {
@@ -57,6 +59,26 @@ func httpStatusCodeFromRPC(code connect.Code) int {
 	return codes[code]
 }
 
+func httpStatusCodeToRPC(code int) connect.Code {
+	switch code {
+	case http.StatusOK:
+		return 0 // OK
+	case http.StatusUnauthorized:
+		return connect.CodeUnauthenticated // Unauthenticated
+	case http.StatusForbidden:
+		return connect.CodePermissionDenied // PermissionDenied
+	case http.StatusNotFound:
+		return connect.CodeUnimplemented // Unimplemented
+	case http.StatusTooManyRequests,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return connect.CodeUnavailable // Unavailable
+	default:
+		return connect.CodeUnknown // Unknown
+	}
+}
+
 func httpWriteError(rsp http.ResponseWriter, err error) {
 	codec := protojson.MarshalOptions{
 		EmitUnpopulated: true,
@@ -78,16 +100,23 @@ func httpWriteError(rsp http.ResponseWriter, err error) {
 	_, _ = rsp.Write(bin)
 }
 
-func httpErrorFromResponse(body io.Reader) *connect.Error {
-	codec := protojson.UnmarshalOptions{}
-	body = io.LimitReader(body, 1024)
-	bin, err := io.ReadAll(body)
-	if err != nil {
-		return connect.NewError(connect.CodeInternal, err)
+func httpErrorFromResponse(statusCode int, contentType string, src *bytes.Buffer) *connect.Error {
+	if statusCode == http.StatusOK {
+		return nil
 	}
+	codec := protojson.UnmarshalOptions{}
 	var stat status.Status
-	if err := codec.Unmarshal(bin, &stat); err != nil {
-		return connect.NewError(connect.CodeInternal, err)
+	if err := codec.Unmarshal(src.Bytes(), &stat); err != nil {
+		body, err := anypb.New(&httpbody.HttpBody{
+			ContentType: contentType,
+			Data:        src.Bytes(),
+		})
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, err)
+		}
+		stat.Details = append(stat.Details, body)
+		stat.Code = int32(httpStatusCodeToRPC(statusCode))
+		stat.Message = http.StatusText(statusCode)
 	}
 
 	connectErr := connect.NewWireError(

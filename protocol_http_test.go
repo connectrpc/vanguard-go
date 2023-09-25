@@ -27,7 +27,12 @@ import (
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/httpbody"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func TestHTTPErrorWriter(t *testing.T) {
@@ -45,9 +50,73 @@ func TestHTTPErrorWriter(t *testing.T) {
 	assert.NoError(t, json.Compact(&out, rec.Body.Bytes()))
 	assert.Equal(t, `{"code":16,"message":"test error: Hello, 世界","details":[]}`, out.String())
 
-	body := bytes.NewReader(rec.Body.Bytes())
-	got := httpErrorFromResponse(body)
+	body := bytes.NewBuffer(rec.Body.Bytes())
+	got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", body)
 	assert.Equal(t, cerr, got)
+}
+
+func TestHTTPErrorFromResponse(t *testing.T) {
+	t.Parallel()
+	t.Run("empty", func(t *testing.T) {
+		t.Parallel()
+		var body bytes.Buffer
+		got := httpErrorFromResponse(http.StatusOK, "", &body)
+		assert.Nil(t, got)
+	})
+	t.Run("jsonStatus", func(t *testing.T) {
+		t.Parallel()
+		errorInfo, err := anypb.New(&errdetails.ErrorInfo{
+			Reason:   "user is not authorized",
+			Domain:   "vanguard.connectrpc.com",
+			Metadata: map[string]string{"key1": "value1"},
+		})
+		require.Nil(t, err)
+		stat := status.Status{
+			Code:    int32(connect.CodeUnauthenticated),
+			Message: "auth error",
+			Details: []*anypb.Any{errorInfo},
+		}
+		out, err := protojson.Marshal(&stat)
+		require.Nil(t, err)
+		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewBuffer(out))
+		assert.Equal(t, connect.CodeUnauthenticated, got.Code())
+		assert.Equal(t, "auth error", got.Message())
+	})
+	t.Run("invalidStatus", func(t *testing.T) {
+		t.Parallel()
+		body := bytes.NewBufferString("unauthorized")
+		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", body)
+		assert.Equal(t, connect.CodeUnauthenticated, got.Code())
+		assert.Equal(t, "Unauthorized", got.Message())
+		assert.Len(t, got.Details(), 1)
+		value, err := got.Details()[0].Value()
+		assert.NoError(t, err)
+		httpBody, ok := value.(*httpbody.HttpBody)
+		assert.True(t, ok)
+		assert.Equal(t, "application/json", httpBody.ContentType)
+		assert.Equal(t, []byte("unauthorized"), httpBody.Data)
+	})
+	t.Run("invalidAny", func(t *testing.T) {
+		t.Parallel()
+		stat := status.Status{
+			Code:    int32(connect.CodeUnauthenticated),
+			Message: "auth error",
+		}
+		out, err := protojson.Marshal(&stat)
+		require.Nil(t, err)
+		out = append(out[:len(out)-1], []byte(`,"details":{"@type":"foo","value":"bar"}`)...)
+		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewBuffer(out))
+		t.Log(got)
+		assert.Equal(t, connect.CodeUnauthenticated, got.Code())
+		assert.Equal(t, "Unauthorized", got.Message())
+		assert.Len(t, got.Details(), 1)
+		value, err := got.Details()[0].Value()
+		assert.NoError(t, err)
+		httpBody, ok := value.(*httpbody.HttpBody)
+		assert.True(t, ok)
+		assert.Equal(t, "application/json", httpBody.ContentType)
+		assert.Equal(t, out, httpBody.Data)
+	})
 }
 
 func TestHTTPEncodePathValues(t *testing.T) {
