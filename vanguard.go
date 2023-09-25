@@ -20,10 +20,12 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -275,6 +277,57 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 	return nil
 }
 
+// RegisterRules is the set of HTTP rules that apply to RPC methods via selectors.
+// The rules are used in addition to any rules defined in the service's proto
+// file.
+//
+// Services should be registered first. If a given rule doesn't match any
+// already-registered method, an error is returned.
+// See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
+func (m *Mux) RegisterRules(rules ...*annotations.HttpRule) error {
+	m.maybeInit()
+	if len(rules) == 0 {
+		return nil
+	}
+	methodRules := make(map[*methodConfig][]*annotations.HttpRule)
+	for _, rule := range rules {
+		var applied bool
+		selector := rule.GetSelector()
+		if selector == "" {
+			return fmt.Errorf("rule missing selector")
+		}
+		if i := strings.Index(selector, "*"); i >= 0 {
+			if i != len(selector)-1 {
+				return fmt.Errorf("wildcard selector %q must be at the end", rule.GetSelector())
+			}
+			selector = selector[:len(selector)-1]
+			if len(selector) > 0 && !strings.HasSuffix(selector, ".") {
+				return fmt.Errorf("wildcard selector %q must be whole component", rule.GetSelector())
+			}
+		}
+		for _, methodConf := range m.methods {
+			methodName := string(methodConf.descriptor.FullName())
+			if !strings.HasPrefix(methodName, selector) {
+				continue
+			}
+			methodRules[methodConf] = append(methodRules[methodConf], rule)
+			applied = true
+		}
+		if !applied {
+			return fmt.Errorf("rule %q does not match any methods", rule.GetSelector())
+		}
+	}
+	for methodConf, rules := range methodRules {
+		for _, rule := range rules {
+			if err := m.addRule(rule, methodConf); err != nil {
+				// TODO: use the multi-error type errors.Join()
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // AddCodec adds the given codec implementation.
 //
 // By default, the mux already understands "proto", "json", and "text" codecs. The
@@ -336,18 +389,26 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 	}
 
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
-		if err != nil {
-			return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
+		if err := m.addRule(httpRule, methodConf); err != nil {
+			return err
 		}
-		methodConf.httpRule = firstTarget
-		for i, rule := range httpRule.AdditionalBindings {
-			if len(rule.AdditionalBindings) > 0 {
-				return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
-			}
-			if _, err := m.restRoutes.addRoute(methodConf, rule); err != nil {
-				return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
-			}
+	}
+	return nil
+}
+
+func (m *Mux) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) error {
+	methodPath := methodConf.methodPath
+	firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
+	if err != nil {
+		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
+	}
+	methodConf.httpRule = firstTarget
+	for i, rule := range httpRule.AdditionalBindings {
+		if len(rule.AdditionalBindings) > 0 {
+			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
+		}
+		if _, err := m.restRoutes.addRoute(methodConf, rule); err != nil {
+			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 		}
 	}
 	return nil
