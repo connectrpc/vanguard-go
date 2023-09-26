@@ -100,9 +100,9 @@ func TestMux_RPCxRPC(t *testing.T) {
 	}
 
 	type testOpt struct {
-		name string
-		server  *httptest.Server
-		opts []connect.ClientOption
+		name   string
+		server *httptest.Server
+		opts   []connect.ClientOption
 	}
 	var testOpts []testOpt
 	for _, server := range servers {
@@ -127,9 +127,9 @@ func TestMux_RPCxRPC(t *testing.T) {
 						copyOpts := make([]connect.ClientOption, len(opts))
 						copy(copyOpts, opts)
 						testOpts = append(testOpts, testOpt{
-							name: fmt.Sprintf("%s%s_%s_%s/%s", protocol, suffix, codec, compression, server.name),
-							server:  server.server,
-							opts: copyOpts,
+							name:   fmt.Sprintf("%s%s_%s_%s/%s", protocol, suffix, codec, compression, server.name),
+							server: server.server,
+							opts:   copyOpts,
 						})
 					}
 				}

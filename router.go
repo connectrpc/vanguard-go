@@ -39,7 +39,7 @@ type routeTrie struct {
 // HTTP rule. Only the rule itself is added. If the rule indicates additional
 // bindings, they are ignored. To add routes for all bindings, callers must
 // invoke this method for each rule.
-func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (*routeTarget, error) {
+func (t *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (*routeTarget, error) {
 	var method, template string
 	switch pattern := rule.Pattern.(type) {
 	case *annotations.HttpRule_Get:
@@ -71,39 +71,39 @@ func (trie *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule
 	if err != nil {
 		return nil, err
 	}
-	if err := trie.insert(method, target, segments); err != nil {
+	if err := t.insert(method, target, segments); err != nil {
 		return nil, err
 	}
 	return target, nil
 }
 
-func (trie *routeTrie) insertChild(segment string) *routeTrie {
-	child := trie.children[segment]
+func (t *routeTrie) insertChild(segment string) *routeTrie {
+	child := t.children[segment]
 	if child == nil {
-		if trie.children == nil {
-			trie.children = make(map[string]*routeTrie, 1)
+		if t.children == nil {
+			t.children = make(map[string]*routeTrie, 1)
 		}
 		child = &routeTrie{}
-		trie.children[segment] = child
+		t.children[segment] = child
 	}
 	return child
 }
-func (trie *routeTrie) insertVerb(verb string) routeMethods {
-	methods := trie.verbs[verb]
+func (t *routeTrie) insertVerb(verb string) routeMethods {
+	methods := t.verbs[verb]
 	if methods == nil {
-		if trie.verbs == nil {
-			trie.verbs = make(map[string]routeMethods, 1)
+		if t.verbs == nil {
+			t.verbs = make(map[string]routeMethods, 1)
 		}
 		methods = make(routeMethods, 1)
-		trie.verbs[verb] = methods
+		t.verbs[verb] = methods
 	}
 	return methods
 }
 
 // insert the target into the trie using the given method and segment path.
 // The path is followed until the final segment is reached.
-func (trie *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
-	cursor := trie
+func (t *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
+	cursor := t
 	for _, segment := range segments.path {
 		cursor = cursor.insertChild(segment)
 	}
@@ -118,7 +118,7 @@ func (trie *routeTrie) insert(method string, target *routeTarget, segments pathS
 
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
-func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
+func (t *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
 	// TODO: Not checking if path ends with "/" means we accept missing final segment
 	//       for both * and **. Is that right? Makes sense for **, but maybe not for *.
 	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == ':' {
@@ -142,7 +142,7 @@ func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeT
 			verb = lastElement[pos+1:]
 		}
 	}
-	target, methods := trie.findTarget(path, verb, httpMethod)
+	target, methods := t.findTarget(path, verb, httpMethod)
 	if target == nil {
 		return nil, nil, methods
 	}
@@ -162,21 +162,21 @@ func (trie *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeT
 // is nil but methods are non-nil, the path and verb matched a route, but not
 // the method. This can be used to send back a well-formed "Allow" response
 // header. If both are nil, the path and verb did not match.
-func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
+func (t *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
 	if len(path) == 0 {
-		return trie.getTarget(verb, method)
+		return t.getTarget(verb, method)
 	}
 	current := path[0]
 	path = path[1:]
 
-	if child := trie.children[current]; child != nil {
+	if child := t.children[current]; child != nil {
 		target, methods := child.findTarget(path, verb, method)
 		if target != nil || methods != nil {
 			return target, methods
 		}
 	}
 
-	if childAst := trie.children["*"]; childAst != nil {
+	if childAst := t.children["*"]; childAst != nil {
 		target, methods := childAst.findTarget(path, verb, method)
 		if target != nil || methods != nil {
 			return target, methods
@@ -185,7 +185,7 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 
 	// Double-asterisk must be the last element in pattern.
 	// So it consumes all remaining path elements.
-	if childDblAst := trie.children["**"]; childDblAst != nil {
+	if childDblAst := t.children["**"]; childDblAst != nil {
 		return childDblAst.findTarget(nil, verb, method)
 	}
 	return nil, nil
@@ -194,8 +194,8 @@ func (trie *routeTrie) findTarget(path []string, verb, method string) (*routeTar
 // getTarget gets the target for the given verb and method from the
 // node trie. It is like findTarget, except that it does not use a
 // path to first descend into a sub-trie.
-func (trie *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) {
-	methods := trie.verbs[verb]
+func (t *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) {
+	methods := t.verbs[verb]
 	if target := methods[method]; target != nil {
 		return target, methods
 	}

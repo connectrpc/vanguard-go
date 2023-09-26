@@ -590,16 +590,16 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	t.Cleanup(serverWithSvcOption.Close)
 
 	testCases := []struct {
-		name string
-		server  *httptest.Server
+		name   string
+		server *httptest.Server
 	}{
 		{
-			name: "with_mux_setting",
-			server:  serverWithSetting,
+			name:   "with_mux_setting",
+			server: serverWithSetting,
 		},
 		{
-			name: "with_svc_option",
-			server:  serverWithSvcOption,
+			name:   "with_svc_option",
+			server: serverWithSvcOption,
 		},
 	}
 
@@ -747,7 +747,7 @@ func TestMux_MessageHooks(t *testing.T) {
 		name     string
 		reqHook  bool
 		respHook bool
-		server      *httptest.Server
+		server   *httptest.Server
 	}{
 		{
 			name:    "request_hook",
@@ -1123,7 +1123,7 @@ func TestMux_HookOrder(t *testing.T) {
 	errorCases := []struct {
 		name    string
 		failure hookKind
-		server     *httptest.Server
+		server  *httptest.Server
 	}{
 		{
 			name: "normal",
@@ -2105,8 +2105,8 @@ func getDecompressor(t *testing.T, name string) connect.Decompressor {
 }
 
 type testServer struct {
-	name string
-	server  *httptest.Server
+	name   string
+	server *httptest.Server
 }
 
 func appendClientProtocolOptions(t *testing.T, opts []connect.ClientOption, protocol Protocol) []connect.ClientOption {
