@@ -28,10 +28,6 @@ type bufferPool struct {
 	sync.Pool
 }
 
-func newBufferPool() *bufferPool {
-	return &bufferPool{}
-}
-
 func (b *bufferPool) Get() *bytes.Buffer {
 	if buffer, ok := b.Pool.Get().(*bytes.Buffer); ok {
 		buffer.Reset()

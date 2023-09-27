@@ -54,7 +54,7 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("Serving %s on HTTP port: %s\n", *directory, *port)
-	log.Fatal(http.ListenAndServe(":"+*port, mux.AsHandler()))
+	log.Fatal(http.ListenAndServe(":"+*port, mux))
 }
 
 var indexHTMLTemplate = template.Must(template.New("http").Parse(`

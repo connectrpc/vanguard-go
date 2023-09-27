@@ -516,7 +516,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 					t.Log("req:", string(debug))
 
 					rsp := httptest.NewRecorder()
-					opts.mux.mux.AsHandler().ServeHTTP(rsp, req)
+					opts.mux.mux.ServeHTTP(rsp, req)
 
 					result := rsp.Result()
 					defer result.Body.Close()

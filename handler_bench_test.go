@@ -148,8 +148,6 @@ func BenchmarkServeHTTP(b *testing.B) {
 		req.Header.Set("Grpc-Timeout", "1S")
 		req.Header.Set("Grpc-Accept-Encoding", "gzip")
 
-		hdlr := mux.AsHandler()
-
 		b.StartTimer()
 		b.ReportAllocs()
 		b.RunParallel(func(pb *testing.PB) {
@@ -158,7 +156,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
 				rsp := httptest.NewRecorder()
 
-				hdlr.ServeHTTP(rsp, req)
+				mux.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "0", rsp.Header().Get("Grpc-Status"), "response status")
 				assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
@@ -192,8 +190,6 @@ func BenchmarkServeHTTP(b *testing.B) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Server-Timeout", "1000")
 
-		hdlr := mux.AsHandler()
-
 		b.StartTimer()
 		b.ReportAllocs()
 		b.RunParallel(func(pb *testing.PB) {
@@ -202,7 +198,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqMsgBookJSON))
 				rsp := httptest.NewRecorder()
 
-				hdlr.ServeHTTP(rsp, req)
+				mux.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 				data := rsp.Body.Bytes()
@@ -238,8 +234,6 @@ func BenchmarkServeHTTP(b *testing.B) {
 		req.Header.Set("Grpc-Timeout", "1S")
 		req.Header.Set("Grpc-Accept-Encoding", "gzip")
 
-		hdlr := mux.AsHandler()
-
 		b.StartTimer()
 		b.ReportAllocs()
 		b.RunParallel(func(pb *testing.PB) {
@@ -248,7 +242,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
 				rsp := httptest.NewRecorder()
 
-				hdlr.ServeHTTP(rsp, req)
+				mux.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/grpc+proto", rsp.Header().Get("Content-Type"), "response content type")
 				assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
@@ -283,8 +277,6 @@ func BenchmarkServeHTTP(b *testing.B) {
 		req.Header.Set("Connect-Timeout-Ms", "1000")
 		req.ContentLength = int64(len(reqMsgJSON))
 
-		hdlr := mux.AsHandler()
-
 		b.StartTimer()
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
@@ -292,7 +284,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			req.Body = io.NopCloser(bytes.NewReader(reqMsgJSON))
 			rsp := httptest.NewRecorder()
 
-			hdlr.ServeHTTP(rsp, req)
+			mux.ServeHTTP(rsp, req)
 			assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 			assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 			data := rsp.Body.Bytes()
@@ -331,8 +323,6 @@ func BenchmarkServeHTTP(b *testing.B) {
 		req.Header.Set("Connect-Timeout-Ms", "1000")
 		req.ContentLength = int64(len(reqMsgProtoComp))
 
-		hdlr := mux.AsHandler()
-
 		b.StartTimer()
 		b.ReportAllocs()
 		b.RunParallel(func(pb *testing.PB) {
@@ -341,7 +331,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqMsgProtoComp))
 				rsp := httptest.NewRecorder()
 
-				hdlr.ServeHTTP(rsp, req)
+				mux.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/proto", rsp.Header().Get("Content-Type"), "response content type")
 				assert.Equal(b, rspMsgProtoComp, rsp.Body.Bytes(), "response body")
@@ -370,12 +360,10 @@ func BenchmarkServeHTTP(b *testing.B) {
 		); err != nil {
 			b.Fatal(err)
 		}
-		req := httptest.NewRequest(http.MethodPost, "/raw/file.bin", nil)
+		req := httptest.NewRequest(http.MethodPost, "/file.bin:upload", nil)
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("X-Server-Timeout", "1000")
 		req.ContentLength = int64(len(largePayload))
-
-		hdlr := mux.AsHandler()
 
 		b.StartTimer()
 		b.ReportAllocs()
@@ -385,7 +373,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(largePayload))
 				rsp := httptest.NewRecorder()
 
-				hdlr.ServeHTTP(rsp, req)
+				mux.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 				assert.Equal(b, "{}", rsp.Body.String(), "response body")
