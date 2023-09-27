@@ -649,9 +649,9 @@ type connectWireError struct {
 	Details []connectWireDetail `json:"details,omitempty"`
 }
 
-func (err *connectWireError) toConnectError() *connect.Error {
-	cerr := connect.NewError(err.Code, errors.New(err.Message))
-	for _, detail := range err.Details {
+func (e *connectWireError) toConnectError() *connect.Error {
+	cerr := connect.NewError(e.Code, errors.New(e.Message))
+	for _, detail := range e.Details {
 		detailData, err := base64.RawStdEncoding.DecodeString(detail.Value)
 		if err != nil {
 			// seems a waste to fail or take other action here...

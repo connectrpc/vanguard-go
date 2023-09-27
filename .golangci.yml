@@ -68,3 +68,8 @@ issues:
     - path: internal/examples/pets/.*\.go
       linters:
         - forbidigo # log.Fatal, fmt.Printf used in example programs
+    - path: internal/examples/fileserver/main.go
+      linters:
+        - forbidigo
+        - gosec
+        - gochecknoglobals

@@ -1723,38 +1723,38 @@ type ttStream struct {
 	done    chan struct{}
 }
 
-func (str *ttStream) start() {
+func (s *ttStream) start() {
 	// Called from the interceptor when it starts handling the stream
-	str.started.Store(true)
+	s.started.Store(true)
 }
 
-func (str *ttStream) finish(result error) {
+func (s *ttStream) finish(result error) {
 	// Called from the interceptor when it finishes handling the stream
-	str.result = result
-	close(str.done)
+	s.result = result
+	close(s.done)
 }
 
-func (str *ttStream) await(t *testing.T, expectServerDone bool) (serverInvoked bool, serverErr error) {
+func (s *ttStream) await(t *testing.T, expectServerDone bool) (serverInvoked bool, serverErr error) {
 	t.Helper()
 	// Called from test code to make sure server handler has completed.
 	// Returns any error that the interceptor finished with.
 	// Should only be called after the RPC appears to have completed in
 	// the test client.
-	if !str.started.Load() {
+	if !s.started.Load() {
 		// Interceptor never started, so nothing to wait for.
 		return false, nil
 	}
 	if expectServerDone {
 		select {
-		case <-str.done:
-			return true, str.result
+		case <-s.done:
+			return true, s.result
 		default:
 			t.Fatal("expecting server to already be done but it's not")
 		}
 	}
 	select {
-	case <-str.done:
-		return true, str.result
+	case <-s.done:
+		return true, s.result
 	case <-time.After(3 * time.Second):
 		return true, fmt.Errorf("timeout: interceptor still did not finish after 3 seconds")
 	}
@@ -1764,8 +1764,8 @@ type testInterceptor struct {
 	sync.Map
 }
 
-func (ti *testInterceptor) get(testName string) (*ttStream, bool) {
-	val, ok := ti.Load(testName)
+func (i *testInterceptor) get(testName string) (*ttStream, bool) {
+	val, ok := i.Load(testName)
 	if !ok {
 		return nil, false
 	}
@@ -1773,26 +1773,26 @@ func (ti *testInterceptor) get(testName string) (*ttStream, bool) {
 	return stream, ok
 }
 
-func (ti *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) (bool, error) {
+func (i *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) (bool, error) {
 	t.Helper()
 	str := &ttStream{
 		T:          t,
 		testStream: stream,
 		done:       make(chan struct{}),
 	}
-	ti.Store(t.Name(), str)
+	i.Store(t.Name(), str)
 	// The returned function can be used by test code to await server completion.
 	// (Useful in the event that middleware cancels the operation early, so client
 	// could see a completed response while server still running concurrently.)
 	return str.await
 }
 
-func (ti *testInterceptor) del(t *testing.T) {
+func (i *testInterceptor) del(t *testing.T) {
 	t.Helper()
-	ti.Delete(t.Name())
+	i.Delete(t.Name())
 }
 
-func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+func (i *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(
 		ctx context.Context,
 		req connect.AnyRequest,
@@ -1801,7 +1801,7 @@ func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if val == "" {
 			return next(ctx, req)
 		}
-		stream, ok := ti.get(val)
+		stream, ok := i.get(val)
 		if !ok {
 			return nil, fmt.Errorf("invalid testCase header: %s", val)
 		}
@@ -1870,11 +1870,11 @@ func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	}
 }
 
-func (ti *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+func (i *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return next
 }
 
-func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
@@ -1883,7 +1883,7 @@ func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFun
 		if val == "" {
 			return next(ctx, conn)
 		}
-		stream, ok := ti.get(val)
+		stream, ok := i.get(val)
 		if !ok {
 			return fmt.Errorf("invalid testCase header: %s", val)
 		}
@@ -1948,7 +1948,7 @@ func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFun
 	}
 }
 
-func (ti *testInterceptor) restUnaryHandler(
+func (i *testInterceptor) restUnaryHandler(
 	codec Codec, comp *compressionPool,
 ) http.HandlerFunc {
 	codecNames := map[string]string{
@@ -2058,7 +2058,7 @@ func (ti *testInterceptor) restUnaryHandler(
 			http.Error(rsp, "missing test header", http.StatusInternalServerError)
 			return
 		}
-		stream, ok := ti.get(val)
+		stream, ok := i.get(val)
 		if !ok {
 			http.Error(rsp, "invalid test header", http.StatusInternalServerError)
 			return
