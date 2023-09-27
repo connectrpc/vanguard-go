@@ -165,12 +165,12 @@ Finally, you can register the middleware handler with an `http.Server` or
 
 ```go
 // The Mux can be used as the sole handler for an HTTP server.
-err := http.Serve(listener, vanguardMux.AsHandler())
+err := http.Serve(listener, vanguardMux)
 
 // Or it can be used alongside other handlers, all registered with
 // the same http.ServeMux.
 mux := http.NewServeMux()
-mux.Handle("/", vanguardMux.AsHandler())
+mux.Handle("/", vanguardMux)
 err := http.Serve(listener, mux)
 ```
 The above example registers the handler for the root path. This is useful

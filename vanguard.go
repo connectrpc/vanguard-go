@@ -19,9 +19,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -53,9 +51,8 @@ const (
 // REST).
 //
 // All services should be registered (via Register* methods) from a single
-// thread during initialization. The handler returned from the AsHandler
-// method is only thread-safe among concurrently executing HTTP requests. It
-// is not safe to mutate the Mux once its handler is being used by a server.
+// thread during initialization. It is not safe to mutate the Mux once its
+// handler is being used by a server.
 type Mux struct {
 	// The protocols that are supported by the wrapped handler, by default.
 	// This can be overridden on a per-service level via options when calling
@@ -154,30 +151,11 @@ type Mux struct {
 	// a nil error.
 	HooksCallback func(context.Context, Operation) (Hooks, error)
 
-	init             sync.Once
-	codecImpls       map[string]func(TypeResolver) Codec
-	compressionPools map[string]*compressionPool
-	methods          map[string]*methodConfig
-	restRoutes       routeTrie
-}
-
-// AsHandler returns HTTP middleware that applies the given configuration
-// to handlers.
-//
-// This should only be called after the configuration is finalized.
-func (m *Mux) AsHandler() http.Handler {
-	m.maybeInit()
-	canDecompress := make([]string, 0, len(m.compressionPools))
-	for compression := range m.compressionPools {
-		canDecompress = append(canDecompress, compression)
-	}
-	sort.Strings(canDecompress)
-	return &handler{
-		mux:           m,
-		bufferPool:    newBufferPool(),
-		codecs:        newCodecMap(m.methods, m.codecImpls),
-		canDecompress: canDecompress,
-	}
+	bufferPool  bufferPool
+	codecs      codecMap
+	compressors compressionMap
+	methods     map[string]*methodConfig
+	restRoutes  routeTrie
 }
 
 // RegisterServiceByName registers the given handler for the named service.
@@ -231,7 +209,7 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		CodecJSON:  {},
 	}, false)
 	for codecName := range svcOpts.codecNames {
-		if _, known := m.codecImpls[codecName]; !known {
+		if _, known := m.codecs[codecName]; !known {
 			return fmt.Errorf("codec %s is not known; use mux.AddCodec to add known codecs first", codecName)
 		}
 	}
@@ -247,7 +225,7 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		CompressionGzip: {},
 	}, true)
 	for compressorName := range svcOpts.compressorNames {
-		if _, known := m.compressionPools[compressorName]; !known {
+		if _, known := m.compressors[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use mux.AddCompression to add known algorithms first", compressorName)
 		}
 	}
@@ -349,7 +327,7 @@ func (m *Mux) RegisterRules(rules ...*annotations.HttpRule) error {
 // different configuration.
 func (m *Mux) AddCodec(name string, newCodec func(TypeResolver) Codec) {
 	m.maybeInit()
-	m.codecImpls[name] = newCodec
+	m.codecs[name] = newCodec
 }
 
 // AddCompression adds the given compression algorithm implementation.
@@ -363,7 +341,7 @@ func (m *Mux) AddCodec(name string, newCodec func(TypeResolver) Codec) {
 // or compression level.
 func (m *Mux) AddCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) {
 	m.maybeInit()
-	m.compressionPools[name] = newCompressionPool(name, newCompressor, newDecompressor)
+	m.compressors[name] = newCompressionPool(name, newCompressor, newDecompressor)
 }
 
 func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
@@ -383,6 +361,9 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 		maxMsgBufferBytes: opts.maxMsgBufferBytes,
 		maxGetURLBytes:    opts.maxGetURLBytes,
 		hooksCallback:     opts.hooksCallback,
+	}
+	if m.methods == nil {
+		m.methods = make(map[string]*methodConfig, 1)
 	}
 	m.methods[methodPath] = methodConf
 
@@ -424,19 +405,19 @@ func (m *Mux) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) 
 }
 
 func (m *Mux) maybeInit() {
-	m.init.Do(func() {
-		// initialize default codecs and compressors
-		m.codecImpls = map[string]func(res TypeResolver) Codec{
-			CodecProto: DefaultProtoCodec,
-			CodecJSON: func(res TypeResolver) Codec {
-				return DefaultJSONCodec(res)
-			},
-		}
-		m.compressionPools = map[string]*compressionPool{
-			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
-		}
-		m.methods = map[string]*methodConfig{}
-	})
+	if m.codecs != nil {
+		return // already initialized
+	}
+	// initialize default codecs and compressors
+	m.codecs = map[string]func(res TypeResolver) Codec{
+		CodecProto: DefaultProtoCodec,
+		CodecJSON: func(res TypeResolver) Codec {
+			return DefaultJSONCodec(res)
+		},
+	}
+	m.compressors = map[string]*compressionPool{
+		CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
+	}
 }
 
 // ServiceOption is an option for configuring how the middleware will handle

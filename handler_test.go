@@ -396,7 +396,7 @@ func TestHandler_Errors(t *testing.T) {
 				}
 			}
 			respWriter := httptest.NewRecorder()
-			targetMux.AsHandler().ServeHTTP(respWriter, req)
+			targetMux.ServeHTTP(respWriter, req)
 			resp := respWriter.Result()
 			err := resp.Body.Close()
 			require.NoError(t, err)
@@ -447,7 +447,7 @@ func TestHandler_PassThrough(t *testing.T) {
 	require.NoError(t, mux.RegisterServiceByName(checkPassThrough(contentHandler), testv1connect.ContentServiceName))
 
 	// Use HTTP/2 so we can test a bidi stream.
-	server := httptest.NewUnstartedServer(mux.AsHandler())
+	server := httptest.NewUnstartedServer(&mux)
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	t.Cleanup(server.Close)
@@ -767,7 +767,7 @@ func TestMessage_AdvanceStage(t *testing.T) {
 			respComp = abcCompression.newPool()
 		}
 		op := &operation{
-			bufferPool: newBufferPool(),
+			bufferPool: &bufferPool{},
 			client: clientProtocolDetails{
 				codec:           clientCodec,
 				reqCompression:  clientReqComp,
@@ -955,65 +955,6 @@ func TestMessage_AdvanceStage(t *testing.T) {
 					}
 				})
 			}
-		})
-	}
-}
-
-func TestIntersection(t *testing.T) {
-	t.Parallel()
-	testCases := []struct {
-		name         string
-		a, b, result []string
-		resultCap    int
-	}{
-		{
-			name:      "b is superset",
-			a:         []string{"a", "b", "c"},
-			b:         []string{"a", "b", "c", "d", "e", "f"},
-			result:    []string{"a", "b", "c"},
-			resultCap: 3,
-		},
-		{
-			name:      "a is superset",
-			a:         []string{"a", "b", "c", "d", "e", "f"},
-			b:         []string{"a", "b", "c"},
-			result:    []string{"a", "b", "c"},
-			resultCap: 3,
-		},
-		{
-			name:   "a is empty",
-			a:      nil,
-			b:      []string{"a", "b", "c", "d", "e", "f"},
-			result: []string{},
-		},
-		{
-			name:   "b is empty",
-			a:      []string{"a", "b", "c"},
-			b:      nil,
-			result: []string{},
-		},
-		{
-			name:      "result is empty",
-			a:         []string{"a", "b", "c"},
-			b:         []string{"d", "e", "f"},
-			result:    []string{}, // only nil when one of the inputs is empty
-			resultCap: 3,
-		},
-		{
-			name:      "result is subset of both",
-			a:         []string{"x", "y", "z", "a", "b", "c"},
-			b:         []string{"a", "b", "c", "d", "e", "f"},
-			result:    []string{"a", "b", "c"},
-			resultCap: 6,
-		},
-	}
-	for _, testCase := range testCases {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			result := intersect(testCase.a, testCase.b)
-			require.Equal(t, testCase.result, result)
-			require.Equal(t, testCase.resultCap, cap(result))
 		})
 	}
 }

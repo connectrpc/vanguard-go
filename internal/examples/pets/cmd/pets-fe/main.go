@@ -85,7 +85,7 @@ func main() {
 			log.Fatal(err)
 		}
 		serveMux := http.NewServeMux()
-		serveMux.Handle("/", internal.TraceHandler(mux.AsHandler()))
+		serveMux.Handle("/", internal.TraceHandler(mux))
 		serveMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(petstorev2connect.PetServiceName)))
 		svrs[i] = &http.Server{
 			Addr:              ":http",

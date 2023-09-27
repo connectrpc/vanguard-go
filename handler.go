@@ -31,23 +31,17 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-type handler struct {
-	mux           *Mux
-	bufferPool    *bufferPool
-	codecs        map[codecKey]Codec
-	canDecompress []string
-}
+// ServeHTTP implements http.Handler.
+func (m *Mux) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	op := m.newOperation(writer, request)
+	err := op.validate(m, m.codecs)
 
-func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	op := h.newOperation(writer, request)
-	err := op.validate(h.mux, h.codecs)
-
-	useUnknownHandler := h.mux.UnknownHandler != nil && errors.Is(err, errNotFound)
+	useUnknownHandler := m.UnknownHandler != nil && errors.Is(err, errNotFound)
 	var callback func(context.Context, Operation) (Hooks, error)
 	if op.methodConf != nil {
 		callback = op.methodConf.hooksCallback
 	} else {
-		callback = h.mux.HooksCallback
+		callback = m.HooksCallback
 	}
 	if callback != nil {
 		var hookErr error
@@ -58,7 +52,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if useUnknownHandler {
 		request.Header = op.originalHeaders // restore headers, just in case initialization removed keys
-		h.mux.UnknownHandler.ServeHTTP(writer, request)
+		m.UnknownHandler.ServeHTTP(writer, request)
 		return
 	}
 
@@ -81,16 +75,15 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op.handle()
 }
 
-func (h *handler) newOperation(writer http.ResponseWriter, request *http.Request) *operation {
+func (m *Mux) newOperation(writer http.ResponseWriter, request *http.Request) *operation {
 	ctx, cancel := context.WithCancel(request.Context())
 	request = request.WithContext(ctx)
 	op := &operation{
-		writer:           writer,
-		request:          request,
-		cancel:           cancel,
-		bufferPool:       h.bufferPool,
-		canDecompress:    h.canDecompress,
-		compressionPools: h.mux.compressionPools,
+		writer:      writer,
+		request:     request,
+		cancel:      cancel,
+		bufferPool:  &m.bufferPool,
+		compressors: m.compressors,
 	}
 	op.requestLine.fromRequest(request)
 	return op
@@ -235,33 +228,14 @@ func classifyRequest(req *http.Request) (clientProtocolHandler, url.Values) {
 	}
 }
 
-type codecKey struct {
-	res  TypeResolver
-	name string
-}
-
-func newCodecMap(methodConfigs map[string]*methodConfig, codecs map[string]func(TypeResolver) Codec) map[codecKey]Codec {
-	result := make(map[codecKey]Codec, len(codecs))
-	for _, conf := range methodConfigs {
-		for codecName, codecFactory := range codecs {
-			key := codecKey{res: conf.resolver, name: codecName}
-			if _, exists := result[key]; !exists {
-				result[key] = codecFactory(conf.resolver)
-			}
-		}
-	}
-	return result
-}
-
 // operation represents a single HTTP operation, which maps to an incoming HTTP request.
 // It tracks properties needed to implement protocol transformation.
 type operation struct {
-	writer           http.ResponseWriter
-	request          *http.Request
-	cancel           context.CancelFunc
-	bufferPool       *bufferPool
-	canDecompress    []string
-	compressionPools map[string]*compressionPool
+	writer      http.ResponseWriter
+	request     *http.Request
+	cancel      context.CancelFunc
+	bufferPool  *bufferPool
+	compressors compressionMap
 
 	queryVars       url.Values
 	originalHeaders http.Header
@@ -325,7 +299,7 @@ func (o *operation) HandlerInfo() PeerInfo {
 
 func (o *operation) doNotImplement() {}
 
-func (o *operation) validate(mux *Mux, codecs map[codecKey]Codec) error {
+func (o *operation) validate(mux *Mux, codecs codecMap) error {
 	// Identify the protocol.
 	clientProtoHandler, queryVars := classifyRequest(o.request)
 	if clientProtoHandler == nil {
@@ -381,12 +355,12 @@ func (o *operation) validate(mux *Mux, codecs map[codecKey]Codec) error {
 	}
 	if reqMeta.compression != "" {
 		var ok bool
-		o.client.reqCompression, ok = o.compressionPools[reqMeta.compression]
+		o.client.reqCompression, ok = o.compressors[reqMeta.compression]
 		if !ok {
 			return newHTTPError(http.StatusUnsupportedMediaType, "%q compression not supported", reqMeta.compression)
 		}
 	}
-	o.client.codec = codecs[codecKey{res: o.methodConf.resolver, name: reqMeta.codec}]
+	o.client.codec = codecs.get(reqMeta.codec, o.methodConf.resolver)
 	if o.client.codec == nil {
 		return newHTTPError(http.StatusUnsupportedMediaType, "%q sub-format not supported", reqMeta.codec)
 	}
@@ -418,11 +392,11 @@ func (o *operation) validate(mux *Mux, codecs map[codecKey]Codec) error {
 		// NB: This is fine to set even if a custom content-type is used via
 		//     the use of google.api.HttpBody. The actual content-type and body
 		//     data will be written via serverBodyPreparer implementation.
-		o.server.codec = codecs[codecKey{res: o.methodConf.resolver, name: CodecJSON}]
+		o.server.codec = codecs.get(CodecJSON, o.methodConf.resolver)
 	} else if _, supportsCodec := o.methodConf.codecNames[reqMeta.codec]; supportsCodec {
 		o.server.codec = o.client.codec
 	} else {
-		o.server.codec = codecs[codecKey{res: o.methodConf.resolver, name: o.methodConf.preferredCodec}]
+		o.server.codec = codecs.get(o.methodConf.preferredCodec, o.methodConf.resolver)
 	}
 
 	if reqMeta.compression != "" {
@@ -542,7 +516,7 @@ func (o *operation) handle() { //nolint:gocyclo
 	serverReqMeta := o.reqMeta
 	serverReqMeta.codec = o.server.codec.Name()
 	serverReqMeta.compression = o.server.reqCompression.Name()
-	serverReqMeta.acceptCompression = intersect(o.reqMeta.acceptCompression, o.canDecompress)
+	serverReqMeta.acceptCompression = o.compressors.intersection(o.reqMeta.acceptCompression)
 	o.server.protocol.addProtocolRequestHeaders(serverReqMeta, o.request.Header)
 
 	// Now we can define the transformed response writer (which delays
@@ -1062,7 +1036,7 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		respMeta.compression = "" // normalize to empty string
 	}
 	if respMeta.compression != "" {
-		respCompression, ok := w.op.compressionPools[respMeta.compression]
+		respCompression, ok := w.op.compressors[respMeta.compression]
 		if !ok {
 			w.reportError(fmt.Errorf("response indicates unsupported compression encoding %q", respMeta.compression))
 			return
@@ -1222,7 +1196,7 @@ func (w *responseWriter) flushHeaders() {
 	cliRespMeta := *w.respMeta
 	cliRespMeta.codec = w.op.client.codec.Name()
 	cliRespMeta.compression = w.op.client.respCompression.Name()
-	cliRespMeta.acceptCompression = intersect(w.respMeta.acceptCompression, w.op.canDecompress)
+	cliRespMeta.acceptCompression = w.op.compressors.intersection(w.respMeta.acceptCompression)
 	statusCode := w.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, w.Header())
 	hasErr := w.respMeta.end != nil && w.respMeta.end.err != nil
 	// We only buffer full response for unary operations, so if we have an error,
@@ -2192,26 +2166,4 @@ func (l *requestLine) fromRequest(req *http.Request) {
 	l.path = req.URL.Path
 	l.queryString = req.URL.RawQuery
 	l.httpVersion = req.Proto
-}
-
-func intersect(setA, setB []string) []string {
-	length := len(setA)
-	if len(setB) < length {
-		length = len(setB)
-	}
-	if length == 0 {
-		// If either set is empty, the intersection is empty.
-		// We don't use nil since it is used in places as a sentinel.
-		return make([]string, 0)
-	}
-	result := make([]string, 0, length)
-	for _, item := range setA {
-		for _, other := range setB {
-			if other == item {
-				result = append(result, item)
-				break
-			}
-		}
-	}
-	return result
 }

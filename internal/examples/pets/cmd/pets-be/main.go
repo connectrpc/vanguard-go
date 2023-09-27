@@ -54,7 +54,7 @@ func main() {
 	}
 
 	serveMux := http.NewServeMux()
-	serveMux.Handle("/", internal.TraceHandler(mux.AsHandler()))
+	serveMux.Handle("/", internal.TraceHandler(mux))
 	serveMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(petstorev2connect.PetServiceName)))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:30304")

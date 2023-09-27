@@ -82,7 +82,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 			err := mux.RegisterServiceByName(hdlr, service, opts...)
 			require.NoError(t, err)
 		}
-		server := httptest.NewUnstartedServer(mux.AsHandler())
+		server := httptest.NewUnstartedServer(mux)
 		server.EnableHTTP2 = true
 		server.StartTLS()
 		disableCompression(server)

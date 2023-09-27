@@ -35,7 +35,7 @@ import (
 func main() {
 	server := grpc.NewServer()
 	elizav1grpc.RegisterElizaServiceServer(server, elizaImpl{})
-	mux := vanguard.Mux{
+	mux := &vanguard.Mux{
 		Protocols: []vanguard.Protocol{vanguard.ProtocolGRPC},
 		Codecs:    []string{vanguard.CodecProto},
 	}
@@ -49,7 +49,7 @@ func main() {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	err = http.Serve(l, mux.AsHandler())
+	err = http.Serve(l, mux)
 	if err != http.ErrServerClosed {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

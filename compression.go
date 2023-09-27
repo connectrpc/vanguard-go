@@ -35,6 +35,27 @@ func DefaultGzipDecompressor() connect.Decompressor {
 	return &gzip.Reader{}
 }
 
+type compressionMap map[string]*compressionPool
+
+func (m compressionMap) intersection(names []string) []string {
+	length := len(names)
+	if len(m) < length {
+		length = len(m)
+	}
+	if length == 0 {
+		// If either set is empty, the intersection is empty.
+		// We don't use nil since it is used in places as a sentinel.
+		return make([]string, 0)
+	}
+	intersection := make([]string, 0, length)
+	for _, name := range names {
+		if _, ok := m[name]; ok {
+			intersection = append(intersection, name)
+		}
+	}
+	return intersection
+}
+
 type compressionPool struct {
 	name          string
 	decompressors sync.Pool

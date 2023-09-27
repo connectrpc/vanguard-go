@@ -93,7 +93,7 @@ func TestMux_RPCxREST(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		server := httptest.NewUnstartedServer(mux.AsHandler())
+		server := httptest.NewUnstartedServer(mux)
 		server.EnableHTTP2 = true
 		server.StartTLS()
 		disableCompression(server)

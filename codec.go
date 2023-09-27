@@ -85,7 +85,9 @@ type RESTCodec interface {
 // The returned codec implements StableCodec, in addition to
 // Codec.
 func DefaultProtoCodec(res TypeResolver) Codec {
-	return &protoCodec{Resolver: res}
+	return protoCodec{
+		UnmarshalOptions: proto.UnmarshalOptions{Resolver: res},
+	}
 }
 
 // DefaultJSONCodec is the default codec factory used for the codec named
@@ -110,22 +112,22 @@ type JSONCodec struct {
 	UnmarshalOptions protojson.UnmarshalOptions
 }
 
-var _ StableCodec = (*JSONCodec)(nil)
-var _ RESTCodec = (*JSONCodec)(nil)
+var _ StableCodec = JSONCodec{}
+var _ RESTCodec = JSONCodec{}
 
-func (j *JSONCodec) Name() string {
+func (j JSONCodec) Name() string {
 	return CodecJSON
 }
 
-func (j *JSONCodec) IsBinary() bool {
+func (j JSONCodec) IsBinary() bool {
 	return false
 }
 
-func (j *JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+func (j JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return j.MarshalOptions.MarshalAppend(base, msg)
 }
 
-func (j *JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
+func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	data, err := j.MarshalOptions.MarshalAppend(base, msg)
 	if err != nil {
 		return nil, err
@@ -133,7 +135,7 @@ func (j *JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte,
 	return jsonStabilize(data)
 }
 
-func (j *JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
 	}
@@ -191,7 +193,7 @@ func (j *JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
-func (j *JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
+func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
 	}
@@ -211,11 +213,11 @@ func (j *JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protore
 	return j.Unmarshal(buf.Bytes(), msg)
 }
 
-func (j *JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+func (j JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return j.UnmarshalOptions.Unmarshal(bytes, msg)
 }
 
-func (j *JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
+func (j JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
 	if !j.MarshalOptions.UseProtoNames {
 		return field.JSONName()
 	}
@@ -226,28 +228,33 @@ func (j *JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
 	return string(field.Name())
 }
 
-type protoCodec proto.UnmarshalOptions
+type protoCodec struct {
+	proto.MarshalOptions
+	proto.UnmarshalOptions
+}
 
-var _ StableCodec = (*protoCodec)(nil)
+var _ StableCodec = protoCodec{}
 
-func (p *protoCodec) Name() string {
+func (p protoCodec) Name() string {
 	return CodecProto
 }
 
-func (p *protoCodec) IsBinary() bool {
+func (p protoCodec) IsBinary() bool {
 	return true
 }
 
-func (p *protoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+func (p protoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(base, msg)
 }
 
-func (p *protoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
-	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(base, msg)
+func (p protoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
+	opts := p.MarshalOptions
+	opts.Deterministic = true
+	return opts.MarshalAppend(base, msg)
 }
 
-func (p *protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return (*proto.UnmarshalOptions)(p).Unmarshal(bytes, msg)
+func (p protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+	return p.UnmarshalOptions.Unmarshal(bytes, msg)
 }
 
 func jsonStabilize(data []byte) ([]byte, error) {
@@ -259,4 +266,17 @@ func jsonStabilize(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+type codecMap map[string]func(TypeResolver) Codec
+
+func (m codecMap) get(name string, resolver TypeResolver) Codec {
+	if m == nil {
+		return nil
+	}
+	codecFn, ok := m[name]
+	if !ok {
+		return nil
+	}
+	return codecFn(resolver)
 }

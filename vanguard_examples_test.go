@@ -59,7 +59,7 @@ func ExampleMux_connectToGRPC() {
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewUnstartedServer(mux.AsHandler())
+	server := httptest.NewUnstartedServer(mux)
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	defer server.Close()
@@ -103,7 +103,7 @@ func ExampleMux_restToGRPC() {
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewServer(mux.AsHandler())
+	server := httptest.NewServer(mux)
 	defer server.Close()
 	client := server.Client()
 
@@ -163,7 +163,7 @@ func ExampleMux_connectToREST() {
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewServer(mux.AsHandler())
+	server := httptest.NewServer(mux)
 	defer server.Close()
 
 	// Create a connect client and call the service.

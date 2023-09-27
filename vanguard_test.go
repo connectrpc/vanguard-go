@@ -525,7 +525,7 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 							require.NoError(t, err)
 							err = mux.RegisterServiceByName(hdlr, testv1connect.ContentServiceName, svcOpts...)
 							require.NoError(t, err)
-							server := httptest.NewUnstartedServer(mux.AsHandler())
+							server := httptest.NewUnstartedServer(mux)
 							server.EnableHTTP2 = true
 							server.StartTLS()
 							disableCompression(server)
@@ -572,7 +572,7 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	muxWithSetting := &Mux{MaxGetURLBytes: 512, Compressors: []string{}}
 	err := muxWithSetting.RegisterServiceByName(hdlr, testv1connect.LibraryServiceName)
 	require.NoError(t, err)
-	serverWithSetting := httptest.NewServer(muxWithSetting.AsHandler())
+	serverWithSetting := httptest.NewServer(muxWithSetting)
 	disableCompression(serverWithSetting)
 	t.Cleanup(serverWithSetting.Close)
 
@@ -584,7 +584,7 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 		WithNoCompression(),
 	)
 	require.NoError(t, err)
-	serverWithSvcOption := httptest.NewServer(muxWithSvcOption.AsHandler())
+	serverWithSvcOption := httptest.NewServer(muxWithSvcOption)
 	disableCompression(serverWithSvcOption)
 	t.Cleanup(serverWithSvcOption.Close)
 
@@ -767,12 +767,11 @@ func TestMux_MessageHooks(t *testing.T) {
 			HooksCallback: makeHooks(serverCase.reqHook, serverCase.respHook),
 		}
 		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
-		handler := mux.AsHandler()
 		// propagate test name into context so that request and response hooks can access it
 		setContextHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
 			testName := request.Header.Get("Test")
 			ctx := context.WithValue(request.Context(), testCaseNameContextKey{}, testName)
-			handler.ServeHTTP(respWriter, request.WithContext(ctx))
+			mux.ServeHTTP(respWriter, request.WithContext(ctx))
 		})
 		// Use HTTP/2 so we can test a bidi stream.
 		server := httptest.NewUnstartedServer(setContextHandler)
@@ -1198,12 +1197,11 @@ func TestMux_HookOrder(t *testing.T) {
 		}
 		mux := &Mux{HooksCallback: callback}
 		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
-		handler := mux.AsHandler()
 		// propagate test name into context so that hooks can access it
 		setContextHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
 			testName := request.Header.Get("Test")
 			ctx := context.WithValue(request.Context(), testCaseNameContextKey{}, testName)
-			handler.ServeHTTP(respWriter, request.WithContext(ctx))
+			mux.ServeHTTP(respWriter, request.WithContext(ctx))
 		})
 		// Use HTTP/2 so we can test a bidi stream.
 		server := httptest.NewUnstartedServer(setContextHandler)
@@ -1639,7 +1637,7 @@ func TestRuleSelector(t *testing.T) {
 	})
 	defer interceptor.del(t)
 
-	mux.AsHandler().ServeHTTP(rsp, req)
+	mux.ServeHTTP(rsp, req)
 	result := rsp.Result()
 	defer result.Body.Close()
 
