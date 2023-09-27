@@ -67,8 +67,8 @@ func TestGRPCEncodeTimeoutQuick(t *testing.T) {
 	t.Parallel()
 	// Ensure that the error case is actually unreachable.
 	encode := func(d time.Duration) bool {
-		_, ok := grpcEncodeTimeout(d)
-		return ok
+		v := grpcEncodeTimeout(d)
+		return v != ""
 	}
 	if err := quick.Check(encode, nil); err != nil {
 		t.Error(err)
@@ -82,7 +82,7 @@ func TestGRPCPercentEncodingQuick(t *testing.T) {
 			return true
 		}
 		encoded := grpcPercentEncode(input)
-		decoded := grpcPercentDecode(encoded)
+		decoded, _ := grpcPercentDecode(encoded)
 		return decoded == input
 	}
 	if err := quick.Check(roundtrip, nil /* config */); err != nil {
@@ -104,7 +104,7 @@ func TestGRPCPercentEncoding(t *testing.T) {
 			assert.True(t, utf8.ValidString(input), "input invalid UTF-8")
 			encoded := grpcPercentEncode(input)
 			t.Logf("%q encoded as %q", input, encoded)
-			decoded := grpcPercentDecode(encoded)
+			decoded, _ := grpcPercentDecode(encoded)
 			assert.Equal(t, decoded, input)
 		})
 	}
@@ -137,13 +137,10 @@ func TestGRPCDecodeTimeout(t *testing.T) {
 
 func TestGRPCEncodeTimeout(t *testing.T) {
 	t.Parallel()
-	timeout, ok := grpcEncodeTimeout(time.Hour + time.Second)
-	assert.True(t, ok)
+	timeout := grpcEncodeTimeout(time.Hour + time.Second)
 	assert.Equal(t, timeout, "3601000m")
-	timeout, ok = grpcEncodeTimeout(time.Duration(math.MaxInt64))
-	assert.True(t, ok)
+	timeout = grpcEncodeTimeout(time.Duration(math.MaxInt64))
 	assert.Equal(t, timeout, "2562047H")
-	timeout, ok = grpcEncodeTimeout(-1 * time.Hour)
-	assert.True(t, ok)
+	timeout = grpcEncodeTimeout(-1 * time.Hour)
 	assert.Equal(t, timeout, "0n")
 }
