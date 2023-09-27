@@ -181,8 +181,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 		for i, part := range values {
 			segmentIndex := variable.start + i
 			if segmentIndex >= len(segments) {
-				//nolint:makezero
-				segments = append(segments, part)
+				segments = append(segments, part) // nozero
 				continue
 			}
 

@@ -29,24 +29,21 @@ type bufferPool struct {
 }
 
 func newBufferPool() *bufferPool {
-	return &bufferPool{
-		Pool: sync.Pool{
-			New: func() any {
-				return bytes.NewBuffer(make([]byte, 0, initialBufferSize))
-			},
-		},
-	}
+	return &bufferPool{}
 }
 
 func (b *bufferPool) Get() *bytes.Buffer {
-	return b.Pool.Get().(*bytes.Buffer) //nolint:forcetypeassert
+	if buffer, ok := b.Pool.Get().(*bytes.Buffer); ok {
+		buffer.Reset()
+		return buffer
+	}
+	return bytes.NewBuffer(make([]byte, 0, initialBufferSize))
 }
 
 func (b *bufferPool) Put(buffer *bytes.Buffer) {
 	if buffer.Cap() > maxRecycleBufferSize {
 		return
 	}
-	buffer.Reset()
 	b.Pool.Put(buffer)
 }
 

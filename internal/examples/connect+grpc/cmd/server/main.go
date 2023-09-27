@@ -33,13 +33,13 @@ import (
 )
 
 func main() {
-	svr := grpc.NewServer()
-	elizav1grpc.RegisterElizaServiceServer(svr, elizaImpl{})
+	server := grpc.NewServer()
+	elizav1grpc.RegisterElizaServiceServer(server, elizaImpl{})
 	mux := vanguard.Mux{
 		Protocols: []vanguard.Protocol{vanguard.ProtocolGRPC},
 		Codecs:    []string{vanguard.CodecProto},
 	}
-	err := mux.RegisterServiceByName(svr, "connectrpc.eliza.v1.ElizaService")
+	err := mux.RegisterServiceByName(server, "connectrpc.eliza.v1.ElizaService")
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

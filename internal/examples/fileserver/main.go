@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:forbidigo,gosec,gochecknoglobals
 package main
 
 import (
@@ -65,14 +64,14 @@ var indexHTMLTemplate = template.Must(template.New("http").Parse(`
   <title>{{.Title}}</title>
 </head>
 <body>
-<pre>
-{{- if ne .Title "."}}
-<a href="/">..</a>
-{{- end}}
-{{- range $path, $name := .Files}}
-<a href="/{{$path}}">{{$name}}</a>
-{{- end}}
-</pre>
+  <pre>
+  {{- if ne .Title "."}}
+  <a href="/">..</a>
+  {{- end}}
+  {{- range $path, $name := .Files}}
+  <a href="/{{$path}}">{{$name}}</a>
+  {{- end}}
+  </pre>
 </body>
 </html>
 `))

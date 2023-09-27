@@ -208,26 +208,23 @@ func BenchmarkTrieMatch(b *testing.B) {
 	assert.Len(b, vars, 10)
 }
 
-//nolint:gochecknoglobals
-var routes = []string{
-	"/foo/bar/baz/buzz",
-	"/foo/bar/{name}",
-	"/foo/bar/{name}/baz/{child}",
-	"/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
-	"/foo/bar/*/{thing.id}/{cat=**}",
-	"/foo/bar/*/{thing.id}/{cat=**}:do",
-	"/foo/bar/*/{thing.id}/{cat=**}:cancel",
-	"/foo/bob/{book_id={author}/{isbn}/*}/details",
-	"/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
-	"/foo%2Fbar/%2A/%2A%2a/{starstar=%2A%2a/**}:%2c",
-	"/trailing/**:slash",
-	"/verb",
-}
-
 func initTrie(tb testing.TB) *routeTrie {
 	tb.Helper()
 	var trie routeTrie
-	for _, route := range routes {
+	for _, route := range []string{
+		"/foo/bar/baz/buzz",
+		"/foo/bar/{name}",
+		"/foo/bar/{name}/baz/{child}",
+		"/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
+		"/foo/bar/*/{thing.id}/{cat=**}",
+		"/foo/bar/*/{thing.id}/{cat=**}:do",
+		"/foo/bar/*/{thing.id}/{cat=**}:cancel",
+		"/foo/bob/{book_id={author}/{isbn}/*}/details",
+		"/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
+		"/foo%2Fbar/%2A/%2A%2a/{starstar=%2A%2a/**}:%2c",
+		"/trailing/**:slash",
+		"/verb",
+	} {
 		segments, variables, err := parsePathTemplate(route)
 		require.NoError(tb, err)
 

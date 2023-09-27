@@ -358,7 +358,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 
 	vals.Set("encoding", op.server.codec.Name())
 	buf := op.bufferPool.Get()
-	stableMarshaler := op.server.codec.(StableCodec) //nolint:forcetypeassert,errcheck // c.useGet called above already checked this
+	stableMarshaler, _ := op.server.codec.(StableCodec) // c.useGet called above already checked this
 	data, err := stableMarshaler.MarshalAppendStable(buf.Bytes(), msg)
 	if err != nil {
 		op.bufferPool.Put(buf)
@@ -649,9 +649,9 @@ type connectWireError struct {
 	Details []connectWireDetail `json:"details,omitempty"`
 }
 
-func (err *connectWireError) toConnectError() *connect.Error {
-	cerr := connect.NewError(err.Code, errors.New(err.Message))
-	for _, detail := range err.Details {
+func (e *connectWireError) toConnectError() *connect.Error {
+	cerr := connect.NewError(e.Code, errors.New(e.Message))
+	for _, detail := range e.Details {
 		detailData, err := base64.RawStdEncoding.DecodeString(detail.Value)
 		if err != nil {
 			// seems a waste to fail or take other action here...

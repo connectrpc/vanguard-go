@@ -377,12 +377,12 @@ type responseEnd struct {
 
 type headerKeys map[string]struct{}
 
-func (keys headerKeys) add(k string) {
-	keys[textproto.CanonicalMIMEHeaderKey(k)] = struct{}{}
+func (k headerKeys) add(key string) {
+	k[textproto.CanonicalMIMEHeaderKey(key)] = struct{}{}
 }
 
-func (keys headerKeys) contains(k string) bool {
-	_, contains := keys[textproto.CanonicalMIMEHeaderKey(k)]
+func (k headerKeys) contains(key string) bool {
+	_, contains := k[textproto.CanonicalMIMEHeaderKey(key)]
 	return contains
 }
 

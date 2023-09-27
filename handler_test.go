@@ -408,7 +408,6 @@ func TestHandler_Errors(t *testing.T) {
 	}
 }
 
-//nolint:dupl // some of these testStream literals are the same as in vanguard_rpcxrpc_test cases, but we don't need to share
 func TestHandler_PassThrough(t *testing.T) {
 	t.Parallel()
 	// These cases don't do any transformation and just pass through to the
@@ -1056,7 +1055,7 @@ func checkStageRead(t *testing.T, msg *message, compressed bool) {
 func checkStageDecoded(t *testing.T, msg *message) {
 	t.Helper()
 	require.Equal(t, stageDecoded, msg.stage)
-	require.Equal(t, testDataString, msg.msg.(*wrapperspb.StringValue).Value) //nolint:forcetypeassert
+	require.Equal(t, testDataString, msg.msg.(*wrapperspb.StringValue).Value)
 	// Should not be possible to go backwards.
 	require.Error(t, msg.advanceToStage(nil, stageRead))
 	require.Error(t, msg.advanceToStage(nil, stageEmpty))
@@ -1094,13 +1093,13 @@ func (f *fakeCodec) Name() string {
 
 func (f *fakeCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
 	f.marshalCalls++
-	val := msg.(*wrapperspb.StringValue).Value //nolint:forcetypeassert
+	val := msg.(*wrapperspb.StringValue).Value
 	return append(b, ([]byte)(val)...), nil
 }
 
 func (f *fakeCodec) Unmarshal(b []byte, msg proto.Message) error {
 	f.unmarshalCalls++
-	msg.(*wrapperspb.StringValue).Value = string(b) //nolint:forcetypeassert
+	msg.(*wrapperspb.StringValue).Value = string(b)
 	return nil
 }
 

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:gocritic
 package vanguard_test
 
 import (
@@ -60,13 +59,13 @@ func ExampleMux_connectToGRPC() {
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	svr := httptest.NewUnstartedServer(mux.AsHandler())
-	svr.EnableHTTP2 = true
-	svr.StartTLS()
-	defer svr.Close()
+	server := httptest.NewUnstartedServer(mux.AsHandler())
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
 
 	// Create a connect client and call the service.
-	client := testv1connect.NewLibraryServiceClient(svr.Client(), svr.URL)
+	client := testv1connect.NewLibraryServiceClient(server.Client(), server.URL)
 
 	// Call the service using Connect translated by the middleware to
 	// gRPC.
@@ -104,9 +103,9 @@ func ExampleMux_restToGRPC() {
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	svr := httptest.NewServer(mux.AsHandler())
-	defer svr.Close()
-	client := svr.Client()
+	server := httptest.NewServer(mux.AsHandler())
+	defer server.Close()
+	client := server.Client()
 
 	book := &testv1.Book{
 		Title:       "2001: A Space Odyssey",
@@ -121,7 +120,7 @@ func ExampleMux_restToGRPC() {
 	// Create the POST request.
 	req, _ := http.NewRequestWithContext(
 		context.Background(), http.MethodPost,
-		svr.URL+"/v1/shelves/top/books",
+		server.URL+"/v1/shelves/top/books",
 		bytes.NewReader(body),
 	)
 	req.Header.Set("Content-Type", "application/json")
@@ -164,11 +163,11 @@ func ExampleMux_connectToREST() {
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	svr := httptest.NewServer(mux.AsHandler())
-	defer svr.Close()
+	server := httptest.NewServer(mux.AsHandler())
+	defer server.Close()
 
 	// Create a connect client and call the service.
-	client := testv1connect.NewLibraryServiceClient(svr.Client(), svr.URL)
+	client := testv1connect.NewLibraryServiceClient(server.Client(), server.URL)
 	rsp, err := client.GetBook(
 		context.Background(),
 		connect.NewRequest(&testv1.GetBookRequest{

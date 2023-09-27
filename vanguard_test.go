@@ -42,7 +42,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
 func TestMux_BufferTooLargeFails(t *testing.T) {
 	t.Parallel()
 
@@ -590,16 +589,16 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	t.Cleanup(serverWithSvcOption.Close)
 
 	testCases := []struct {
-		name string
-		svr  *httptest.Server
+		name   string
+		server *httptest.Server
 	}{
 		{
-			name: "with_mux_setting",
-			svr:  serverWithSetting,
+			name:   "with_mux_setting",
+			server: serverWithSetting,
 		},
 		{
-			name: "with_svc_option",
-			svr:  serverWithSvcOption,
+			name:   "with_svc_option",
+			server: serverWithSvcOption,
 		},
 	}
 
@@ -623,8 +622,8 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			defer interceptor.del(t)
 
 			client := testv1connect.NewLibraryServiceClient(
-				testCase.svr.Client(),
-				testCase.svr.URL,
+				testCase.server.Client(),
+				testCase.server.URL,
 				connect.WithHTTPGet(),
 				connect.WithHTTPGetMaxURLSize(512, false),
 				connect.WithSendGzip(),
@@ -653,7 +652,6 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	}
 }
 
-//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
 func TestMux_MessageHooks(t *testing.T) {
 	t.Parallel()
 	// NB: These cases are identical to the pass-through cases, but should
@@ -743,11 +741,11 @@ func TestMux_MessageHooks(t *testing.T) {
 		}
 	}
 
-	svrCases := []struct {
+	serverCases := []struct {
 		name     string
 		reqHook  bool
 		respHook bool
-		svr      *httptest.Server
+		server   *httptest.Server
 	}{
 		{
 			name:    "request_hook",
@@ -763,10 +761,10 @@ func TestMux_MessageHooks(t *testing.T) {
 			respHook: true,
 		},
 	}
-	for i := range svrCases {
-		svrCase := &svrCases[i]
+	for i := range serverCases {
+		serverCase := &serverCases[i]
 		mux := &Mux{
-			HooksCallback: makeHooks(svrCase.reqHook, svrCase.respHook),
+			HooksCallback: makeHooks(serverCase.reqHook, serverCase.respHook),
 		}
 		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
 		handler := mux.AsHandler()
@@ -782,7 +780,7 @@ func TestMux_MessageHooks(t *testing.T) {
 		server.StartTLS()
 		t.Cleanup(server.Close)
 
-		svrCase.svr = server
+		serverCase.server = server
 	}
 
 	ctx := context.Background()
@@ -1068,18 +1066,18 @@ func TestMux_MessageHooks(t *testing.T) {
 								testReq := testReq
 								t.Run(testReq.name, func(t *testing.T) {
 									t.Parallel()
-									for _, svrCase := range svrCases {
-										svrCase := svrCase
-										t.Run(svrCase.name, func(t *testing.T) {
+									for _, serverCase := range serverCases {
+										serverCase := serverCase
+										t.Run(serverCase.name, func(t *testing.T) {
 											clientOptions := make([]connect.ClientOption, 0, 4)
 											clientOptions = append(clientOptions, protocolCase.opts...)
 											clientOptions = append(clientOptions, encodingCase.opts...)
 											clientOptions = append(clientOptions, compressionCase.opts...)
-											client := testv1connect.NewContentServiceClient(svrCase.svr.Client(), svrCase.svr.URL, clientOptions...)
+											client := testv1connect.NewContentServiceClient(serverCase.server.Client(), serverCase.server.URL, clientOptions...)
 
 											runRPCTestCase(t, &interceptor, client, testReq.invoke, testReq.stream)
 
-											if svrCase.reqHook {
+											if serverCase.reqHook {
 												var reqs []proto.Message
 												for _, msg := range testReq.stream.msgs {
 													if msg.in != nil {
@@ -1088,7 +1086,7 @@ func TestMux_MessageHooks(t *testing.T) {
 												}
 												checkHookResults(t, reqs, &reqMsgs)
 											}
-											if svrCase.respHook {
+											if serverCase.respHook {
 												var resps []proto.Message
 												for _, msg := range testReq.stream.msgs {
 													if msg.out != nil && msg.out.msg != nil {
@@ -1109,7 +1107,6 @@ func TestMux_MessageHooks(t *testing.T) {
 	}
 }
 
-//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
 func TestMux_HookOrder(t *testing.T) {
 	t.Parallel()
 
@@ -1123,7 +1120,7 @@ func TestMux_HookOrder(t *testing.T) {
 	errorCases := []struct {
 		name    string
 		failure hookKind
-		svr     *httptest.Server
+		server  *httptest.Server
 	}{
 		{
 			name: "normal",
@@ -1214,7 +1211,7 @@ func TestMux_HookOrder(t *testing.T) {
 		server.StartTLS()
 		t.Cleanup(server.Close)
 
-		errorCases[i].svr = server
+		errorCases[i].server = server
 	}
 
 	ctx := context.Background()
@@ -1510,7 +1507,7 @@ func TestMux_HookOrder(t *testing.T) {
 				testReq := testReq
 				t.Run(testReq.name, func(t *testing.T) {
 					t.Parallel()
-					client := testv1connect.NewContentServiceClient(errorCase.svr.Client(), errorCase.svr.URL)
+					client := testv1connect.NewContentServiceClient(errorCase.server.Client(), errorCase.server.URL)
 
 					awaitServer := interceptor.set(t, testReq.stream)
 					defer interceptor.del(t)
@@ -1723,38 +1720,38 @@ type ttStream struct {
 	done    chan struct{}
 }
 
-func (str *ttStream) start() {
+func (s *ttStream) start() {
 	// Called from the interceptor when it starts handling the stream
-	str.started.Store(true)
+	s.started.Store(true)
 }
 
-func (str *ttStream) finish(result error) {
+func (s *ttStream) finish(result error) {
 	// Called from the interceptor when it finishes handling the stream
-	str.result = result
-	close(str.done)
+	s.result = result
+	close(s.done)
 }
 
-func (str *ttStream) await(t *testing.T, expectServerDone bool) (svrInvoked bool, svrErr error) {
+func (s *ttStream) await(t *testing.T, expectServerDone bool) (serverInvoked bool, serverErr error) {
 	t.Helper()
 	// Called from test code to make sure server handler has completed.
 	// Returns any error that the interceptor finished with.
 	// Should only be called after the RPC appears to have completed in
 	// the test client.
-	if !str.started.Load() {
+	if !s.started.Load() {
 		// Interceptor never started, so nothing to wait for.
 		return false, nil
 	}
 	if expectServerDone {
 		select {
-		case <-str.done:
-			return true, str.result
+		case <-s.done:
+			return true, s.result
 		default:
 			t.Fatal("expecting server to already be done but it's not")
 		}
 	}
 	select {
-	case <-str.done:
-		return true, str.result
+	case <-s.done:
+		return true, s.result
 	case <-time.After(3 * time.Second):
 		return true, fmt.Errorf("timeout: interceptor still did not finish after 3 seconds")
 	}
@@ -1764,8 +1761,8 @@ type testInterceptor struct {
 	sync.Map
 }
 
-func (ti *testInterceptor) get(testName string) (*ttStream, bool) {
-	val, ok := ti.Load(testName)
+func (i *testInterceptor) get(testName string) (*ttStream, bool) {
+	val, ok := i.Load(testName)
 	if !ok {
 		return nil, false
 	}
@@ -1773,26 +1770,26 @@ func (ti *testInterceptor) get(testName string) (*ttStream, bool) {
 	return stream, ok
 }
 
-func (ti *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) (bool, error) {
+func (i *testInterceptor) set(t *testing.T, stream testStream) func(*testing.T, bool) (bool, error) {
 	t.Helper()
 	str := &ttStream{
 		T:          t,
 		testStream: stream,
 		done:       make(chan struct{}),
 	}
-	ti.Store(t.Name(), str)
+	i.Store(t.Name(), str)
 	// The returned function can be used by test code to await server completion.
 	// (Useful in the event that middleware cancels the operation early, so client
 	// could see a completed response while server still running concurrently.)
 	return str.await
 }
 
-func (ti *testInterceptor) del(t *testing.T) {
+func (i *testInterceptor) del(t *testing.T) {
 	t.Helper()
-	ti.Delete(t.Name())
+	i.Delete(t.Name())
 }
 
-func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+func (i *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	return func(
 		ctx context.Context,
 		req connect.AnyRequest,
@@ -1801,7 +1798,7 @@ func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if val == "" {
 			return next(ctx, req)
 		}
-		stream, ok := ti.get(val)
+		stream, ok := i.get(val)
 		if !ok {
 			return nil, fmt.Errorf("invalid testCase header: %s", val)
 		}
@@ -1870,11 +1867,11 @@ func (ti *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 	}
 }
 
-func (ti *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+func (i *testInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return next
 }
 
-func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
@@ -1883,7 +1880,7 @@ func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFun
 		if val == "" {
 			return next(ctx, conn)
 		}
-		stream, ok := ti.get(val)
+		stream, ok := i.get(val)
 		if !ok {
 			return fmt.Errorf("invalid testCase header: %s", val)
 		}
@@ -1948,7 +1945,7 @@ func (ti *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFun
 	}
 }
 
-func (ti *testInterceptor) restUnaryHandler(
+func (i *testInterceptor) restUnaryHandler(
 	codec Codec, comp *compressionPool,
 ) http.HandlerFunc {
 	codecNames := map[string]string{
@@ -2014,8 +2011,7 @@ func (ti *testInterceptor) restUnaryHandler(
 		// Write error, if any.
 		if out.err != nil {
 			httpWriteError(rsp, out.err)
-			//nolint:nilerr
-			return nil
+			return nil // ignore
 		}
 
 		// Write body.
@@ -2058,7 +2054,7 @@ func (ti *testInterceptor) restUnaryHandler(
 			http.Error(rsp, "missing test header", http.StatusInternalServerError)
 			return
 		}
-		stream, ok := ti.get(val)
+		stream, ok := i.get(val)
 		if !ok {
 			http.Error(rsp, "invalid test header", http.StatusInternalServerError)
 			return
@@ -2105,8 +2101,8 @@ func getDecompressor(t *testing.T, name string) connect.Decompressor {
 }
 
 type testServer struct {
-	name string
-	svr  *httptest.Server
+	name   string
+	server *httptest.Server
 }
 
 func appendClientProtocolOptions(t *testing.T, opts []connect.ClientOption, protocol Protocol) []connect.ClientOption {
@@ -2197,7 +2193,6 @@ func outputFromUnary[Req, Resp any](
 		return headers, nil, nil, err
 	}
 	msg := any(resp.Msg)
-	//nolint:forcetypeassert
 	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
 }
 
@@ -2222,7 +2217,6 @@ func outputFromServerStream[Req, Resp any](
 	var msgs []proto.Message
 	for str.Receive() {
 		msg := any(str.Msg())
-		//nolint:forcetypeassert
 		msgs = append(msgs, msg.(proto.Message))
 	}
 	return str.ResponseHeader(), msgs, str.ResponseTrailer(), str.Err()
@@ -2239,7 +2233,6 @@ func outputFromClientStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
-		//nolint:forcetypeassert
 		if str.Send(any(msg).(*Req)) != nil {
 			// we don't need this error; we'll get the error below
 			// since str.CloseAndReceive returns the actual RPC errors
@@ -2255,7 +2248,6 @@ func outputFromClientStream[Req, Resp any](
 		return headers, nil, nil, err
 	}
 	msg := any(resp.Msg)
-	//nolint:forcetypeassert
 	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
 }
 
@@ -2284,7 +2276,6 @@ func outputFromBidiStream[Req, Resp any](
 				return
 			}
 			msg := any(resp)
-			//nolint:forcetypeassert
 			msgs = append(msgs, msg.(proto.Message))
 		}
 	}()
@@ -2293,7 +2284,6 @@ func outputFromBidiStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
-		//nolint:forcetypeassert
 		if str.Send(any(msg).(*Req)) != nil {
 			// we don't need this error; we'll get the error from above
 			// goroutine since str.Receive returns the actual RPC errors
@@ -2403,7 +2393,7 @@ func runRPCTestCase[Client any](
 			break
 		}
 	}
-	svrInvoked, svrErr := awaitServer(t, expectServerDone)
+	serverInvoked, serverErr := awaitServer(t, expectServerDone)
 	// Verify the error received by the client.
 	receivedErr := expectedErr
 	if stream.err != nil {
@@ -2417,19 +2407,19 @@ func runRPCTestCase[Client any](
 	// Also check the error observed by the server.
 	switch {
 	case expectedErr == nil:
-		assert.NoError(t, svrErr)
+		assert.NoError(t, serverErr)
 	case expectServerCancel:
-		if svrInvoked && svrErr != nil {
+		if serverInvoked && serverErr != nil {
 			// We expect the server to either have seen the same error or it later
 			// observed a cancel error (since the middleware cancels the request
 			// after it aborts the operation).
-			if connect.CodeOf(svrErr) != connect.CodeOf(expectedErr) && !errors.Is(svrErr, context.Canceled) {
-				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(svrErr))
+			if connect.CodeOf(serverErr) != connect.CodeOf(expectedErr) && !errors.Is(serverErr, context.Canceled) {
+				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(serverErr))
 			}
 		}
 	default:
-		assert.Error(t, svrErr)
-		assert.Equal(t, expectedErr.Code(), connect.CodeOf(svrErr))
+		assert.Error(t, serverErr)
+		assert.Equal(t, expectedErr.Code(), connect.CodeOf(serverErr))
 	}
 	assert.Subset(t, headers, stream.rspHeader)
 	if stream.err == nil {
@@ -2454,8 +2444,8 @@ func runRPCTestCase[Client any](
 	}
 }
 
-func disableCompression(svr *httptest.Server) {
-	transport := svr.Client().Transport.(*http.Transport) //nolint:errcheck,forcetypeassert
+func disableCompression(server *httptest.Server) {
+	transport, _ := server.Client().Transport.(*http.Transport)
 	transport.DisableCompression = true
 }
 
@@ -2564,7 +2554,8 @@ func (h *testHooks) getEvents(t *testing.T) (Operation, []hookKind) {
 	for op, kinds := range ops {
 		return op, kinds
 	}
-	panic("should not be able to get here") //nolint:forbidigo
+	t.Fatal("unreachable")
+	return nil, nil
 }
 
 func newConnectError(code connect.Code, msg string) *connect.Error {

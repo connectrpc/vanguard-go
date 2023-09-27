@@ -20,46 +20,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
-)
-
-const (
-	grpcTimeoutMaxHours = math.MaxInt64 / int64(time.Hour)
-	grpcMaxTimeoutChars = 8
-)
-
-var (
-	//nolint:gochecknoglobals
-	grpcTimeoutUnits = []struct {
-		size time.Duration
-		char byte
-	}{
-		{time.Nanosecond, 'n'},
-		{time.Microsecond, 'u'},
-		{time.Millisecond, 'm'},
-		{time.Second, 'S'},
-		{time.Minute, 'M'},
-		{time.Hour, 'H'},
-	}
-	//nolint:gochecknoglobals
-	grpcTimeoutUnitLookup = func() map[byte]time.Duration {
-		m := make(map[byte]time.Duration)
-		for _, pair := range grpcTimeoutUnits {
-			m[pair.char] = pair.size
-		}
-		return m
-	}()
 )
 
 // grpcClientProtocol implements the gRPC protocol for
@@ -387,10 +357,8 @@ func grpcAddRequestMeta(contentTypePrefix string, meta requestMeta, headers http
 		headers.Set("Grpc-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
 	}
 	if meta.hasTimeout {
-		timeoutStr, ok := grpcEncodeTimeout(meta.timeout)
-		if ok {
-			headers.Set("Grpc-Timeout", timeoutStr)
-		}
+		timeoutStr := grpcEncodeTimeout(meta.timeout)
+		headers.Set("Grpc-Timeout", timeoutStr)
 	}
 }
 
@@ -460,63 +428,67 @@ func grpcStatusFromError(err *connect.Error) *status.Status {
 //	https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#responses
 //	https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
 func grpcPercentEncode(msg string) string {
+	var hexCount int
 	for i := 0; i < len(msg); i++ {
-		// Characters that need to be escaped are defined in gRPC's HTTP/2 spec.
-		// They're different from the generic set defined in RFC 3986.
-		if c := msg[i]; c < ' ' || c > '~' || c == '%' {
-			return grpcPercentEncodeSlow(msg, i)
+		if grpcShouldEscape(msg[i]) {
+			hexCount++
 		}
 	}
-	return msg
-}
-
-// msg needs some percent-escaping. Bytes before offset don't require
-// percent-encoding, so they can be copied to the output as-is.
-func grpcPercentEncodeSlow(msg string, offset int) string {
+	if hexCount == 0 {
+		return msg
+	}
+	// We need to escape some characters, so we'll need to allocate a new string.
 	var out strings.Builder
-	out.Grow(2 * len(msg))
-	out.WriteString(msg[:offset])
-	for i := offset; i < len(msg); i++ {
-		c := msg[i]
-		if c < ' ' || c > '~' || c == '%' {
-			_, _ = fmt.Fprintf(&out, "%%%02X", c)
-			continue
+	out.Grow(len(msg) + 2*hexCount)
+	for i := 0; i < len(msg); i++ {
+		switch char := msg[i]; {
+		case grpcShouldEscape(char):
+			out.WriteByte('%')
+			out.WriteByte(upperhex[char>>4])
+			out.WriteByte(upperhex[char&15])
+		default:
+			out.WriteByte(char)
 		}
-		out.WriteByte(c)
 	}
 	return out.String()
 }
 
-func grpcPercentDecode(encoded string) string {
-	for i := 0; i < len(encoded); i++ {
-		if c := encoded[i]; c == '%' && i+2 < len(encoded) {
-			return grpcPercentDecodeSlow(encoded, i)
+func grpcPercentDecode(input string) (string, error) {
+	percentCount := 0
+	for i := 0; i < len(input); {
+		switch input[i] {
+		case '%':
+			percentCount++
+			if err := validateHex(input[i:]); err != nil {
+				return "", err
+			}
+			i += 3
+		default:
+			i++
 		}
 	}
-	return encoded
+	if percentCount == 0 {
+		return input, nil
+	}
+	// We need to unescape some characters, so we'll need to allocate a new string.
+	var out strings.Builder
+	out.Grow(len(input) - 2*percentCount)
+	for i := 0; i < len(input); i++ {
+		switch input[i] {
+		case '%':
+			out.WriteByte(unhex(input[i+1])<<4 | unhex(input[i+2]))
+			i += 2
+		default:
+			out.WriteByte(input[i])
+		}
+	}
+	return out.String(), nil
 }
 
-// Similar to percentEncodeSlow: encoded is percent-encoded, and needs to be
-// decoded byte-by-byte starting at offset.
-func grpcPercentDecodeSlow(encoded string, offset int) string {
-	var out strings.Builder
-	out.Grow(len(encoded))
-	out.WriteString(encoded[:offset])
-	for i := offset; i < len(encoded); i++ {
-		c := encoded[i]
-		if c != '%' || i+2 >= len(encoded) {
-			out.WriteByte(c)
-			continue
-		}
-		parsed, err := strconv.ParseUint(encoded[i+1:i+3], 16 /* hex */, 8 /* bitsize */)
-		if err != nil {
-			out.WriteRune(utf8.RuneError)
-		} else {
-			out.WriteByte(byte(parsed))
-		}
-		i += 2
-	}
-	return out.String()
+// Characters that need to be escaped are defined in gRPC's HTTP/2 spec.
+// They're different from the generic set defined in RFC 3986.
+func grpcShouldEscape(char byte) bool {
+	return char < ' ' || char > '~' || char == '%'
 }
 
 // The gRPC wire protocol specifies that errors should be serialized using the
@@ -554,7 +526,13 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 	}
 
 	if len(grpcDetails) == 0 {
-		message := grpcPercentDecode(grpcMsg)
+		message, err := grpcPercentDecode(grpcMsg)
+		if err != nil {
+			return connect.NewError(
+				connect.CodeInternal,
+				protocolError("invalid grpc-message trailer: %w", err),
+			)
+		}
 		return connect.NewWireError(connect.Code(code), errors.New(message))
 	}
 
@@ -604,8 +582,8 @@ func grpcDecodeTimeout(timeout string) (time.Duration, error) {
 	if timeout == "" {
 		return 0, errNoTimeout
 	}
-	unit, ok := grpcTimeoutUnitLookup[timeout[len(timeout)-1]]
-	if !ok {
+	unit := grpcTimeoutUnitLookup(timeout[len(timeout)-1])
+	if unit == 0 {
 		return 0, protocolError("timeout %q has invalid unit", timeout)
 	}
 	num, err := strconv.ParseInt(timeout[:len(timeout)-1], 10 /* base */, 64 /* bitsize */)
@@ -615,6 +593,7 @@ func grpcDecodeTimeout(timeout string) (time.Duration, error) {
 	if num > 99999999 { // timeout must be ASCII string of at most 8 digits
 		return 0, protocolError("timeout %q is too long", timeout)
 	}
+	const grpcTimeoutMaxHours = 8
 	if unit == time.Hour && num > grpcTimeoutMaxHours {
 		// Timeout is effectively unbounded, so ignore it. The grpc-go
 		// implementation does the same thing.
@@ -623,17 +602,48 @@ func grpcDecodeTimeout(timeout string) (time.Duration, error) {
 	return time.Duration(num) * unit, nil
 }
 
-func grpcEncodeTimeout(timeout time.Duration) (string, bool) {
+func grpcEncodeTimeout(timeout time.Duration) string {
 	if timeout <= 0 {
-		return "0n", true
+		return "0n"
 	}
-	for _, pair := range grpcTimeoutUnits {
-		digits := strconv.FormatInt(int64(timeout/pair.size), 10 /* base */)
-		if len(digits) < grpcMaxTimeoutChars {
-			return digits + string(pair.char), true
-		}
+	const grpcTimeoutMaxValue = 1e8
+	var (
+		size time.Duration
+		unit byte
+	)
+	switch {
+	case timeout < time.Nanosecond*grpcTimeoutMaxValue:
+		size, unit = time.Nanosecond, 'n'
+	case timeout < time.Microsecond*grpcTimeoutMaxValue:
+		size, unit = time.Microsecond, 'u'
+	case timeout < time.Millisecond*grpcTimeoutMaxValue:
+		size, unit = time.Millisecond, 'm'
+	case timeout < time.Second*grpcTimeoutMaxValue:
+		size, unit = time.Second, 'S'
+	case timeout < time.Minute*grpcTimeoutMaxValue:
+		size, unit = time.Minute, 'M'
+	default:
+		size, unit = time.Hour, 'H'
 	}
-	// The max time.Duration is smaller than the maximum expressible gRPC
-	// timeout, so we can't reach this case.
-	return "", false
+	value := timeout / size
+	return strconv.FormatInt(int64(value), 10 /* base */) + string(unit)
+}
+
+func grpcTimeoutUnitLookup(unit byte) time.Duration {
+	switch unit {
+	case 'n':
+		return time.Nanosecond
+	case 'u':
+		return time.Microsecond
+	case 'm':
+		return time.Millisecond
+	case 'S':
+		return time.Second
+	case 'M':
+		return time.Minute
+	case 'H':
+		return time.Hour
+	default:
+		return 0
+	}
 }

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:goconst
 package vanguard
 
 import (
@@ -275,7 +274,6 @@ func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 }
 
 func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Value) ([]byte, error) {
-	//nolint:exhaustive
 	switch kind := field.Kind(); kind {
 	case protoreflect.BoolKind,
 		protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
