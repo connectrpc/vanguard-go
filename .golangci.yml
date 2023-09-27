@@ -65,11 +65,22 @@ issues:
     # checks from err113 are useful.
     - "err113: do not define dynamic errors.*"
   exclude-rules:
-    - path: internal/examples/pets/.*\.go
+    - path: internal/examples/.*/.*\.go
       linters:
         - forbidigo # log.Fatal, fmt.Printf used in example programs
-    - path: internal/examples/fileserver/main.go
-      linters:
-        - forbidigo
         - gosec
         - gochecknoglobals
+    - path: ".*_test.go"
+      linters:
+        - dupl # allow duplicate string literals for testing
+        - forcetypeassert
+        - nilerr # allow encoding error and returning nil
+    - path: vanguard_examples_test.go
+      linters:
+        - gocritic # allow log.Fatal for examples
+    - path: handler.go
+      linters:
+        - contextcheck # use request context
+    - path: params.go
+      linters:
+        - goconst # allow string literals for WKT names

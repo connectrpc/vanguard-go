@@ -42,7 +42,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
 func TestMux_BufferTooLargeFails(t *testing.T) {
 	t.Parallel()
 
@@ -653,7 +652,6 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	}
 }
 
-//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
 func TestMux_MessageHooks(t *testing.T) {
 	t.Parallel()
 	// NB: These cases are identical to the pass-through cases, but should
@@ -1109,7 +1107,6 @@ func TestMux_MessageHooks(t *testing.T) {
 	}
 }
 
-//nolint:dupl // some of these testStream literals are the same as in other cases, but we don't need to share
 func TestMux_HookOrder(t *testing.T) {
 	t.Parallel()
 
@@ -2014,8 +2011,7 @@ func (i *testInterceptor) restUnaryHandler(
 		// Write error, if any.
 		if out.err != nil {
 			httpWriteError(rsp, out.err)
-			//nolint:nilerr
-			return nil
+			return nil // ignore
 		}
 
 		// Write body.
@@ -2197,7 +2193,6 @@ func outputFromUnary[Req, Resp any](
 		return headers, nil, nil, err
 	}
 	msg := any(resp.Msg)
-	//nolint:forcetypeassert
 	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
 }
 
@@ -2222,7 +2217,6 @@ func outputFromServerStream[Req, Resp any](
 	var msgs []proto.Message
 	for str.Receive() {
 		msg := any(str.Msg())
-		//nolint:forcetypeassert
 		msgs = append(msgs, msg.(proto.Message))
 	}
 	return str.ResponseHeader(), msgs, str.ResponseTrailer(), str.Err()
@@ -2239,7 +2233,6 @@ func outputFromClientStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
-		//nolint:forcetypeassert
 		if str.Send(any(msg).(*Req)) != nil {
 			// we don't need this error; we'll get the error below
 			// since str.CloseAndReceive returns the actual RPC errors
@@ -2255,7 +2248,6 @@ func outputFromClientStream[Req, Resp any](
 		return headers, nil, nil, err
 	}
 	msg := any(resp.Msg)
-	//nolint:forcetypeassert
 	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
 }
 
@@ -2284,7 +2276,6 @@ func outputFromBidiStream[Req, Resp any](
 				return
 			}
 			msg := any(resp)
-			//nolint:forcetypeassert
 			msgs = append(msgs, msg.(proto.Message))
 		}
 	}()
@@ -2293,7 +2284,6 @@ func outputFromBidiStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
-		//nolint:forcetypeassert
 		if str.Send(any(msg).(*Req)) != nil {
 			// we don't need this error; we'll get the error from above
 			// goroutine since str.Receive returns the actual RPC errors
@@ -2455,7 +2445,7 @@ func runRPCTestCase[Client any](
 }
 
 func disableCompression(server *httptest.Server) {
-	transport := server.Client().Transport.(*http.Transport) //nolint:errcheck,forcetypeassert
+	transport, _ := server.Client().Transport.(*http.Transport)
 	transport.DisableCompression = true
 }
 
@@ -2564,7 +2554,8 @@ func (h *testHooks) getEvents(t *testing.T) (Operation, []hookKind) {
 	for op, kinds := range ops {
 		return op, kinds
 	}
-	panic("should not be able to get here") //nolint:forbidigo
+	t.Fatal("unreachable")
+	return nil, nil
 }
 
 func newConnectError(code connect.Code, msg string) *connect.Error {

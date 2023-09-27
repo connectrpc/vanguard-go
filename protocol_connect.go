@@ -358,7 +358,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 
 	vals.Set("encoding", op.server.codec.Name())
 	buf := op.bufferPool.Get()
-	stableMarshaler := op.server.codec.(StableCodec) //nolint:forcetypeassert,errcheck // c.useGet called above already checked this
+	stableMarshaler, _ := op.server.codec.(StableCodec) // c.useGet called above already checked this
 	data, err := stableMarshaler.MarshalAppendStable(buf.Bytes(), msg)
 	if err != nil {
 		op.bufferPool.Put(buf)

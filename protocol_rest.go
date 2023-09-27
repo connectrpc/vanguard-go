@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//nolint:revive // this is temporary, will be removed when implementation is complete
 package vanguard
 
 import (
@@ -314,7 +313,7 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 	return meta, nil, nil
 }
 
-func (r restServerProtocol) extractEndFromTrailers(o *operation, headers http.Header) (responseEnd, error) {
+func (r restServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
 	return responseEnd{}, nil
 }
 
@@ -382,7 +381,7 @@ func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byt
 	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
 }
 
-func (r restServerProtocol) requiresMessageToProvideRequestLine(o *operation) bool {
+func (r restServerProtocol) requiresMessageToProvideRequestLine(_ *operation) bool {
 	return true
 }
 

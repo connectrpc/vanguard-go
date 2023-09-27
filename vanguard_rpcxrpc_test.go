@@ -32,7 +32,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-//nolint:dupl // some of these testStream literals are the same as in handler_test cases, but we don't need to share
 func TestMux_RPCxRPC(t *testing.T) {
 	t.Parallel()
 

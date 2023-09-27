@@ -216,13 +216,20 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		opt.apply(&svcOpts)
 	}
 
-	svcOpts.protocols = computeSet(svcOpts.protocols, m.Protocols, defaultProtocols, false)
+	svcOpts.protocols = computeSet(svcOpts.protocols, m.Protocols, map[Protocol]struct{}{
+		ProtocolConnect: {},
+		ProtocolGRPC:    {},
+		ProtocolGRPCWeb: {},
+	}, false)
 	for protocol := range svcOpts.protocols {
 		if protocol <= ProtocolUnknown || protocol > protocolMax {
 			return fmt.Errorf("protocol %d is not a valid value", protocol)
 		}
 	}
-	svcOpts.codecNames = computeSet(svcOpts.codecNames, m.Codecs, defaultCodecs, false)
+	svcOpts.codecNames = computeSet(svcOpts.codecNames, m.Codecs, map[string]struct{}{
+		CodecProto: {},
+		CodecJSON:  {},
+	}, false)
 	for codecName := range svcOpts.codecNames {
 		if _, known := m.codecImpls[codecName]; !known {
 			return fmt.Errorf("codec %s is not known; use mux.AddCodec to add known codecs first", codecName)
@@ -236,7 +243,9 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		}
 	}
 	// empty is allowed here: non-nil but empty means do not send compressed data to handler
-	svcOpts.compressorNames = computeSet(svcOpts.compressorNames, m.Compressors, defaultCompressors, true)
+	svcOpts.compressorNames = computeSet(svcOpts.compressorNames, m.Compressors, map[string]struct{}{
+		CompressionGzip: {},
+	}, true)
 	for compressorName := range svcOpts.compressorNames {
 		if _, known := m.compressionPools[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use mux.AddCompression to add known algorithms first", compressorName)
@@ -709,17 +718,6 @@ type TypeResolver interface {
 	protoregistry.MessageTypeResolver
 	protoregistry.ExtensionTypeResolver
 }
-
-//nolint:gochecknoglobals
-var (
-	defaultProtocols = map[Protocol]struct{}{
-		ProtocolConnect: {},
-		ProtocolGRPC:    {},
-		ProtocolGRPCWeb: {},
-	}
-	defaultCodecs      = map[string]struct{}{CodecProto: {}, CodecJSON: {}}
-	defaultCompressors = map[string]struct{}{CompressionGzip: {}}
-)
 
 type serviceOptionFunc func(*serviceOptions)
 

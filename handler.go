@@ -38,7 +38,6 @@ type handler struct {
 	canDecompress []string
 }
 
-//nolint:contextcheck
 func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op := h.newOperation(writer, request)
 	err := op.validate(h.mux, h.codecs)
@@ -52,7 +51,7 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if callback != nil {
 		var hookErr error
-		if op.hooks, hookErr = callback(op.request.Context(), op); hookErr != nil { //nolint:contextcheck
+		if op.hooks, hookErr = callback(op.request.Context(), op); hookErr != nil {
 			useUnknownHandler = false
 			err = hookErr
 		}
