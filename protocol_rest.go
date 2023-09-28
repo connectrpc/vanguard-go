@@ -17,8 +17,7 @@ package vanguard
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -28,135 +27,334 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-type restClientProtocol struct{}
+type restClientProtocol struct {
+	target *routeTarget
+	vars   []routeTargetVarMatch
+}
 
 var _ clientProtocolHandler = restClientProtocol{}
-var _ clientBodyPreparer = restClientProtocol{}
-var _ clientProtocolEndMustBeInHeaders = restClientProtocol{}
 
 // restClientProtocol implements the REST protocol for
 // processing RPCs received from the client.
-func (r restClientProtocol) protocol() Protocol {
+func (r restClientProtocol) Protocol() Protocol {
 	return ProtocolREST
 }
 
-func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.StreamType) bool {
-	switch streamType {
-	case connect.StreamTypeUnary:
-		return true
-	case connect.StreamTypeClient:
-		return restHTTPBodyRequest(op)
-	case connect.StreamTypeServer:
-		// TODO: support server streams even when body is not google.api.HttpBody
-		return restHTTPBodyResponse(op)
-	default:
-		return false
+func (r restClientProtocol) DecodeRequestHeader(meta *requestMeta) error {
+	if !r.acceptsStreamType() {
+		return protocolError("REST client protocol does not support %s stream", r.target.config.streamType)
 	}
-}
-
-func (r restClientProtocol) endMustBeInHeaders() bool {
-	// TODO: when we support server streams over REST, this should return false when streaming
-	return true
-}
-
-func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
-	var reqMeta requestMeta
-	reqMeta.compression = headers.Get("Content-Encoding")
-	headers.Del("Content-Encoding")
+	meta.CompressionName = meta.Header.Get("Content-Encoding")
+	meta.Header.Del("Content-Encoding")
 	// TODO: A REST client could use "q" weights in the `Accept-Encoding` header, which
 	//       would currently cause the middleware to not recognize the compression.
 	//       We may want to address this. We'd need to sort the values by their weight
 	//       since other protocols don't allow weights with acceptable encodings.
-	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
-	headers.Del("Accept-Encoding")
+	meta.AcceptCompression = parseMultiHeader(meta.Header.Values("Accept-Encoding"))
+	meta.Header.Del("Accept-Encoding")
 
-	reqMeta.codec = CodecJSON // if actually a custom content-type, handled by body preparer methods
-	contentType := headers.Get("Content-Type")
+	meta.CodecName = CodecJSON // if actually a custom content-type, handled by body preparer methods
+	contentType := meta.Header.Get("Content-Type")
 	if contentType != "" &&
 		contentType != "application/json" &&
 		contentType != "application/json; charset=utf-8" &&
-		!restHTTPBodyRequest(op) {
-		// invalid content-type
-		reqMeta.codec = contentType + "?"
+		!restIsHTTPBody(r.target.config.descriptor.Input(), r.target.requestBodyFields) {
+		meta.CodecName = contentType + "?" // invalid
 	}
-	headers.Del("Content-Type")
+	meta.Header.Del("Content-Type")
 
-	if timeoutStr := headers.Get("X-Server-Timeout"); timeoutStr != "" {
+	if timeoutStr := meta.Header.Get("X-Server-Timeout"); timeoutStr != "" {
 		timeout, err := strconv.ParseFloat(timeoutStr, 64)
 		if err != nil {
-			return requestMeta{}, err
+			return err
 		}
-		reqMeta.timeout = time.Duration(timeout * float64(time.Second))
+		meta.Timeout = time.Duration(timeout * float64(time.Second))
 	}
-	return reqMeta, nil
-}
 
-func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	isErr := meta.end != nil && meta.end.err != nil
-	// TODO: this formulation might only be valid when meta.codec is JSON; support other codecs.
-	// Headers are only set if they are not already set, specially to allow
-	// for google.api.HttpBody payloads.
-	if headers["Content-Type"] == nil {
-		headers["Content-Type"] = []string{"application/" + meta.codec}
-	}
-	// TODO: Content-Encoding to compress error, too?
-	if !isErr && meta.compression != "" {
-		headers["Content-Encoding"] = []string{meta.compression}
-	}
-	if len(meta.acceptCompression) != 0 {
-		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
-	}
-	if isErr {
-		return httpStatusCodeFromRPC(meta.end.err.Code())
-	}
-	return http.StatusOK
-}
-
-func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	cerr := end.err
-	if cerr != nil && !wasInHeaders {
-		// TODO: Uh oh. We already flushed headers and started writing body. What can we do?
-		//       Should this log? If we are using http/2, is there some way we could send
-		//       a "goaway" frame to the client, to indicate abnormal end of stream?
-		return nil
-	}
-	if cerr == nil {
-		return nil
-	}
-	stat := grpcStatusFromError(cerr)
-	bin, err := op.client.codec.MarshalAppend(nil, stat)
+	// Resolve codecs
+	codec, err := r.target.config.GetClientCodec(meta.CodecName)
 	if err != nil {
-		// TODO: This is always uses JSON whereas above we use the given codec.
-		//       If/when we support codecs for REST other than JSON, what should
-		//       we do here?
-		bin = []byte(`{"code": 13, "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
+		return err
 	}
-	// TODO: compress?
-	_, _ = writer.Write(bin)
+	urlClone := *meta.URL
+	meta.Client.Codec = &restRequestCodec{
+		target:      r.target,
+		vars:        r.vars,
+		url:         &urlClone,
+		codec:       codec,
+		contentType: contentType,
+	}
+	if meta.CompressionName != "" {
+		comp, err := r.target.config.GetClientCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Client.Compressor = comp
+	}
 	return nil
 }
 
-func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
-	return len(op.restTarget.vars) != 0 ||
-		len(op.request.URL.Query()) != 0 ||
-		op.restTarget.requestBodyFields != nil ||
-		restHTTPBodyRequest(op)
+func (r restClientProtocol) acceptsStreamType() bool {
+	switch r.target.config.streamType {
+	case connect.StreamTypeUnary:
+		return true
+	case connect.StreamTypeClient:
+		return restIsHTTPBody(r.target.config.descriptor.Input(), r.target.requestBodyFields)
+	case connect.StreamTypeServer:
+		return restIsHTTPBody(r.target.config.descriptor.Output(), r.target.responseBodyFields)
+	case connect.StreamTypeBidi:
+		return false
+	}
+	return false
 }
 
-func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	if err := r.prepareUnmarshalledRequestFromBody(op, src, target); err != nil {
+func (r restClientProtocol) PrepareRequestMessage(msg *messageBuffer, meta *requestMeta) error {
+	msg.Src.IsCompressed = meta.Client.Compressor != nil
+	msg.Src.IsTrailer = false
+	msg.Src.ReadMode = readModeEOF
+	if r.target.config.streamType&connect.StreamTypeClient != 0 {
+		msg.Src.ReadMode = readModeChunk
+	}
+	return nil
+}
+
+func (r restClientProtocol) EncodeRequestHeader(meta *responseMeta) error {
+	var baseCodec Codec
+	if meta.CodecName == CodecJSON {
+		codec, err := r.target.config.GetClientCodec(CodecJSON)
+		if err != nil {
+			return err
+		}
+		baseCodec = codec
+		meta.Header.Set("Content-Type", "application/json")
+	}
+	meta.Client.Codec = &restResponseCodec{
+		target: r.target,
+		meta:   meta, // Encode URL values.
+		codec:  baseCodec,
+	}
+	if meta.CompressionName != "" {
+		comp, err := r.target.config.GetClientCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Client.Compressor = comp
+		meta.Header.Set("Content-Encoding", meta.CompressionName)
+		meta.Header.Set("Accept-Encoding", meta.CompressionName)
+	}
+	return nil
+}
+
+func (r restClientProtocol) PrepareResponseMessage(msg *messageBuffer, meta *responseMeta) error {
+	msg.Dst.Flags = 0
+	msg.Dst.IsEnvelope = false
+	msg.Dst.IsCompressed = meta.Client.Compressor != nil
+
+	// TODO: support httpBody compression
+	isHTTPBody := restIsHTTPBody(r.target.config.descriptor.Input(), r.target.requestBodyFields)
+	if isHTTPBody {
+		// TODO: support full stream compression
+		msg.Dst.IsCompressed = false
+	}
+	return nil
+}
+
+func (r restClientProtocol) EncodeResponseTrailer(_ *bytes.Buffer, _ *responseMeta) error {
+	return nil
+}
+
+func (r restClientProtocol) EncodeError(buf *bytes.Buffer, meta *responseMeta, err error) {
+	// Encode the error as uncompressed JSON.
+	meta.Header.Del("Content-Encoding")
+	meta.Header.Set("Content-Type", "application/json")
+
+	cerr := asConnectError(err)
+	stat := grpcStatusFromError(cerr)
+	meta.StatusCode = httpStatusCodeFromRPC(cerr.Code())
+
+	codec, err := r.target.config.GetClientCodec(CodecJSON)
+	if err != nil {
+		codec = DefaultJSONCodec(r.target.config.resolver)
+	}
+	if err = marshal(buf, stat, codec); err != nil {
+		bin := []byte(`{"code": 13, "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
+		_, _ = buf.Write(bin)
+	}
+}
+
+// restServerProtocol implements the REST protocol for
+// sending RPCs to the server handler.
+type restServerProtocol struct {
+	target *routeTarget
+
+	// For error encoding.
+	statusCode  int
+	contentType string
+}
+
+var _ serverProtocolHandler = (*restServerProtocol)(nil)
+
+func (r *restServerProtocol) Protocol() Protocol {
+	return ProtocolREST
+}
+
+func (r *restServerProtocol) EncodeRequestHeader(meta *requestMeta) error {
+	codec, err := r.target.config.GetServerCodec(meta.CodecName)
+	if err != nil {
 		return err
 	}
+	meta.Server.Codec = &restRequestCodec{
+		target: r.target,
+		url:    meta.URL,
+		header: meta.Header,
+		codec:  codec,
+	}
+	meta.Method = r.target.method
+
+	// Encode header values for the request body.
+	if r.target.requestBodyFieldPath != "" {
+		// Content-Type may be overridden by the body preparer.
+		meta.Header.Set("Content-Type", "application/"+meta.CodecName)
+
+		if meta.CompressionName != "" {
+			compressor, err := r.target.config.GetServerCompressor(meta.CompressionName)
+			if err != nil {
+				return err
+			}
+			meta.Server.Compressor = compressor
+			meta.Header.Set("Content-Encoding", meta.CompressionName)
+			meta.Header.Set("Accept-Encoding", meta.CompressionName)
+		}
+	}
+	if meta.Timeout != 0 {
+		// Encode timeout as a float in seconds.
+		value := strconv.FormatFloat(meta.Timeout.Seconds(), 'E', -1, 64)
+		meta.Header.Set("X-Server-Timeout", value)
+	}
+	// Require request body to encode URL values.
+	meta.RequiresBody = true
+	return nil
+}
+
+func (r *restServerProtocol) PrepareRequestMessage(msg *messageBuffer, meta *requestMeta) error {
+	msg.Dst.IsCompressed = meta.Server.Compressor != nil
+	return nil
+}
+
+func (r *restServerProtocol) DecodeRequestHeader(meta *responseMeta) error {
+	r.statusCode = meta.StatusCode
+	r.contentType = meta.Header.Get("Content-Type")
+	meta.Header.Del("Content-Type")
+	switch {
+	case r.contentType == "application/json":
+		meta.CodecName = CodecJSON
+	case strings.HasPrefix(r.contentType, "application/"):
+		meta.CodecName = strings.TrimPrefix(r.contentType, "application/")
+		if n := strings.Index(meta.CodecName, ";"); n != -1 {
+			meta.CodecName = meta.CodecName[:n]
+		}
+	}
+	codec, err := r.target.config.GetServerCodec(meta.CodecName)
+	if err != nil {
+		return err
+	}
+	meta.Server.Codec = &restResponseCodec{
+		target:      r.target,
+		codec:       codec,
+		meta:        meta,
+		contentType: r.contentType,
+	}
+
+	meta.CompressionName = meta.Header.Get("Content-Encoding")
+	meta.Header.Del("Content-Encoding")
+	if meta.CompressionName != "" {
+		compressor, err := r.target.config.GetServerCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Server.Compressor = compressor
+	}
+
+	meta.AcceptCompression = parseMultiHeader(meta.Header.Values("Accept-Encoding"))
+	meta.Header.Del("Accept-Encoding")
+
+	return nil
+}
+
+func (r *restServerProtocol) PrepareResponseMessage(msg *messageBuffer, meta *responseMeta) error {
+	msg.Src.IsCompressed = meta.Server.Compressor != nil
+	msg.Src.ReadMode = readModeEOF
+	if r.target.config.streamType&connect.StreamTypeServer != 0 {
+		msg.Src.ReadMode = readModeChunk
+	}
+	if r.statusCode/100 != 2 {
+		msg.Src.IsTrailer = true
+		msg.Src.ReadMode = readModeEOF
+	}
+	return nil
+}
+
+func (r *restServerProtocol) DecodeResponseTrailer(buf *bytes.Buffer, _ *responseMeta) error {
+	if r.statusCode/100 == 2 {
+		return nil
+	}
+	if cerr := httpErrorFromResponse(r.statusCode, r.contentType, buf); cerr != nil {
+		return cerr
+	}
+	return nil
+}
+
+type restRequestCodec struct {
+	target      *routeTarget
+	vars        []routeTargetVarMatch
+	codec       Codec
+	url         *url.URL   // Clone or original URL.
+	header      httpHeader // Empty or original header.
+	contentType string
+	count       int
+}
+
+func (c *restRequestCodec) Name() string {
+	if c.codec == nil {
+		return "rest"
+	}
+	return "rest-" + c.codec.Name()
+}
+func (c *restRequestCodec) MarshalAppend(dst []byte, msg proto.Message) ([]byte, error) {
+	defer func() { c.count++ }()
+	dst, err := c.marshalBody(dst, msg)
+	if err != nil {
+		return nil, err
+	}
+	if c.count > 0 {
+		return dst, nil
+	}
+	path, query, err := httpEncodePathValues(msg.ProtoReflect(), c.target)
+	if err != nil {
+		return nil, err
+	}
+	c.url.Path = path
+	c.url.RawQuery = query.Encode()
+	return dst, nil
+}
+func (c *restRequestCodec) Unmarshal(src []byte, dst proto.Message) error {
+	defer func() { c.count++ }()
+	if err := c.unmarshalBody(src, dst); err != nil {
+		return err
+	}
+	if c.count > 0 {
+		return nil
+	}
 	// Now pull in the fields from the URI path:
-	msg := target.ProtoReflect()
-	for i := len(op.restVars) - 1; i >= 0; i-- {
-		variable := op.restVars[i]
+	msg := dst.ProtoReflect()
+	for i := len(c.vars) - 1; i >= 0; i-- {
+		variable := c.vars[i]
 		if err := setParameter(msg, variable.fields, variable.value); err != nil {
 			return err
 		}
 	}
 	// And finally from the query string:
-	for fieldPath, values := range op.queryValues() {
+	for fieldPath, values := range c.url.Query() {
 		fields, err := resolvePathToDescriptors(msg.Descriptor(), fieldPath)
 		if err != nil {
 			return err
@@ -170,243 +368,152 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	return nil
 }
 
-func (r restClientProtocol) prepareUnmarshalledRequestFromBody(op *operation, src []byte, target proto.Message) error {
-	if op.restTarget.requestBodyFields == nil {
+func (c *restRequestCodec) marshalBody(dst []byte, src proto.Message) ([]byte, error) {
+	if c.target.requestBodyFields == nil {
+		return dst, nil
+	}
+	msg, leafField, err := getBodyField(c.target.requestBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
+	if err != nil {
+		return nil, err
+	}
+	if leafField == nil && restIsHTTPBody(msg.Descriptor(), nil) {
+		fields := msg.Descriptor().Fields()
+		contentType := msg.Get(fields.ByName("content_type")).String()
+		bytes := msg.Get(fields.ByName("data")).Bytes()
+		if c.count == 0 && contentType != "" {
+			c.header.Set("Content-Type", contentType)
+		}
+		return bytes, nil
+	}
+	if leafField == nil {
+		return c.codec.MarshalAppend(dst, msg.Interface())
+	}
+	restCodec, err := asRESTCodec(c.codec)
+	if err != nil {
+		return nil, err
+	}
+	return restCodec.MarshalAppendField(dst, msg.Interface(), leafField)
+}
+
+func (c *restRequestCodec) unmarshalBody(src []byte, dst proto.Message) error {
+	if c.target.requestBodyFields == nil {
 		if len(src) > 0 {
 			return fmt.Errorf("request should have no body; instead got %d bytes", len(src))
 		}
 		return nil
 	}
+	// Reset the message to clear any existing values, since we may only
+	// be partially encoding it.
+	proto.Reset(dst)
 
-	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
+	msg, leafField, err := getBodyField(c.target.requestBodyFields, dst.ProtoReflect(), protoreflect.Message.Mutable)
 	if err != nil {
 		return err
 	}
 
 	if leafField == nil && restIsHTTPBody(msg.Descriptor(), nil) {
 		fields := msg.Descriptor().Fields()
-		contentType := op.reqContentType
-		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
-		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		if c.count == 0 {
+			msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(c.contentType))
+		}
+		// Take ownership of the bytes.
+		data := make([]byte, len(src))
+		copy(data, src)
+		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(data))
 		return nil
 	}
-
-	if len(src) == 0 {
-		// No data to unmarshal.
-		return nil
-	}
 	if leafField == nil {
-		return op.client.codec.Unmarshal(src, msg.Interface())
+		return c.codec.Unmarshal(src, msg.Interface())
 	}
-	restCodec, ok := op.client.codec.(RESTCodec)
-	if !ok {
-		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be unmarshalled",
-			op.client.codec.Name(), op.client.codec)
-	}
-	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
-}
-
-func (r restClientProtocol) responseNeedsPrep(op *operation) bool {
-	return len(op.restTarget.responseBodyFields) != 0 ||
-		restHTTPBodyResponse(op)
-}
-
-func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	if restHTTPBodyResponse(op) {
-		msg := src.ProtoReflect()
-		for _, field := range op.restTarget.responseBodyFields {
-			msg = msg.Get(field).Message()
-		}
-		if !msg.IsValid() {
-			return base, nil
-		}
-		desc := msg.Descriptor()
-		dataField := desc.Fields().ByName("data")
-		contentField := desc.Fields().ByName("content_type")
-		contentType := msg.Get(contentField).String()
-		bytes := msg.Get(dataField).Bytes()
-		if contentType != "" {
-			headers.Set("Content-Type", contentType)
-		}
-		return bytes, nil
-	}
-
-	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
-	if err != nil {
-		return nil, err
-	}
-	if leafField == nil {
-		return op.client.codec.MarshalAppend(base, msg.Interface())
-	}
-	restCodec, ok := op.client.codec.(RESTCodec)
-	if !ok {
-		return nil,
-			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be marshalled",
-				op.client.codec.Name(), op.client.codec)
-	}
-	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
-}
-
-func (r restClientProtocol) String() string {
-	return protocolNameREST
-}
-
-// restServerProtocol implements the REST protocol for
-// sending RPCs to the server handler.
-type restServerProtocol struct{}
-
-var _ serverProtocolHandler = restServerProtocol{}
-var _ requestLineBuilder = restServerProtocol{}
-var _ serverBodyPreparer = restServerProtocol{}
-
-func (r restServerProtocol) protocol() Protocol {
-	return ProtocolREST
-}
-
-func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	// TODO: don't set content-type on no body requests.
-	headers["Content-Type"] = []string{"application/" + meta.codec}
-	if meta.compression != "" {
-		headers["Content-Encoding"] = []string{meta.compression}
-	}
-	if len(meta.acceptCompression) != 0 {
-		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
-	}
-	if meta.timeout != 0 {
-		// Encode timeout as a float in seconds.
-		value := strconv.FormatFloat(meta.timeout.Seconds(), 'E', -1, 64)
-		headers["X-Server-Timeout"] = []string{value}
-	}
-}
-
-func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
-	contentType := headers.Get("Content-Type")
-	if statusCode/100 != 2 {
-		return responseMeta{
-				end: &responseEnd{httpCode: statusCode},
-			}, func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
-				if err := httpErrorFromResponse(statusCode, contentType, buf); err != nil {
-					end.err = err
-					end.httpCode = httpStatusCodeFromRPC(err.Code())
-				}
-			}, nil
-	}
-	var meta responseMeta
-	switch {
-	case contentType == "application/json":
-		meta.codec = CodecJSON
-	case strings.HasPrefix(contentType, "application/"):
-		meta.codec = strings.TrimPrefix(contentType, "application/")
-		if n := strings.Index(meta.codec, ";"); n != -1 {
-			meta.codec = meta.codec[:n]
-		}
-	default:
-		meta.codec = ""
-	}
-	headers.Del("Content-Type")
-
-	meta.compression = headers.Get("Content-Encoding")
-	headers.Del("Content-Encoding")
-
-	meta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
-	headers.Del("Accept-Encoding")
-	return meta, nil, nil
-}
-
-func (r restServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
-	return responseEnd{}, nil
-}
-
-func (r restServerProtocol) requestNeedsPrep(op *operation) bool {
-	if op.restTarget == nil {
-		return false // no REST bindings
-	}
-	return len(op.restTarget.vars) != 0 ||
-		len(op.request.URL.Query()) != 0 ||
-		op.restTarget.requestBodyFields != nil
-}
-
-func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte, src proto.Message, headers http.Header) ([]byte, error) {
-	if op.restTarget.requestBodyFields == nil {
-		return base, nil
-	}
-	msg, leafField, err := getBodyField(op.restTarget.requestBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
-	if err != nil {
-		return nil, err
-	}
-	if restHTTPBodyRequest(op) {
-		fields := msg.Descriptor().Fields()
-		contentType := msg.Get(fields.ByName("content_type")).String()
-		bytes := msg.Get(fields.ByName("data")).Bytes()
-		headers.Set("Content-Type", contentType)
-		return bytes, nil
-	}
-	if leafField == nil {
-		return op.server.codec.MarshalAppend(base, msg.Interface())
-	}
-	restCodec, ok := op.server.codec.(RESTCodec)
-	if !ok {
-		return nil,
-			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be marshalled",
-				op.server.codec.Name(), op.server.codec)
-	}
-	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
-}
-
-func (r restServerProtocol) responseNeedsPrep(op *operation) bool {
-	return len(op.restTarget.responseBodyFieldPath) != 0 ||
-		restHTTPBodyResponse(op)
-}
-
-func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byte, target proto.Message) error {
-	msg, leafField, err := getBodyField(op.restTarget.responseBodyFields, target.ProtoReflect(), protoreflect.Message.Mutable)
+	restCodec, err := asRESTCodec(c.codec)
 	if err != nil {
 		return err
 	}
-	if restHTTPBodyResponse(op) {
+	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
+}
+
+type restResponseCodec struct {
+	target      *routeTarget
+	codec       Codec
+	meta        *responseMeta
+	contentType string
+	count       int
+}
+
+func (c *restResponseCodec) Name() string {
+	if c.codec == nil {
+		return "rest"
+	}
+	return "rest-" + c.codec.Name()
+}
+
+func (c *restResponseCodec) MarshalAppend(dst []byte, src proto.Message) ([]byte, error) {
+	defer func() { c.count++ }()
+	msg, leafField, err := getBodyField(c.target.responseBodyFields, src.ProtoReflect(), protoreflect.Message.Get)
+	if err != nil {
+		return nil, err
+	}
+	if leafField == nil && restIsHTTPBody(msg.Descriptor(), nil) {
+		if !msg.IsValid() {
+			return dst, nil
+		}
 		fields := msg.Descriptor().Fields()
-		contentType := op.rspContentType
-		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
-		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		dataField := fields.ByName("data")
+		contentField := fields.ByName("content_type")
+		contentType := msg.Get(contentField).String()
+		bytes := msg.Get(dataField).Bytes()
+		if c.count == 0 && contentType != "" {
+			c.meta.Header.Set("Content-Type", contentType)
+		}
+		return bytes, nil
+	}
+	if leafField == nil {
+		return c.codec.MarshalAppend(dst, msg.Interface())
+	}
+	restCodec, err := asRESTCodec(c.codec)
+	if err != nil {
+		return nil, err
+	}
+	return restCodec.MarshalAppendField(dst, msg.Interface(), leafField)
+}
+func (c *restResponseCodec) Unmarshal(src []byte, dst proto.Message) error {
+	defer func() { c.count++ }()
+	msg, leafField, err := getBodyField(c.target.responseBodyFields, dst.ProtoReflect(), protoreflect.Message.Mutable)
+	if err != nil {
+		return err
+	}
+	if leafField == nil && restIsHTTPBody(msg.Descriptor(), nil) {
+		if len(src) == 0 {
+			return nil
+		}
+		fields := msg.Descriptor().Fields()
+		dataField := fields.ByName("data")
+		contentField := fields.ByName("content_type")
+		if c.count == 0 {
+			msg.Set(contentField, protoreflect.ValueOfString(c.contentType))
+		}
+		// Take ownership of the bytes.
+		data := make([]byte, len(src))
+		copy(data, src)
+		msg.Set(dataField, protoreflect.ValueOfBytes(data))
 		return nil
 	}
 	if leafField == nil {
-		return op.server.codec.Unmarshal(src, msg.Interface())
+		return c.codec.Unmarshal(src, msg.Interface())
 	}
-	restCodec, ok := op.server.codec.(RESTCodec)
-	if !ok {
-		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be unmarshalled",
-			op.server.codec.Name(), op.server.codec)
+	restCodec, err := asRESTCodec(c.codec)
+	if err != nil {
+		return err
 	}
 	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
 }
 
-func (r restServerProtocol) requiresMessageToProvideRequestLine(_ *operation) bool {
-	return true
-}
-
-func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
-	path, query, err := httpEncodePathValues(req.ProtoReflect(), op.restTarget)
-	if err != nil {
-		return "", "", "", false, err
+func asRESTCodec(codec Codec) (RESTCodec, error) {
+	restCodec, ok := codec.(RESTCodec)
+	if !ok {
+		return nil, fmt.Errorf("codec %q (%T) does not implement RESTCodec", codec.Name(), codec)
 	}
-	urlPath = path
-	queryParams = query.Encode()
-	includeBody = op.restTarget.requestBodyFields != nil // can be len(0) if body is '*'
-	// TODO: Should this return an error if URL (path + query string) is greater than op.methodConf.maxGetURLSz?
-	return urlPath, queryParams, op.restTarget.method, includeBody, nil
-}
-
-func (r restServerProtocol) String() string {
-	return protocolNameREST
-}
-
-func restHTTPBodyRequest(op *operation) bool {
-	return restIsHTTPBody(op.methodConf.descriptor.Input(), op.restTarget.requestBodyFields)
-}
-
-func restHTTPBodyResponse(op *operation) bool {
-	return restIsHTTPBody(op.methodConf.descriptor.Output(), op.restTarget.responseBodyFields)
+	return restCodec, nil
 }
 
 func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.FieldDescriptor) bool {

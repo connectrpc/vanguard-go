@@ -219,8 +219,8 @@ type routeTarget struct {
 	path                  []string
 	verb                  string
 	requestBodyFieldPath  string
-	requestBodyFields     []protoreflect.FieldDescriptor
 	responseBodyFieldPath string
+	requestBodyFields     []protoreflect.FieldDescriptor
 	responseBodyFields    []protoreflect.FieldDescriptor
 	vars                  []routeTargetVar
 }

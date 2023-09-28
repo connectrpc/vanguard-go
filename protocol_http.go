@@ -290,35 +290,51 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	return path, query, nil
 }
 
-func httpExtractTrailers(headers http.Header, knownTrailerKeys headerKeys) http.Header {
-	trailers := make(http.Header, len(knownTrailerKeys))
-	for key, vals := range headers {
+type httpHeader map[string][]string
+
+func (h httpHeader) Get(key string) string {
+	if vals := h[key]; len(vals) > 0 {
+		return vals[0]
+	} else if vals := h[http.TrailerPrefix+key]; len(vals) > 0 {
+		return vals[0]
+	}
+	return ""
+}
+func (h httpHeader) Set(key, value string) {
+	h[key] = []string{value}
+}
+func (h httpHeader) Add(key, value string) {
+	h[key] = append(h[key], value)
+}
+func (h httpHeader) Del(key string) {
+	delete(h, key)
+	delete(h, http.TrailerPrefix+key)
+}
+func (h httpHeader) Values(key string) []string {
+	return h[key]
+}
+
+func httpExtractTrailers(header httpHeader) httpHeader {
+	// Parse the trailer keys from the Trailer header.
+	keys := parseMultiHeader(header["Trailer"])
+	trailerKeys := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		trailerKeys[key] = struct{}{}
+	}
+	trailer := make(httpHeader, len(trailerKeys))
+	for key, vals := range header {
 		if strings.HasPrefix(key, http.TrailerPrefix) {
-			trailers[strings.TrimPrefix(key, http.TrailerPrefix)] = vals
-			delete(headers, key)
+			key = strings.TrimPrefix(key, http.TrailerPrefix)
+		} else if _, ok := trailerKeys[key]; !ok {
 			continue
 		}
-		if _, expected := knownTrailerKeys[key]; expected {
-			trailers[key] = vals
-			delete(headers, key)
-			continue
-		}
+		trailer[key] = vals
 	}
-	return trailers
+	return trailer
 }
 
-func httpMergeTrailers(header http.Header, trailer http.Header) {
-	for key, vals := range trailer {
-		if !strings.HasPrefix(key, http.TrailerPrefix) {
-			key = http.TrailerPrefix + key
-		}
-		for _, val := range vals {
-			header.Add(key, val)
-		}
-	}
-}
-
-func httpExtractContentLength(headers http.Header) (int, error) {
+// TODO: fix content-length.
+func httpExtractContentLength(headers http.Header) (int, error) { //nolint:deadcode,unused
 	contentLenStr := headers.Get("Content-Length")
 	if contentLenStr == "" {
 		return -1, nil

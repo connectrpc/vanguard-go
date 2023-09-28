@@ -37,79 +37,62 @@ import (
 )
 
 const (
-	protocolNameConnectUnary     = protocolNameConnect + " unary"
-	protocolNameConnectUnaryGet  = protocolNameConnectUnary + " (GET)"
-	protocolNameConnectUnaryPost = protocolNameConnectUnary + " (POST)"
-	protocolNameConnectStream    = protocolNameConnect + " stream"
-
 	// TODO: Extract more constants for header names and values.
 	contentTypeJSON = "application/json"
+
+	connectFlagEnvelopeEndStream = 0b00000010
 )
 
-// connectUnaryGetClientProtocol implements the Connect protocol for
-// processing unary RPCs received from the client that use GET as the
+// connectUnaryClientProtocol implements the Connect protocol for
+// processing unary RPCs received from the client that use POST as the
 // HTTP method.
-type connectUnaryGetClientProtocol struct{}
+type connectUnaryClientProtocol struct {
+	config *methodConfig
+}
 
-var _ clientProtocolHandler = connectUnaryGetClientProtocol{}
-var _ clientProtocolAllowsGet = connectUnaryGetClientProtocol{}
-var _ clientProtocolEndMustBeInHeaders = connectUnaryGetClientProtocol{}
-var _ clientBodyPreparer = connectUnaryGetClientProtocol{}
+var _ clientProtocolHandler = connectUnaryClientProtocol{}
 
-func (c connectUnaryGetClientProtocol) protocol() Protocol {
+func (c connectUnaryClientProtocol) Protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectUnaryGetClientProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
+func (c connectUnaryClientProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
 	return streamType == connect.StreamTypeUnary
 }
 
-func (c connectUnaryGetClientProtocol) allowsGetRequests(conf *methodConfig) bool {
+func (c connectUnaryClientProtocol) allowsGetRequests(conf *methodConfig) bool {
 	methodOpts, ok := conf.descriptor.Options().(*descriptorpb.MethodOptions)
 	return ok && methodOpts.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
 }
 
-func (c connectUnaryGetClientProtocol) endMustBeInHeaders() bool {
-	return true
-}
-
-func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
-	var reqMeta requestMeta
-	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
-		return reqMeta, err
+func (c connectUnaryClientProtocol) decodeGetQuery(meta *requestMeta) error {
+	if !c.allowsGetRequests(c.config) {
+		return protocolError("GET requests not allowed for this method")
 	}
-	query := op.queryValues()
-	reqMeta.codec = query.Get("encoding")
-	reqMeta.compression = query.Get("compression")
-	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
-	headers.Del("Accept-Encoding")
-	headers.Del("Content-Type")
-	headers.Del("Connect-Protocol-Version")
-	return reqMeta, nil
-}
+	query := meta.URL.Query()
+	meta.URL.RawQuery = ""
+	meta.CodecName = query.Get("encoding")
+	meta.CompressionName = query.Get("compression")
+	meta.AcceptCompression = parseMultiHeader(meta.Header.Values("Accept-Encoding"))
+	meta.Header.Del("Accept-Encoding")
+	meta.Header.Del("Content-Type")
+	meta.Header.Del("Connect-Protocol-Version")
 
-func (c connectUnaryGetClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	// Response format is the same as unary POST; only requests differ
-	return connectUnaryPostClientProtocol{}.addProtocolResponseHeaders(meta, headers)
-}
-
-func (c connectUnaryGetClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	// Response format is the same as unary POST; only requests differ
-	return connectUnaryPostClientProtocol{}.encodeEnd(op, end, writer, wasInHeaders)
-}
-
-func (c connectUnaryGetClientProtocol) requestNeedsPrep(_ *operation) bool {
-	return true
-}
-
-func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	if len(src) > 0 {
-		return fmt.Errorf("connect unary protocol using GET HTTP method should have no body; instead got %d bytes", len(src))
+	codec, err := c.config.GetClientCodec(meta.CodecName)
+	if err != nil {
+		return err
 	}
-	// TODO: ideally we could *replace* the request body with the bytes in the query string and then
-	//       otherwise use message and its re-encoding/re-compressing capability.
-	vals := op.queryValues()
-	base64Str := vals.Get("base64")
+	meta.Client.Codec = codec
+	if meta.CompressionName != "" {
+		compressor, err := c.config.GetClientCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Client.Compressor = compressor
+	}
+
+	// Replace the request body with the bytes in the query string.
+	base64Str := query.Get("base64")
 	var base64enc bool
 	switch base64Str {
 	case "", "0":
@@ -117,9 +100,9 @@ func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation,
 	case "1":
 		base64enc = true
 	default:
-		return fmt.Errorf("query string parameter base64 should be absent or have value 0 or 1; instead got %q", base64Str)
+		return protocolError("query string parameter base64 should be absent or have value 0 or 1; instead got %q", base64Str)
 	}
-	msgStr := vals.Get("message")
+	msgStr := query.Get("message")
 	var msgData []byte
 	if base64enc && msgStr != "" {
 		var err error
@@ -134,285 +117,341 @@ func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation,
 	} else {
 		msgData = ([]byte)(msgStr)
 	}
-	if op.client.reqCompression != nil {
-		dst := op.bufferPool.Get()
-		defer op.bufferPool.Put(dst)
-		if err := op.client.reqCompression.decompress(dst, bytes.NewBuffer(msgData)); err != nil {
-			return err
-		}
-		msgData = dst.Bytes()
-	}
-	return op.client.codec.Unmarshal(msgData, target)
-}
 
-func (c connectUnaryGetClientProtocol) responseNeedsPrep(_ *operation) bool {
-	return false
-}
-
-func (c connectUnaryGetClientProtocol) prepareMarshalledResponse(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
-	return nil, errors.New("response does not need preparation")
-}
-
-func (c connectUnaryGetClientProtocol) String() string {
-	return protocolNameConnectUnaryGet
-}
-
-// connectUnaryPostClientProtocol implements the Connect protocol for
-// processing unary RPCs received from the client that use POST as the
-// HTTP method.
-type connectUnaryPostClientProtocol struct{}
-
-var _ clientProtocolHandler = connectUnaryPostClientProtocol{}
-var _ clientProtocolEndMustBeInHeaders = connectUnaryPostClientProtocol{}
-
-func (c connectUnaryPostClientProtocol) protocol() Protocol {
-	return ProtocolConnect
-}
-
-func (c connectUnaryPostClientProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
-	return streamType == connect.StreamTypeUnary
-}
-
-func (c connectUnaryPostClientProtocol) endMustBeInHeaders() bool {
-	return true
-}
-
-func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
-	var reqMeta requestMeta
-	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
-		return reqMeta, err
-	}
-	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), "application/")
-	if reqMeta.codec == CodecJSON+"; charset=utf-8" {
-		// TODO: should we support other text formats that may need charset check?
-		reqMeta.codec = CodecJSON
-	}
-	headers.Del("Content-Type")
-	reqMeta.compression = headers.Get("Content-Encoding")
-	headers.Del("Content-Encoding")
-	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
-	headers.Del("Accept-Encoding")
-	headers.Del("Connect-Protocol-Version")
-	return reqMeta, nil
-}
-
-func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	status := http.StatusOK
-	if meta.end != nil && meta.end.err != nil {
-		status = httpStatusCodeFromRPC(meta.end.err.Code())
-		headers.Set("Content-Type", contentTypeJSON) // error bodies are always in JSON
-		// TODO: Content-Encoding to compress error?
-	} else {
-		headers.Set("Content-Type", "application/"+meta.codec)
-		if meta.compression != "" {
-			headers.Set("Content-Encoding", meta.compression)
-		}
-	}
-	if meta.end != nil {
-		for k, v := range meta.end.trailers {
-			headers["Trailer-"+k] = v
-		}
-	}
-	if len(meta.acceptCompression) > 0 {
-		headers.Set("Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
-	}
-	return status
-}
-
-func (c connectUnaryPostClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
-	if end.err != nil && !wasInHeaders {
-		// TODO: Uh oh. We already flushed headers and started writing body. What can we do?
-		//       Should this log? If we are using http/2, is there some way we could send
-		//       a "goaway" frame to the client, to indicate abnormal end of stream?
-		return nil
-	}
-	if end.err == nil {
-		return nil
-	}
-	wireErr := connectErrorToWireError(end.err, op.methodConf.resolver)
-	data, err := json.Marshal(wireErr)
-	if err != nil {
-		data = ([]byte)(`{"code": "internal", "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
-	}
-	_, _ = writer.Write(data)
+	// Require blocking on request body to encode URL parameters.
+	meta.RequiresBody = true
+	meta.Body = io.NopCloser(bytes.NewBuffer(msgData))
 	return nil
 }
 
-func (c connectUnaryPostClientProtocol) String() string {
-	return protocolNameConnectUnaryPost
+func (c connectUnaryClientProtocol) DecodeRequestHeader(meta *requestMeta) error {
+	if c.config.streamType != connect.StreamTypeUnary {
+		return protocolError("expected unary stream type")
+	}
+	if meta.Method == http.MethodGet {
+		return c.decodeGetQuery(meta)
+	}
+
+	timeout, err := connectExtractTimeout(meta.Header)
+	if err != nil {
+		return err
+	}
+	meta.Timeout = timeout
+	meta.CodecName = strings.TrimPrefix(meta.Header.Get("Content-Type"), "application/")
+	if meta.CodecName == CodecJSON+"; charset=utf-8" {
+		// TODO: should we support other text formats that may need charset check?
+		meta.CodecName = CodecJSON
+	}
+	meta.Header.Del("Content-Type")
+	meta.CompressionName = meta.Header.Get("Content-Encoding")
+	meta.Header.Del("Content-Encoding")
+	meta.AcceptCompression = parseMultiHeader(meta.Header.Values("Accept-Encoding"))
+	meta.Header.Del("Accept-Encoding")
+	meta.Header.Del("Connect-Protocol-Version")
+
+	// Resolve Codecs
+	codec, err := c.config.GetClientCodec(meta.CodecName)
+	if err != nil {
+		return err
+	}
+	meta.Client.Codec = codec
+	if meta.CompressionName != "" {
+		compressor, err := c.config.GetClientCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Client.Compressor = compressor
+	}
+	return nil
+}
+
+func (c connectUnaryClientProtocol) PrepareRequestMessage(msg *messageBuffer, meta *requestMeta) error {
+	msg.Src.IsCompressed = meta.Client.Compressor != nil
+	msg.Src.ReadMode = readModeEOF
+	return nil
+}
+
+func (c connectUnaryClientProtocol) EncodeRequestHeader(meta *responseMeta) error {
+	// Resolve Codecs
+	codec, err := c.config.GetClientCodec(meta.CodecName)
+	if err != nil {
+		return err
+	}
+	meta.Client.Codec = codec
+	meta.Header.Set("Content-Type", "application/"+meta.CodecName)
+	if meta.CompressionName != "" {
+		compressor, err := c.config.GetClientCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Client.Compressor = compressor
+		meta.Header.Set("Content-Encoding", meta.CompressionName)
+		meta.Header.Set("Accept-Encoding", meta.CompressionName)
+	}
+	return nil
+}
+
+func (c connectUnaryClientProtocol) PrepareResponseMessage(msg *messageBuffer, meta *responseMeta) error {
+	msg.Dst.IsCompressed = meta.Client.Compressor != nil
+	msg.Dst.WaitForTrailer = true
+	return nil
+}
+
+func (c connectUnaryClientProtocol) EncodeResponseTrailer(_ *bytes.Buffer, meta *responseMeta) error {
+	trailer := httpExtractTrailers(meta.Header)
+	for key, values := range trailer {
+		meta.Header.Del(key)
+		meta.Header.Set("Trailer-"+key, strings.Join(values, ", "))
+	}
+	return nil
+}
+func (c connectUnaryClientProtocol) EncodeError(buf *bytes.Buffer, meta *responseMeta, err error) {
+	// Encode the error as uncompressed JSON.
+	meta.Header.Del("Content-Encoding")
+	meta.Header.Set("Content-Type", contentTypeJSON)
+
+	cerr := asConnectError(err)
+	wireErr := connectErrorToWireError(cerr, c.config.resolver)
+	if err := json.NewEncoder(buf).Encode(wireErr); err != nil {
+		buf.WriteString(`{"code": "internal", "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
+	}
+	meta.StatusCode = httpStatusCodeFromRPC(cerr.Code())
 }
 
 // connectUnaryServerProtocol implements the Connect protocol for
 // sending unary RPCs to the server handler.
-type connectUnaryServerProtocol struct{}
+type connectUnaryServerProtocol struct {
+	config *methodConfig
 
-// NB: the latter two interfaces must be implemented to handle GET requests.
-var _ serverProtocolHandler = connectUnaryServerProtocol{}
-var _ requestLineBuilder = connectUnaryServerProtocol{}
-var _ serverBodyPreparer = connectUnaryServerProtocol{}
+	// State
+	statusCode int
+}
 
-func (c connectUnaryServerProtocol) protocol() Protocol {
+var _ serverProtocolHandler = (*connectUnaryServerProtocol)(nil)
+
+func (c *connectUnaryServerProtocol) Protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	headers.Set("Content-Type", "application/"+meta.codec)
-	if meta.compression != "" {
-		headers.Set("Content-Encoding", meta.compression)
+func (c *connectUnaryServerProtocol) encodeGetQuery(meta *requestMeta) error {
+	meta.Method = http.MethodGet
+	meta.Header.Del("Content-Type")
+
+	codec, ok := meta.Server.Codec.(StableCodec)
+	if !ok {
+		return protocolError("cannot use GET with unstable codec")
 	}
-	if len(meta.acceptCompression) > 0 {
-		headers.Set("Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
+	meta.Server.Codec = connectGetRequestCodec{
+		config:     c.config,
+		codec:      codec,
+		compressor: meta.Server.Compressor,
+		meta:       meta,
 	}
-	headers.Set("Connect-Protocol-Version", "1")
-	if meta.hasTimeout {
-		timeoutStr := connectEncodeTimeout(meta.timeout)
-		if timeoutStr != "" {
-			headers.Set("Connect-Timeout-Ms", timeoutStr)
-		}
-	}
+	// Handle compression in the codec.
+	meta.Server.Compressor = nil
+	return nil
 }
 
-func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
-	var respMeta responseMeta
-	contentType := headers.Get("Content-Type")
+func (c *connectUnaryServerProtocol) EncodeRequestHeader(meta *requestMeta) error {
+	meta.RequiresBody = true // Require body for URL parameters.
+
+	// Resolve codecs
+	codec, err := c.config.GetServerCodec(meta.CodecName)
+	if err != nil {
+		return err
+	}
+	meta.Server.Codec = codec
+	if meta.CompressionName != "" {
+		compression, err := c.config.GetServerCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Server.Compressor = compression
+	}
+	if meta.Timeout > 0 {
+		timeoutStr := connectEncodeTimeout(meta.Timeout)
+		if timeoutStr != "" {
+			meta.Header.Set("Connect-Timeout-Ms", timeoutStr)
+		}
+	}
+	meta.Header.Set("Accept", "application/"+meta.CodecName)
+
+	// Encode as GET request if possible.
+	meta.URL.Path = c.config.methodPath
+	if c.useGet(meta) {
+		return c.encodeGetQuery(meta)
+	}
+	meta.Method = http.MethodPost
+	meta.URL.RawQuery = ""
+
+	meta.Header.Set("Content-Type", "application/"+meta.CodecName)
+	if meta.CompressionName != "" {
+		meta.Header.Set("Content-Encoding", meta.CompressionName)
+	}
+	if len(meta.AcceptCompression) > 0 {
+		meta.Header.Set("Accept-Encoding", strings.Join(meta.AcceptCompression, ", "))
+	}
+	meta.Header.Set("Connect-Protocol-Version", "1")
+
+	return nil
+}
+
+func (c *connectUnaryServerProtocol) PrepareRequestMessage(msg *messageBuffer, meta *requestMeta) error {
+	msg.Dst.IsCompressed = meta.Server.Compressor != nil
+	return nil
+}
+
+func (c *connectUnaryServerProtocol) DecodeRequestHeader(meta *responseMeta) error {
+	contentType := meta.Header.Get("Content-Type")
+	meta.Header.Del("Content-Type")
+	meta.CompressionName = meta.Header.Get("Content-Encoding")
+	meta.Header.Del("Content-Encoding")
+	meta.AcceptCompression = parseMultiHeader(meta.Header.Values("Accept-Encoding"))
+	meta.Header.Del("Accept-Encoding")
+	c.statusCode = meta.StatusCode // Save for DecodeTrailer.
+
 	switch {
 	case strings.HasPrefix(contentType, "application/"):
-		respMeta.codec = strings.TrimPrefix(contentType, "application/")
+		meta.CodecName = strings.TrimPrefix(contentType, "application/")
 	default:
-		respMeta.codec = contentType + "?"
+		// Invalid codec, try capture the error in DecodeMessage.
+		return nil
 	}
-	headers.Del("Content-Type")
-	respMeta.compression = headers.Get("Content-Encoding")
-	headers.Del("Content-Encoding")
-	respMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
-	headers.Del("Accept-Encoding")
-	trailers := connectExtractUnaryTrailers(headers)
 
-	var endUnmarshaller responseEndUnmarshaller
-	if statusCode == http.StatusOK {
-		respMeta.pendingTrailers = trailers
-	} else {
-		// Content-Type must be application/json for errors or else it's invalid
-		if contentType != contentTypeJSON {
-			respMeta.codec = contentType + "?"
-		} else {
-			respMeta.codec = ""
-		}
-		respMeta.end = &responseEnd{
-			wasCompressed: respMeta.compression != "",
-			trailers:      trailers,
-		}
-		endUnmarshaller = func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
-			var wireErr connectWireError
-			if err := json.Unmarshal(buf.Bytes(), &wireErr); err != nil {
-				end.err = connect.NewError(connect.CodeInternal, err)
-				return
-			}
-			end.err = wireErr.toConnectError()
+	// Encode connect trailers as HTTP trailers.
+	trailers := connectExtractUnaryTrailers(meta.Header)
+	for key, values := range trailers {
+		meta.Header.Del(key)
+		for _, value := range values {
+			meta.Header.Add(http.TrailerPrefix+key, value)
 		}
 	}
-	return respMeta, endUnmarshaller, nil
-}
 
-func (c connectUnaryServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
-	return responseEnd{}, nil
-}
-
-func (c connectUnaryServerProtocol) requestNeedsPrep(op *operation) bool {
-	return c.useGet(op)
-}
-
-func (c connectUnaryServerProtocol) useGet(op *operation) bool {
-	methodOptions, _ := op.methodConf.descriptor.Options().(*descriptorpb.MethodOptions)
-	_, isStable := op.server.codec.(StableCodec)
-	return op.request.Method == http.MethodGet && isStable &&
-		methodOptions.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
-}
-
-func (c connectUnaryServerProtocol) prepareMarshalledRequest(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
-	// NB: This would be called when requestNeedsPrep returns true, for GET requests.
-	//     In that case, there is no request body, so we can return a nil result.
-	//     The request data will actually be put into the URL in that case.
-	//     See the requestLine method below.
-	return nil, nil
-}
-
-func (c connectUnaryServerProtocol) responseNeedsPrep(_ *operation) bool {
-	return false
-}
-
-func (c connectUnaryServerProtocol) prepareUnmarshalledResponse(_ *operation, _ []byte, _ proto.Message) error {
-	return errors.New("response does not need preparation")
-}
-
-func (c connectUnaryServerProtocol) requiresMessageToProvideRequestLine(op *operation) bool {
-	return c.useGet(op)
-}
-
-func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message) (urlPath, queryParams, method string, includeBody bool, err error) {
-	if !c.useGet(op) {
-		return op.methodConf.methodPath, "", http.MethodPost, true, nil
+	// Resolve codecs, only if the response is successful.
+	// Otherwise we default to JSON using a connect compatible JSON codec.
+	if c.statusCode == 200 {
+		codec, err := c.config.GetServerCodec(meta.CodecName)
+		if err != nil {
+			return err
+		}
+		meta.Server.Codec = codec
 	}
+	if meta.CompressionName != "" {
+		compression, err := c.config.GetServerCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Server.Compressor = compression
+	}
+	return nil
+}
+
+func (c *connectUnaryServerProtocol) PrepareResponseMessage(msg *messageBuffer, meta *responseMeta) error {
+	msg.Src.ReadMode = readModeEOF // Read until EOF
+	msg.Src.IsCompressed = meta.Server.Compressor != nil
+	if meta.Server.Codec == nil || c.statusCode/100 != 2 {
+		msg.Src.IsTrailer = true
+	}
+	return nil
+}
+
+// DecodeResponseTrailer decodes the error from the last message, if any.
+// Trailers are set in the HTTP response headers.
+func (c *connectUnaryServerProtocol) DecodeResponseTrailer(buf *bytes.Buffer, _ *responseMeta) error {
+	if c.statusCode/100 == 2 {
+		return nil
+	}
+	if buf.Len() == 0 {
+		code := httpStatusCodeToRPC(c.statusCode)
+		return connect.NewWireError(code, errors.New("no error details"))
+	}
+
+	var wireErr connectWireError
+	if err := json.Unmarshal(buf.Bytes(), &wireErr); err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to unmarshal error: %w", err))
+	}
+	return wireErr.toConnectError()
+}
+
+func (c *connectUnaryServerProtocol) useGet(meta *requestMeta) bool {
+	methodOptions, _ := c.config.descriptor.Options().(*descriptorpb.MethodOptions)
+	noSideEffects := methodOptions.GetIdempotencyLevel() == descriptorpb.MethodOptions_NO_SIDE_EFFECTS
+	_, isStable := meta.Server.Codec.(StableCodec)
+	return isStable && noSideEffects
+}
+
+type connectGetRequestCodec struct {
+	config     *methodConfig
+	codec      StableCodec
+	compressor compressor
+	meta       *requestMeta
+}
+
+func (c connectGetRequestCodec) Name() string {
+	return "connect-get+" + c.codec.Name()
+}
+func (c connectGetRequestCodec) MarshalAppend(dst []byte, msg proto.Message) ([]byte, error) {
 	vals := make(url.Values, 5)
 	vals.Set("connect", "v1")
+	vals.Set("encoding", c.codec.Name())
 
-	vals.Set("encoding", op.server.codec.Name())
-	buf := op.bufferPool.Get()
-	stableMarshaler, _ := op.server.codec.(StableCodec) // c.useGet called above already checked this
-	data, err := stableMarshaler.MarshalAppendStable(buf.Bytes(), msg)
+	dst, err := c.codec.MarshalAppendStable(dst, msg)
 	if err != nil {
-		op.bufferPool.Put(buf)
-		return "", "", "", false, err
+		return nil, err
 	}
-	buf = op.bufferPool.Wrap(data, buf)
-	defer op.bufferPool.Put(buf)
 
-	encoded := op.bufferPool.Get()
-	defer op.bufferPool.Put(encoded)
-	if op.server.reqCompression != nil {
-		vals.Set("compression", op.server.reqCompression.Name())
-		if err := op.server.reqCompression.compress(encoded, buf); err != nil {
-			return "", "", "", false, err
+	msgRaw := dst
+
+	// TODO: move the compression logic outside of the codec.
+	if c.compressor != nil {
+		var tmp bytes.Buffer
+		src := bytes.NewBuffer(msgRaw)
+		vals.Set("compression", c.compressor.Name())
+		if err := c.compressor.compress(&tmp, src); err != nil {
+			return nil, err
 		}
-		// for the next step, we want encoded empty and data to be the message source
-		buf, encoded = encoded, buf // swap so writing to encoded doesn't mutate data
-		encoded.Reset()
-		data = buf.Bytes()
+		msgRaw = tmp.Bytes()
 	}
 
 	var msgStr string
-	if stableMarshaler.IsBinary() || op.server.reqCompression != nil {
-		b64encodedLen := base64.RawURLEncoding.EncodedLen(len(data))
+	if c.codec.IsBinary() || c.compressor != nil {
 		vals.Set("base64", "1")
-		encoded.Grow(b64encodedLen)
-		encodedBytes := encoded.Bytes()[:b64encodedLen]
-		base64.RawURLEncoding.Encode(encodedBytes, data)
-		msgStr = string(encodedBytes)
+		msgStr = base64.RawURLEncoding.EncodeToString(msgRaw)
 	} else {
-		msgStr = string(data)
+		msgStr = string(dst)
 	}
 
 	vals.Set("message", msgStr)
-	queryString := vals.Encode()
-	if uint32(len(op.methodConf.methodPath)+len(queryString)+1) > op.methodConf.maxGetURLBytes {
+	c.meta.URL.RawQuery = vals.Encode()
+	c.meta.Method = http.MethodGet
+	size := len(c.config.methodPath) + len(c.meta.URL.RawQuery)
+	if size >= int(c.config.maxGetURLBytes) {
 		// URL is too big; fall back to POST
-		return op.methodConf.methodPath, "", http.MethodPost, true, nil
+		// TODO: should we try to compress the message?
+		c.meta.Header.Set("Content-Type", "application/"+c.codec.Name())
+		c.meta.Header.Set("Connect-Protocol-Version", "1")
+		c.meta.Header.Del("Content-Encoding")
+		c.meta.Method = http.MethodPost
+		c.meta.URL.RawQuery = ""
+		return dst, nil
 	}
-	return op.methodConf.methodPath, vals.Encode(), http.MethodGet, false, nil
+	// Successfully encoded as GET request.
+	return dst[:0], nil
 }
-
-func (c connectUnaryServerProtocol) String() string {
-	return protocolNameConnectUnary
+func (c connectGetRequestCodec) Unmarshal(_ []byte, _ proto.Message) error {
+	// This should never be called.
+	return fmt.Errorf("unimplemented")
 }
 
 // connectStreamClientProtocol implements the Connect protocol for
 // processing streaming RPCs received from the client.
-type connectStreamClientProtocol struct{}
+type connectStreamClientProtocol struct {
+	config *methodConfig
+}
 
 var _ clientProtocolHandler = connectStreamClientProtocol{}
-var _ envelopedProtocolHandler = connectStreamClientProtocol{}
 
-func (c connectStreamClientProtocol) protocol() Protocol {
+func (c connectStreamClientProtocol) Protocol() Protocol {
 	return ProtocolConnect
 }
 
@@ -420,182 +459,226 @@ func (c connectStreamClientProtocol) acceptsStreamType(_ *operation, streamType 
 	return streamType != connect.StreamTypeUnary
 }
 
-func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
-	var reqMeta requestMeta
-	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
-		return reqMeta, err
+func (c connectStreamClientProtocol) DecodeRequestHeader(meta *requestMeta) error {
+	if meta.Method != http.MethodPost {
+		return protocolError("expected POST method")
 	}
-	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), "application/connect+")
-	headers.Del("Content-Type")
-	reqMeta.compression = headers.Get("Connect-Content-Encoding")
-	headers.Del("Connect-Content-Encoding")
-	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Connect-Accept-Encoding"))
-	headers.Del("Connect-Accept-Encoding")
-	return reqMeta, nil
-}
+	timeout, err := connectExtractTimeout(meta.Header)
+	if err != nil {
+		return err
+	}
+	meta.Timeout = timeout
 
-func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	headers.Set("Content-Type", "application/connect+"+meta.codec)
-	if meta.compression != "" {
-		headers.Set("Connect-Content-Encoding", meta.compression)
+	meta.CodecName = strings.TrimPrefix(meta.Header.Get("Content-Type"), "application/connect+")
+	meta.Header.Del("Content-Type")
+	meta.CompressionName = meta.Header.Get("Connect-Content-Encoding")
+	meta.Header.Del("Connect-Content-Encoding")
+	meta.AcceptCompression = parseMultiHeader(meta.Header.Values("Connect-Accept-Encoding"))
+	meta.Header.Del("Connect-Accept-Encoding")
+	// Resolve codecs
+	codec, err := c.config.GetClientCodec(meta.CodecName)
+	if err != nil {
+		return err
 	}
-	if len(meta.acceptCompression) > 0 {
-		headers.Set("Connect-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
+	meta.Client.Codec = codec
+	if meta.CompressionName != "" {
+		compressor, err := c.config.GetClientCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Client.Compressor = compressor
 	}
-	return http.StatusOK
-}
-
-func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, _ bool) http.Header {
-	streamEnd := &connectStreamEnd{Metadata: end.trailers}
-	if end.err != nil {
-		streamEnd.Error = connectErrorToWireError(end.err, op.methodConf.resolver)
-	}
-	buffer := op.bufferPool.Get()
-	defer op.bufferPool.Put(buffer)
-	enc := json.NewEncoder(buffer)
-	if err := enc.Encode(streamEnd); err != nil {
-		buffer.WriteString(`{"error": {"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}}`)
-	}
-	// TODO: compress?
-	env := envelope{trailer: true, length: uint32(buffer.Len())}
-	envBytes := c.encodeEnvelope(env)
-	_, _ = writer.Write(envBytes[:])
-	_, _ = buffer.WriteTo(writer)
 	return nil
 }
 
-func (c connectStreamClientProtocol) decodeEnvelope(envBytes envelopeBytes) (envelope, error) {
-	flags := envBytes[0]
-	if flags != 0 && flags != 1 {
-		return envelope{}, fmt.Errorf("invalid compression flag: must be 0 or 1; instead got %d", flags)
+func (c connectStreamClientProtocol) PrepareRequestMessage(msg *messageBuffer, meta *requestMeta) error {
+	if msg.Buf.Len() < 5 {
+		return io.ErrShortBuffer // ask for more data
 	}
-	return envelope{
-		compressed: flags == 1,
-		length:     binary.BigEndian.Uint32(envBytes[1:]),
-	}, nil
+	flags, size, err := readEnvelope(msg.Buf)
+	if err != nil {
+		return err
+	}
+	msg.Src.Size = size
+	if flags&flagEnvelopeCompressed != 0 {
+		msg.Src.IsCompressed = true
+	}
+	return nil
 }
 
-func (c connectStreamClientProtocol) encodeEnvelope(env envelope) envelopeBytes {
-	var envBytes envelopeBytes
-	if env.compressed {
-		envBytes[0] = 1
+func (c connectStreamClientProtocol) EncodeRequestHeader(meta *responseMeta) error {
+	meta.Header.Set("Content-Type", "application/connect+"+meta.CodecName)
+	if meta.CompressionName != "" {
+		meta.Header.Set("Connect-Content-Encoding", meta.CompressionName)
+		meta.Header.Set("Connect-Accept-Encoding", meta.CompressionName)
 	}
-	if env.trailer {
-		envBytes[0] |= 2
+	// Resolve codecs
+	codec, err := c.config.GetClientCodec(meta.CodecName)
+	if err != nil {
+		return err
 	}
-	binary.BigEndian.PutUint32(envBytes[1:], env.length)
-	return envBytes
+	meta.Client.Codec = codec
+	if meta.CompressionName != "" {
+		compressor, err := c.config.GetClientCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Client.Compressor = compressor
+	}
+	return nil
 }
 
-func (c connectStreamClientProtocol) String() string {
-	return protocolNameConnectStream
+func (c connectStreamClientProtocol) PrepareResponseMessage(msg *messageBuffer, meta *responseMeta) error {
+	msg.Dst.IsEnvelope = true
+	msg.Dst.IsCompressed = meta.Client.Compressor != nil
+	if msg.Dst.IsCompressed {
+		msg.Dst.Flags |= flagEnvelopeCompressed
+	}
+	return nil
+}
+func (c connectStreamClientProtocol) EncodeResponseTrailer(buf *bytes.Buffer, meta *responseMeta) error {
+	metadata := http.Header(httpExtractTrailers(meta.Header))
+	streamEnd := &connectStreamEnd{
+		Metadata: metadata,
+	}
+	connectEncodeStreamEnd(buf, streamEnd)
+	return nil
+}
+
+func (c connectStreamClientProtocol) EncodeError(buf *bytes.Buffer, meta *responseMeta, err error) {
+	// Encode the error as uncompressed JSON.
+	cerr := asConnectError(err)
+	wireErr := connectErrorToWireError(cerr, c.config.resolver)
+	metadata := http.Header(httpExtractTrailers(meta.Header))
+	streamEnd := &connectStreamEnd{
+		Metadata: metadata,
+		Error:    wireErr,
+	}
+	connectEncodeStreamEnd(buf, streamEnd)
 }
 
 // connectStreamServerProtocol implements the Connect protocol for
 // sending streaming RPCs to the server handler.
-type connectStreamServerProtocol struct{}
+type connectStreamServerProtocol struct {
+	config *methodConfig
+}
 
 var _ serverProtocolHandler = connectStreamServerProtocol{}
-var _ serverEnvelopedProtocolHandler = connectStreamServerProtocol{}
 
-func (c connectStreamServerProtocol) protocol() Protocol {
+func (c connectStreamServerProtocol) Protocol() Protocol {
 	return ProtocolConnect
 }
 
-func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	headers.Set("Content-Type", "application/connect+"+meta.codec)
-	if meta.compression != "" {
-		headers.Set("Connect-Content-Encoding", meta.compression)
+func (c connectStreamServerProtocol) EncodeRequestHeader(meta *requestMeta) error {
+	meta.Header.Set("Content-Type", "application/connect+"+meta.CodecName)
+	if meta.CompressionName != "" {
+		meta.Header.Set("Connect-Content-Encoding", meta.CompressionName)
+		meta.Header.Set("Connect-Accept-Encoding", meta.CompressionName)
 	}
-	if len(meta.acceptCompression) > 0 {
-		headers.Set("Connect-Accept-Encoding", strings.Join(meta.acceptCompression, ", "))
+	if meta.Timeout > 0 {
+		meta.Header.Set("Connect-Timeout-Ms", connectEncodeTimeout(meta.Timeout))
 	}
-	if meta.hasTimeout {
-		headers.Set("Connect-Timeout-Ms", connectEncodeTimeout(meta.timeout))
+	// Resovlve Codecs
+	codec, err := c.config.GetServerCodec(meta.CodecName)
+	if err != nil {
+		return err
 	}
+	meta.Server.Codec = codec
+	if meta.CompressionName != "" {
+		compression, err := c.config.GetServerCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Server.Compressor = compression
+	}
+	meta.URL.Path = c.config.methodPath
+	meta.Method = http.MethodPost
+	return nil
 }
 
-func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
-	var respMeta responseMeta
-	contentType := headers.Get("Content-Type")
+func (c connectStreamServerProtocol) PrepareRequestMessage(msg *messageBuffer, meta *requestMeta) error {
+	msg.Dst.IsEnvelope = true
+	if meta.Server.Compressor != nil {
+		msg.Dst.IsCompressed = true
+		msg.Dst.Flags |= flagEnvelopeCompressed
+	}
+	return nil
+}
+
+func (c connectStreamServerProtocol) DecodeRequestHeader(meta *responseMeta) error {
+	contentType := meta.Header.Get("Content-Type")
 	switch {
 	case strings.HasPrefix(contentType, "application/connect+"):
-		respMeta.codec = strings.TrimPrefix(contentType, "application/connect+")
+		meta.CodecName = strings.TrimPrefix(contentType, "application/connect+")
 	default:
-		respMeta.codec = contentType + "?"
+		meta.CodecName = contentType + "?"
 	}
-	headers.Del("Content-Type")
-	respMeta.compression = headers.Get("Connect-Content-Encoding")
-	headers.Del("Connect-Content-Encoding")
-	respMeta.acceptCompression = parseMultiHeader(headers.Values("Connect-Accept-Encoding"))
-	headers.Del("Connect-Accept-Encoding")
-
-	// See if RPC is already over (unexpected HTTP error or trailers-only response)
-	if statusCode != http.StatusOK {
-		if respMeta.end == nil {
-			respMeta.end = &responseEnd{}
-		}
-		if respMeta.end.err == nil {
-			// TODO: map HTTP status code to an RPC error (opposite of httpStatusCodeFromRPC)
-			respMeta.end.err = connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected HTTP error: %d %s", statusCode, http.StatusText(statusCode)))
-		}
+	meta.Header.Del("Content-Type")
+	meta.CompressionName = meta.Header.Get("Connect-Content-Encoding")
+	meta.Header.Del("Connect-Content-Encoding")
+	meta.AcceptCompression = parseMultiHeader(meta.Header.Values("Connect-Accept-Encoding"))
+	meta.Header.Del("Connect-Accept-Encoding")
+	if meta.StatusCode != http.StatusOK {
+		return protocolError("expected HTTP status OK (200) but got %d", meta.StatusCode)
 	}
-	return respMeta, nil, nil
-}
-
-func (c connectStreamServerProtocol) extractEndFromTrailers(_ *operation, _ http.Header) (responseEnd, error) {
-	return responseEnd{}, errors.New("connect streaming protocol does not use HTTP trailers")
-}
-
-func (c connectStreamServerProtocol) decodeEnvelope(envBytes envelopeBytes) (envelope, error) {
-	flags := envBytes[0]
-	if flags&0b1111_1100 != 0 {
-		// invalid bits are set
-		return envelope{}, fmt.Errorf("invalid frame flags: only lowest two bits may be set; instead got %d", flags)
-	}
-	return envelope{
-		compressed: flags&1 != 0,
-		trailer:    flags&2 != 0,
-		length:     binary.BigEndian.Uint32(envBytes[1:]),
-	}, nil
-}
-
-func (c connectStreamServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
-	var envBytes envelopeBytes
-	if env.compressed {
-		envBytes[0] = 1
-	}
-	binary.BigEndian.PutUint32(envBytes[1:], env.length)
-	return envBytes
-}
-
-func (c connectStreamServerProtocol) decodeEndFromMessage(op *operation, reader io.Reader) (responseEnd, error) {
-	// TODO: buffer size limit for headers/trailers; should use http.DefaultMaxHeaderBytes if not configured
-	buffer := op.bufferPool.Get()
-	defer op.bufferPool.Put(buffer)
-	_, err := buffer.ReadFrom(reader)
+	// Relove Codecs
+	codec, err := c.config.GetServerCodec(meta.CodecName)
 	if err != nil {
-		return responseEnd{}, err
+		return err
 	}
+	meta.Server.Codec = codec
+	if meta.CompressionName != "" {
+		compression, err := c.config.GetServerCompressor(meta.CompressionName)
+		if err != nil {
+			return err
+		}
+		meta.Server.Compressor = compression
+	}
+	return nil
+}
+
+func (c connectStreamServerProtocol) PrepareResponseMessage(msg *messageBuffer, meta *responseMeta) error {
+	if msg.Buf.Len() < 5 {
+		return io.ErrShortBuffer // ask for more data
+	}
+	flags, size, err := readEnvelope(msg.Buf)
+	if err != nil {
+		return err
+	}
+	msg.Src.Size = size
+	if flags&flagEnvelopeCompressed != 0 {
+		msg.Src.IsCompressed = true
+	}
+	if flags&connectFlagEnvelopeEndStream != 0 {
+		msg.Src.IsTrailer = true
+	}
+	return nil
+}
+
+func (c connectStreamServerProtocol) DecodeResponseTrailer(buf *bytes.Buffer, meta *responseMeta) error {
+	if buf.Len() == 0 {
+		return protocolError("expected trailer")
+	}
+
 	var streamEnd connectStreamEnd
-	if err := json.Unmarshal(buffer.Bytes(), &streamEnd); err != nil {
-		return responseEnd{}, err
+	if err := json.Unmarshal(buf.Bytes(), &streamEnd); err != nil {
+		return protocolError("failed to unmarshal trailer: %w", err)
 	}
-	var cerr *connect.Error
+	// Encode connect trailers as HTTP trailers.
+	for key, values := range streamEnd.Metadata {
+		meta.Header.Del(key)
+		key = http.TrailerPrefix + key
+		for _, value := range values {
+			meta.Header.Add(key, value)
+		}
+	}
 	if streamEnd.Error != nil {
-		cerr = streamEnd.Error.toConnectError()
+		return streamEnd.Error.toConnectError()
 	}
-	return responseEnd{
-		err:      cerr,
-		trailers: streamEnd.Metadata,
-	}, nil
+	return nil
 }
 
-func (c connectStreamServerProtocol) String() string {
-	return protocolNameConnectStream
-}
-
-func connectExtractUnaryTrailers(headers http.Header) http.Header {
+func connectExtractUnaryTrailers(headers httpHeader) http.Header {
 	var count int
 	for k := range headers {
 		if strings.HasPrefix(k, "Trailer-") {
@@ -612,27 +695,25 @@ func connectExtractUnaryTrailers(headers http.Header) http.Header {
 	return result
 }
 
-func connectExtractTimeout(headers http.Header, meta *requestMeta) error {
+func connectExtractTimeout(headers httpHeader) (time.Duration, error) {
 	str := headers.Get("Connect-Timeout-Ms")
 	headers.Del("Connect-Timeout-Ms")
 	if str == "" {
-		return nil
+		return 0, nil
 	}
 	timeoutInt, err := strconv.ParseInt(str, 10, 64)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if timeoutInt < 0 {
-		return fmt.Errorf("timeout header indicated invalid negative value: %d", timeoutInt)
+		return 0, fmt.Errorf("timeout header indicated invalid negative value: %d", timeoutInt)
 	}
 	timeout := time.Millisecond * time.Duration(timeoutInt)
 	if timeout.Milliseconds() != timeoutInt {
 		// overflow
 		timeout = time.Duration(math.MaxInt64)
 	}
-	meta.timeout = timeout
-	meta.hasTimeout = true
-	return nil
+	return timeout, nil
 }
 
 func connectEncodeTimeout(timeout time.Duration) string {
@@ -706,4 +787,14 @@ func connectErrorToWireError(cerr *connect.Error, resolver TypeResolver) *connec
 type connectStreamEnd struct {
 	Error    *connectWireError `json:"error,omitempty"`
 	Metadata http.Header       `json:"metadata,omitempty"`
+}
+
+func connectEncodeStreamEnd(dst *bytes.Buffer, streamEnd *connectStreamEnd) {
+	dst.Write([]byte{0, 0, 0, 0, 0}) // empty message
+	if err := json.NewEncoder(dst).Encode(streamEnd); err != nil {
+		dst.WriteString(`{"error": {"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}}`)
+	}
+	dst.Bytes()[0] |= connectFlagEnvelopeEndStream // set trailer flag
+	size := uint32(dst.Len() - 5)
+	binary.BigEndian.PutUint32(dst.Bytes()[1:], size)
 }

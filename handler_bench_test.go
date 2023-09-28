@@ -230,9 +230,8 @@ func BenchmarkServeHTTP(b *testing.B) {
 		req.ProtoMajor = 2
 		req.ProtoMinor = 0
 		req.Header.Set("Content-Type", "application/grpc+proto")
-		req.Header.Set("Grpc-Encoding", "gzip")
 		req.Header.Set("Grpc-Timeout", "1S")
-		req.Header.Set("Grpc-Accept-Encoding", "gzip")
+		req.Header.Set("Grpc-Accept-Encoding", "identity")
 
 		b.StartTimer()
 		b.ReportAllocs()

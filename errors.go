@@ -118,3 +118,9 @@ func malformedRequestError(err error) error {
 	// Adds 400 Bad Request / InvalidArgument status codes to error
 	return connect.NewError(connect.CodeInvalidArgument, err)
 }
+
+func errorf(code connect.Code, msg string, args ...any) error {
+	err := connect.NewError(code, fmt.Errorf(msg, args...))
+	err.Meta()
+	return err
+}

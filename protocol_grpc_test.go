@@ -36,7 +36,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	err := fmt.Errorf("test error: %s", "Hello, 世界")
 	cerr := connect.NewWireError(connect.CodeUnauthenticated, err)
 	rec := httptest.NewRecorder()
-	grpcWriteEndToTrailers(&responseEnd{err: cerr}, rec.Header())
+	grpcEncodeError(cerr, httpHeader(rec.Header()))
 
 	assert.Equal(t, "16", rec.Header().Get("Grpc-Status"))
 	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
@@ -44,7 +44,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Equal(t, "", rec.Header().Get("Grpc-Status-Details-Bin"))
 	assert.Len(t, rec.Body.Bytes(), 0)
 
-	got := grpcExtractErrorFromTrailer(rec.Header())
+	got := grpcExtractErrorFromTrailer(httpHeader(rec.Header()))
 	assert.Equal(t, cerr, got)
 
 	// Now again, but this time an error with details
@@ -52,14 +52,14 @@ func TestGRPCErrorWriter(t *testing.T) {
 	require.NoError(t, err)
 	cerr.AddDetail(errDetail)
 	rec = httptest.NewRecorder()
-	grpcWriteEndToTrailers(&responseEnd{err: cerr}, rec.Header())
+	grpcEncodeError(cerr, httpHeader(rec.Header()))
 
 	assert.Equal(t, "16", rec.Header().Get("Grpc-Status"))
 	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
 	assert.Equal(t, "CBASGXRlc3QgZXJyb3I6IEhlbGxvLCDkuJbnlYwaOAovdHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUucHJvdG9idWYuU3RyaW5nVmFsdWUSBQoDZm9v", rec.Header().Get("Grpc-Status-Details-Bin"))
 	assert.Len(t, rec.Body.Bytes(), 0)
 
-	got = grpcExtractErrorFromTrailer(rec.Header())
+	got = grpcExtractErrorFromTrailer(httpHeader(rec.Header()))
 	assert.Equal(t, cerr, got)
 }
 

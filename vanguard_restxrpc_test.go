@@ -16,6 +16,7 @@ package vanguard
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -107,6 +108,8 @@ func TestMux_RESTxRPC(t *testing.T) {
 			}
 		}
 	}
+	largePayload := make([]byte /* 1MB */, maxRecycleBufferSize)
+	_, _ = rand.Read(largePayload)
 
 	type input struct {
 		method string
@@ -166,10 +169,11 @@ func TestMux_RESTxRPC(t *testing.T) {
 		meta    http.Header
 	}
 	type testRequest struct {
-		name   string
-		input  input
-		stream testStream
-		output output
+		name    string
+		input   input
+		stream  testStream
+		output  output
+		isLarge bool
 	}
 	testRequests := []testRequest{{
 		name: "GetBook",
@@ -429,6 +433,59 @@ func TestMux_RESTxRPC(t *testing.T) {
 			body: &emptypb.Empty{},
 		},
 	}, {
+		name:    "Upload-Large",
+		isLarge: true,
+		input: input{
+			method: http.MethodPost,
+			path:   "/message.txt:upload",
+			body: &httpbody.HttpBody{
+				ContentType: "text/plain",
+				Data:        largePayload,
+			},
+		},
+		stream: testStream{
+			method: testv1connect.ContentServiceUploadProcedure,
+			msgs: func() []testMsg {
+				var testMsgs []testMsg
+				payload := largePayload
+				for i := 0; len(payload) > 0; i++ {
+					size := len(payload)
+					if size > chunkMessageSize {
+						size = chunkMessageSize
+					}
+					part := payload[:size]
+					payload = payload[size:]
+
+					msg := &testv1.UploadRequest{
+						File: &httpbody.HttpBody{
+							Data: part,
+						},
+					}
+					if i == 0 {
+						msg.Filename = "message.txt"
+						msg.File.ContentType = "text/plain"
+					}
+					testMsgs = append(testMsgs,
+						testMsg{in: &testMsgIn{
+							msg: msg,
+						}},
+					)
+					t.Log(msg.Filename)
+				}
+				testMsgs = append(testMsgs,
+					testMsg{out: &testMsgOut{
+						msg: &emptypb.Empty{},
+					}},
+				)
+
+				return testMsgs
+			}(),
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &emptypb.Empty{},
+		},
+	}, {
 		name: "Download",
 		input: input{
 			method: http.MethodGet,
@@ -512,7 +569,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 					req.Header.Set("Test", t.Name()) // for interceptor
 					t.Log(req.Method, req.URL.String())
 
-					debug, _ := httputil.DumpRequest(req, true)
+					debug, _ := httputil.DumpRequest(req, !testCase.isLarge)
 					t.Log("req:", string(debug))
 
 					rsp := httptest.NewRecorder()
@@ -520,7 +577,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 
 					result := rsp.Result()
 					defer result.Body.Close()
-					debug, _ = httputil.DumpResponse(result, true)
+					debug, _ = httputil.DumpResponse(result, !testCase.isLarge)
 					t.Log("rsp:", string(debug))
 
 					// Check response

@@ -15,16 +15,13 @@
 package vanguard
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"net/http"
 	"strings"
-	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/api/annotations"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -149,7 +146,7 @@ type Mux struct {
 	// the HooksCallback and the UnknownHandler are defined, the HooksCallback will be
 	// invoked first. The UnknownHandler will only be invoked if the callback returns
 	// a nil error.
-	HooksCallback func(context.Context, Operation) (Hooks, error)
+	// HooksCallback func(context.Context, Operation) (Hooks, error)
 
 	bufferPool  bufferPool
 	codecs      codecMap
@@ -243,9 +240,9 @@ func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.Ser
 		svcOpts.maxMsgBufferBytes = DefaultMaxMessageBufferBytes
 	}
 
-	if svcOpts.hooksCallback == nil {
-		svcOpts.hooksCallback = m.HooksCallback
-	}
+	// if svcOpts.hooksCallback == nil {
+	// 	svcOpts.hooksCallback = m.HooksCallback
+	// }
 
 	if svcOpts.resolver == nil {
 		svcOpts.resolver = m.TypeResolver
@@ -349,18 +346,37 @@ func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.Metho
 	if _, ok := m.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
+	codecs := make(map[string]Codec, len(opts.codecNames))
+	allCodecs := make(map[string]Codec, len(m.codecs))
+	for name, codecFn := range m.codecs {
+		codec := codecFn(opts.resolver)
+		allCodecs[name] = codec
+		if _, ok := opts.codecNames[name]; ok {
+			codecs[name] = codec
+		}
+	}
+	compressors := make(map[string]compressor, len(opts.compressorNames))
+	allCompressors := make(map[string]compressor, len(m.compressors))
+	for name, comp := range m.compressors {
+		allCompressors[name] = comp
+		if _, ok := opts.compressorNames[name]; ok {
+			compressors[name] = comp
+		}
+	}
 	methodConf := &methodConfig{
 		descriptor:        methodDesc,
 		methodPath:        methodPath,
 		handler:           handler,
 		resolver:          opts.resolver,
 		protocols:         opts.protocols,
-		codecNames:        opts.codecNames,
+		allCodecs:         allCodecs,
+		allCompressors:    allCompressors,
+		codecs:            codecs,
+		compressors:       compressors,
 		preferredCodec:    opts.preferredCodec,
-		compressorNames:   opts.compressorNames,
 		maxMsgBufferBytes: opts.maxMsgBufferBytes,
 		maxGetURLBytes:    opts.maxGetURLBytes,
-		hooksCallback:     opts.hooksCallback,
+		//hooksCallback:     opts.hooksCallback,
 	}
 	if m.methods == nil {
 		m.methods = make(map[string]*methodConfig, 1)
@@ -534,7 +550,7 @@ func WithMaxGetURLBytes(limit uint32) ServiceOption {
 	})
 }
 
-// WithHooksCallback sets the given callback for hooking into the RPC flow.
+/* // WithHooksCallback sets the given callback for hooking into the RPC flow.
 // This overrides any callback defined on the Mux.
 //
 // See Mux.HooksCallback for more information.
@@ -687,7 +703,7 @@ func (h Hooks) isEmpty() bool {
 		h.OnServerResponseMessage == nil &&
 		h.OnOperationFinish == nil &&
 		h.OnOperationFail == nil
-}
+}*/
 
 // TypeResolver can resolve message and extension types and is used to instantiate
 // messages as needed for the middleware to serialize/de-serialize request and
@@ -713,22 +729,68 @@ type serviceOptions struct {
 	preferredCodec              string
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
-	hooksCallback               func(context.Context, Operation) (Hooks, error)
+	// hooksCallback               func(context.Context, Operation) (Hooks, error)
 }
 
 type methodConfig struct {
-	descriptor                  protoreflect.MethodDescriptor
-	methodPath                  string
-	streamType                  connect.StreamType
-	handler                     http.Handler
-	resolver                    TypeResolver
-	protocols                   map[Protocol]struct{}
-	codecNames, compressorNames map[string]struct{}
-	preferredCodec              string
-	httpRule                    *routeTarget // First HTTP rule, if any.
-	maxMsgBufferBytes           uint32
-	maxGetURLBytes              uint32
-	hooksCallback               func(context.Context, Operation) (Hooks, error)
+	descriptor        protoreflect.MethodDescriptor
+	methodPath        string
+	streamType        connect.StreamType
+	handler           http.Handler
+	resolver          TypeResolver
+	protocols         map[Protocol]struct{}
+	codecs            map[string]Codec      // Supported by the server.
+	compressors       map[string]compressor // Supported by the server.
+	allCodecs         map[string]Codec      // Supported by the client.
+	allCompressors    map[string]compressor // Supported by the client.
+	preferredCodec    string
+	httpRule          *routeTarget // First HTTP rule, if any.
+	maxMsgBufferBytes uint32
+	maxGetURLBytes    uint32
+	// hooksCallback               func(context.Context, Operation) (Hooks, error)
+}
+
+func (c *methodConfig) GetClientCodec(name string) (Codec, error) {
+	if codec, ok := c.allCodecs[name]; ok {
+		return codec, nil
+	}
+	return nil, fmt.Errorf("codec %s is not known", name)
+}
+func (c *methodConfig) GetServerCodec(name string) (Codec, error) {
+	if codec, ok := c.codecs[name]; ok {
+		return codec, nil
+	}
+	return nil, fmt.Errorf("codec %s is not known", name)
+}
+func (c *methodConfig) GetClientCompressor(name string) (compressor, error) {
+	if name == "" || name == CompressionIdentity {
+		return nil, nil //nolint:nilnil // nil is a valid compressor
+	}
+	if comp, ok := c.allCompressors[name]; ok {
+		return comp, nil
+	}
+	return nil, fmt.Errorf("compression algorithm %s is not known", name)
+}
+func (c *methodConfig) GetServerCompressor(name string) (compressor, error) {
+	if name == "" || name == CompressionIdentity {
+		return nil, nil //nolint:nilnil // nil is a valid compressor
+	}
+	if comp, ok := c.compressors[name]; ok {
+		return comp, nil
+	}
+	return nil, fmt.Errorf("compression algorithm %s is not known", name)
+}
+func (c *methodConfig) ResolveServerCodecName(clientName string) string {
+	if c.codecs[clientName] != nil {
+		return clientName
+	}
+	return c.preferredCodec
+}
+func (c *methodConfig) ResolveServerCompressorName(clientName string) string {
+	if c.compressors[clientName] != nil {
+		return clientName
+	}
+	return CompressionIdentity
 }
 
 // computeSet returns a resolved set of values of type T, preferring the given values if

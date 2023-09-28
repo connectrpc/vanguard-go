@@ -56,6 +56,12 @@ func (m compressionMap) intersection(names []string) []string {
 	return intersection
 }
 
+type compressor interface {
+	Name() string
+	compress(dst io.Writer, src *bytes.Buffer) error
+	decompress(dst *bytes.Buffer, src io.Reader) error
+}
+
 type compressionPool struct {
 	name          string
 	decompressors sync.Pool
@@ -85,14 +91,7 @@ func (p *compressionPool) Name() string {
 	return p.name
 }
 
-func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
-	if p == nil {
-		_, err := io.Copy(dst, src)
-		return err
-	}
-	if src.Len() == 0 {
-		return nil
-	}
+func (p *compressionPool) compress(dst io.Writer, src *bytes.Buffer) error {
 	comp, _ := p.compressors.Get().(connect.Compressor)
 	defer p.compressors.Put(comp)
 
@@ -104,14 +103,7 @@ func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
 	return comp.Close()
 }
 
-func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
-	if p == nil {
-		_, err := io.Copy(dst, src)
-		return err
-	}
-	if src.Len() == 0 {
-		return nil
-	}
+func (p *compressionPool) decompress(dst *bytes.Buffer, src io.Reader) error {
 	decomp, _ := p.decompressors.Get().(connect.Decompressor)
 	defer p.decompressors.Put(decomp)
 
