@@ -2,7 +2,7 @@ version: v1
 managed:
   enabled: true
   go_package_prefix:
-    default: connectrpc.com/vanguard/internal/examples/pets/internal/gen
+    default: connectrpc.com/vanguard/internal/gen
     except:
       - buf.build/googleapis/googleapis
 plugins:

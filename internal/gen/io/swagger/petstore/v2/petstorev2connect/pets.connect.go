@@ -20,7 +20,7 @@ package petstorev2connect
 
 import (
 	connect "connectrpc.com/connect"
-	v2 "connectrpc.com/vanguard/internal/examples/pets/internal/gen/io/swagger/petstore/v2"
+	v2 "connectrpc.com/vanguard/internal/gen/io/swagger/petstore/v2"
 	context "context"
 	errors "errors"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"

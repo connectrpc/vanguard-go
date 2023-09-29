@@ -12,7 +12,7 @@ between gRPC, gRPC-Web, Connect, or REST, Vanguard has got you covered. With sup
 Google's [HTTP transcoding options](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L44),
 it can effortlessly translate protocols using strongly typed Protobuf definitions.
 
-[See an example in action!](internal/examples/fileserver/main.go)
+[See an example in action!](examples/fileserver/main.go)
 
 ## Why Vanguard?
 

@@ -1,9 +1,9 @@
-module connectrpc.com/vanguard/internal/examples/connect+grpc
+module connectrpc.com/vanguard/examples/connect+grpc
 
 go 1.20
 
 // once the repo is public, we can remove this
-replace connectrpc.com/vanguard => ../../../
+replace connectrpc.com/vanguard => ../../
 
 require (
 	buf.build/gen/go/connectrpc/eliza/connectrpc/go v1.11.1-20230822171018-8b8b971d6fde.1

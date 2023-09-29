@@ -29,8 +29,8 @@ clean: ## Delete intermediate build artifacts
 .PHONY: test
 test: build ## Run unit tests
 	$(GO) test -vet=off -race -cover ./...
-	cd internal/examples/pets && $(GO) test -vet=off -race -cover ./...
-	cd internal/examples/connect+grpc && $(GO) test -vet=off -race -cover ./...
+	cd examples/pets && $(GO) test -vet=off -race -cover ./...
+	cd examples/connect+grpc && $(GO) test -vet=off -race -cover ./...
 
 .PHONY: build
 build: generate ## Build all packages
@@ -38,8 +38,7 @@ build: generate ## Build all packages
 
 .PHONY: generate
 generate: $(BIN)/buf $(BIN)/license-header ## Regenerate code and licenses
-	$(BIN)/buf generate internal/proto
-	cd internal/examples/pets && ../../../$(BIN)/buf generate internal/proto
+	$(BIN)/buf generate
 	@# We want to operate on a list of modified and new files, excluding
 	@# deleted and ignored files. git-ls-files can't do this alone. comm -23 takes
 	@# two files and prints the union, dropping lines common to both (-3) and

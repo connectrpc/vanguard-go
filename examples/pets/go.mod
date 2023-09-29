@@ -1,9 +1,9 @@
-module connectrpc.com/vanguard/internal/examples/pets
+module connectrpc.com/vanguard/examples/pets
 
 go 1.20
 
 // once the repo is public, we can remove this
-replace connectrpc.com/vanguard => ../../../
+replace connectrpc.com/vanguard => ../../
 
 require (
 	connectrpc.com/connect v1.11.0

@@ -32,8 +32,8 @@ import (
 
 	"connectrpc.com/grpcreflect"
 	"connectrpc.com/vanguard"
-	"connectrpc.com/vanguard/internal/examples/pets/internal"
-	"connectrpc.com/vanguard/internal/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
+	"connectrpc.com/vanguard/examples/pets/internal"
+	"connectrpc.com/vanguard/internal/gen/io/swagger/petstore/v2/petstorev2connect"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"golang.org/x/sync/errgroup"

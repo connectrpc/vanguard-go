@@ -65,7 +65,7 @@ issues:
     # checks from err113 are useful.
     - "err113: do not define dynamic errors.*"
   exclude-rules:
-    - path: internal/examples/.*/.*\.go
+    - path: examples/.*/.*\.go
       linters:
         - forbidigo # log.Fatal, fmt.Printf used in example programs
         - gosec

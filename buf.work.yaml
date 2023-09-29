@@ -1,4 +1,4 @@
 version: v1
 directories:
   - internal/proto
-  - internal/examples/pets/internal/proto
+  - examples/pets/proto
