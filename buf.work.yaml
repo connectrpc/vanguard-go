@@ -2,4 +2,4 @@ version: v1
 directories:
   - internal/proto
   - examples/pets/proto
-  - examples/stripeproxy/proto
+  - examples/openlibraryproxy/proto

@@ -1,0 +1,202 @@
+// Copyright 2023 Buf Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package openlibrary.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/struct.proto";
+
+// The Open Library API.
+//
+// The Book API is a generic, flexible, configurable endpoint which allows
+// requesting information on one or more books using ISBNs, OCLC Numbers, LCCNs
+// and OLIDs (Open Library IDs). It is inspired by the Google Books Dynamic
+// links API and is compatible with it.
+//
+// https://openlibrary.org/
+service BooksService {
+  // Returns a list of books given a list of ISBNs, OCLC Numbers, LCCNs and
+  // OLIDs (Open Library IDs).
+  rpc GetBooks(GetBooksRequest) returns (GetBooksResponse) {
+    option (google.api.http) = {
+      get : "/api/books"
+      response_body : "books"
+    };
+  }
+  // Searches for books and returns a list of books given a query string.
+  rpc SearchBooks(SearchBooksRequest) returns (SearchBooksResponse) {
+    option (google.api.http) = {
+      get : "/search.json"
+    };
+  }
+}
+
+message GetBooksRequest {
+  // List of IDs to request the information. The API supports ISBNs, LCCNs, OCLC
+  // numbers and OLIDs (Open Library IDs).
+  //
+  // ISBN
+  // Ex. &bibkeys=ISBN:0451526538 (The API supports both ISBN 10 and 13.)
+  //
+  // OCLC
+  // &bibkeys=OCLC:#########
+  //
+  // LCCN
+  // &bibkeys=LCCN:#########
+  //
+  // OLID
+  // &bibkeys=OLID:OL123M
+  string bibkeys = 1; // repeated
+
+  // Implementation detail: The following fields are not supported by the API
+  // and are overridden by the proxy.
+
+  // The format of the response. The default is javascript. Always call with
+  // format=json to get a JSON response.
+  string format = 2;
+  // The contents of each JSON object will be decided by the jscmd parameter.
+  string jscmd = 3;
+  // The callback function name. Used only when format=javascript.
+  string callback = 4;
+}
+
+message GetBooksResponse { map<string, Book> books = 1; }
+
+// View the documentation for the Book type at
+message Book {
+  string bib_key = 1;
+  string info_url = 2;
+  string preview = 3;
+  string preview_url = 4;
+  string thumbnail_url = 5;
+
+  // Data fields
+  string url = 6;
+  // Unique key for the book.
+  string key = 7;
+  // Title of the book.
+  string title = 8;
+  // Subtitle of the book.
+  string subtitle = 9;
+  message Author {
+    string url = 1;
+    string name = 2;
+  }
+  // List of authors.
+  repeated Author authors = 10;
+  // All identifiers of the book in the following format:
+  // {
+  //     "isbn_10": [...],
+  //     "isbn_13": [...],
+  //     "lccn": [...],
+  //     "oclc": [...],
+  //     "goodreads": [...]
+  // }
+  google.protobuf.Struct identifiers = 11;
+  message Classifications {
+    repeated string lc_classificcations = 1;
+    repeated string dewey_decimal_class = 2;
+  }
+  // Classifications of the book.
+  Classifications classifications = 12;
+  // List of subjects, places, people and times of the book. Each entry will be
+  // in the following format:
+  message Subject {
+    string url = 1;
+    string name = 2;
+  }
+  repeated Subject subjects = 13;
+  message Publisher { string name = 1; }
+  // List of publishers.
+  repeated Publisher publishers = 14;
+  message PublishPlace { string name = 1; }
+  // List of publish places.
+  repeated PublishPlace publish_places = 15;
+  // Publish date of the book.
+  string publish_date = 16;
+  message Excerpts {
+    string comment = 1;
+    string text = 2;
+  }
+  // List of excerpts.
+  repeated Excerpts excerpts = 17;
+  message Link {
+    string url = 1;
+    string title = 2;
+  }
+  // List of links.
+  repeated Link links = 18;
+  message Cover {
+    string small = 1;
+    string medium = 2;
+    string large = 3;
+  }
+  // Cover of the book.
+  Cover cover = 19;
+  message EBook {
+    string preview_url = 1;
+    string availability = 2;
+    google.protobuf.Struct formats = 3;
+    string borrow_url = 4;
+    string checkouts_url = 5;
+  }
+  // Number of pages of the book.
+  int32 number_of_pages = 20;
+  // Weight of the book.
+  string weight = 21;
+}
+
+message SearchBooksRequest {
+  // Query string to search for books.
+  string q = 1;
+  // Title of the book.
+  string title = 2;
+  // Author of the book.
+  string author = 3;
+  // Sort order of the results. The default is relevance.
+  // See:
+  // https://github.com/internetarchive/openlibrary/blob/abd73aa37ea27b4e7d70f521bfd1e30b7dc1dc6e/openlibrary/plugins/worksearch/schemes/works.py#L113-L132
+  string sort = 4;
+}
+message SearchBooksResponse {
+  // Start index of the results.
+  int32 start = 1;
+  // Number of results found.
+  int32 num_found = 2;
+  // List of docs.
+  // Each document specified listed in "docs" will be of the following format:
+  // {
+  //     "cover_i": 258027,
+  //     "has_fulltext": true,
+  //     "edition_count": 120,
+  //     "title": "The Lord of the Rings",
+  //     "author_name": [
+  //         "J. R. R. Tolkien"
+  //     ],
+  //     "first_publish_year": 1954,
+  //     "key": "OL27448W",
+  //     "ia": [
+  //         "returnofking00tolk_1",
+  //         "lordofrings00tolk_1",
+  //         "lordofrings00tolk_0",
+  //     ],
+  //     "author_key": [
+  //         "OL26320A"
+  //     ],
+  //     "public_scan_b": true
+  // }
+  repeated google.protobuf.Struct docs = 3;
+}

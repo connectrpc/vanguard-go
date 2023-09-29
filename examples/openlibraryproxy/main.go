@@ -21,15 +21,16 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 
 	"connectrpc.com/vanguard"
-	_ "connectrpc.com/vanguard/internal/gen/stripe/v1"
+	_ "connectrpc.com/vanguard/internal/gen/openlibrary/v1"
 )
 
 func main() {
 	flagset := flag.NewFlagSet("stripeproxy", flag.ExitOnError)
 	port := flagset.String("p", "8080", "port to serve on")
-	addr := flagset.String("url", "https://api.stripe.com", "base URL to proxy to")
+	addr := flagset.String("url", "https://openlibrary.org", "base URL to proxy to")
 	debug := flagset.Bool("debug", false, "enable debug logging")
 	if err := flagset.Parse(os.Args[1:]); err != nil {
 		log.Fatal(err)
@@ -47,7 +48,17 @@ func main() {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Println(r.Method, r.URL)
 		r.Host = remote.Host
-		w.Header().Set("X-Vanguard", "StripeProxy")
+		w.Header().Set("X-Vanguard", "OpenLibrary Proxy")
+
+		// Alter the request for the OpenLibrary API implementation to
+		// ensure that all requests are JSON and use the data jscmd.
+		if strings.HasPrefix(r.URL.Path, "/api/books") {
+			// Convert all requests to JSON, and use the data jscmd.
+			values := r.URL.Query()
+			values.Set("format", "json")
+			values.Set("jscmd", "data")
+			r.URL.RawQuery = values.Encode()
+		}
 		proxy.ServeHTTP(w, r)
 	})
 
@@ -57,8 +68,8 @@ func main() {
 			vanguard.ProtocolREST,
 		},
 	}
-	// Register the Stripe PaymentIntentsService.
-	if err := mux.RegisterServiceByName(handler, "stripe.v1.PaymentIntentsService"); err != nil {
+	// Register the OpenLibrary BooksService.
+	if err := mux.RegisterServiceByName(handler, "openlibrary.v1.BooksService"); err != nil {
 		log.Fatal(err)
 	}
 
@@ -76,12 +87,12 @@ func main() {
 type DebugTransport struct{}
 
 func (d *DebugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.RequestURI = req.URL.String()
 	raw, err := httputil.DumpRequest(req, true)
 	if err != nil {
 		return nil, err
 	}
 	log.Println("Request:", string(raw))
-	log.Println(">", req.URL, "Host:", req.Host)
 	rsp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
 		return nil, err
