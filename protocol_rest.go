@@ -81,11 +81,12 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	headers.Del("Content-Type")
 
 	if timeoutStr := headers.Get("X-Server-Timeout"); timeoutStr != "" {
-		timeout, err := strconv.ParseFloat(timeoutStr, 64)
+		timeout, err := restDecodeTimeout(timeoutStr)
 		if err != nil {
 			return requestMeta{}, err
 		}
-		reqMeta.timeout = time.Duration(timeout * float64(time.Second))
+		reqMeta.timeout = timeout
+		reqMeta.hasTimeout = true
 	}
 	return reqMeta, nil
 }
@@ -266,9 +267,8 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	if len(meta.acceptCompression) != 0 {
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
-	if meta.timeout != 0 {
-		// Encode timeout as a float in seconds.
-		value := strconv.FormatFloat(meta.timeout.Seconds(), 'E', -1, 64)
+	if meta.hasTimeout {
+		value := restEncodeTimeout(meta.timeout)
 		headers["X-Server-Timeout"] = []string{value}
 	}
 }
@@ -392,6 +392,26 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 
 func (r restServerProtocol) String() string {
 	return protocolNameREST
+}
+
+// Decode timeout as a float in seconds from X-Server-Timeout header.
+func restDecodeTimeout(timeout string) (time.Duration, error) {
+	if timeout == "" {
+		return 0, nil
+	}
+	val, err := strconv.ParseFloat(timeout, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid timeout %q: %w", timeout, err)
+	}
+	return time.Duration(val * float64(time.Second)), nil
+}
+
+// Encode timeout as a float in seconds for X-Server-Timeout header.
+func restEncodeTimeout(timeout time.Duration) string {
+	if timeout == 0 {
+		return ""
+	}
+	return strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64)
 }
 
 func restHTTPBodyRequest(op *operation) bool {
