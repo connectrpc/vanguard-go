@@ -119,20 +119,12 @@ func (t *routeTrie) insert(method string, target *routeTarget, segments pathSegm
 // match finds a route for the given request. If a match is found, the associated target and a map
 // of matched variable values is returned.
 func (t *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
-	// TODO: Not checking if path ends with "/" means we accept missing final segment
-	//       for both * and **. Is that right? Makes sense for **, but maybe not for *.
 	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == ':' {
-		// TODO: is this how grpc-gateway works? Is it lenient and forgives trailing slash
-		//       or absence of leading slash?
-		// if it doesn't start with "/" or if it ends with "/" it won't match
+		// Must start with "/" or if it ends with ":" it won't match
 		return nil, nil, nil
 	}
 	uriPath = uriPath[1:] // skip the leading slash
 
-	// TODO: we may want a custom Split so that we can pool the resulting slices
-	//       and reduce allocations here; in fact, we could even skip the Split
-	//       and just pass the uriPath string to findTarget, which must find
-	//       the next slash and split into car/cdr (no allocation required).
 	path := strings.Split(uriPath, "/")
 	var verb string
 	if len(path) > 0 {
@@ -146,9 +138,6 @@ func (t *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTarg
 	if target == nil {
 		return nil, nil, methods
 	}
-	// TODO: instead of []routeTargetMatch, we may want a different data structure
-	//       that doesn't need to allocate slices but instead retrieves substrings
-	//       of uriPath on demand.
 	vars, err := computeVarValues(path, target)
 	if err != nil {
 		return nil, nil, nil
@@ -203,11 +192,6 @@ func (t *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) 
 	if target := methods["*"]; target != nil {
 		return target, methods
 	}
-	// TODO: If final segment is ** and nothing is provided that matches, the request path should
-	//       have trailing slash. For example, if the pattern is "foo/bar/**", an empty match
-	//       should look like "foo/bar/". However, *should* it support having no trailing slash?
-	//       For example, should pattern "foo/bar/**" allow "foo/bar"? If so, we'd need to do a
-	//       little more work here, to see if trie has a ** child that has a matching method.
 	return nil, methods
 }
 
