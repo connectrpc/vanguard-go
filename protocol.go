@@ -254,7 +254,7 @@ type serverEnvelopedProtocolHandler interface {
 	// The given codec represents the sub-format used to send
 	// the request to the server (which may be used to decode
 	// the error).
-	decodeEndFromMessage(*operation, io.Reader) (responseEnd, error)
+	decodeEndFromMessage(*operation, *bytes.Buffer) (responseEnd, error)
 }
 
 // requestLineBuilder is an optional interface implemented by

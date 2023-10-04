@@ -569,14 +569,7 @@ func (c connectStreamServerProtocol) encodeEnvelope(env envelope) envelopeBytes 
 	return envBytes
 }
 
-func (c connectStreamServerProtocol) decodeEndFromMessage(op *operation, reader io.Reader) (responseEnd, error) {
-	// TODO: buffer size limit for headers/trailers; should use http.DefaultMaxHeaderBytes if not configured
-	buffer := op.bufferPool.Get()
-	defer op.bufferPool.Put(buffer)
-	_, err := buffer.ReadFrom(reader)
-	if err != nil {
-		return responseEnd{}, err
-	}
+func (c connectStreamServerProtocol) decodeEndFromMessage(_ *operation, buffer *bytes.Buffer) (responseEnd, error) {
 	var streamEnd connectStreamEnd
 	if err := json.Unmarshal(buffer.Bytes(), &streamEnd); err != nil {
 		return responseEnd{}, err
