@@ -384,11 +384,7 @@ func (o *operation) validate(mux *Mux, codecs codecMap) error {
 	}
 
 	if o.server.protocol.protocol() == ProtocolREST {
-		// REST always uses JSON.
-		// TODO: Allow non-JSON encodings with REST? Would require registering content-types with codecs.
-		//       Would also require figuring out how to (un)marshal things other than messages when a body
-		//       path indicates a non-message field (do-able with JSON, but maybe non-starter with proto?)
-		//
+		// REST always defaults to JSON.
 		// NB: This is fine to set even if a custom content-type is used via
 		//     the use of google.api.HttpBody. The actual content-type and body
 		//     data will be written via serverBodyPreparer implementation.
@@ -403,8 +399,8 @@ func (o *operation) validate(mux *Mux, codecs codecMap) error {
 		if _, supportsCompression := o.methodConf.compressorNames[reqMeta.compression]; supportsCompression {
 			o.server.reqCompression = o.client.reqCompression
 		}
-		// else: we'll just decompress and not recompress
-		// TODO: should we instead pick a supported compression scheme (if there is one)?
+		// If the server doesn't support the compression scheme, we'll just
+		// decompress and not recompress.
 	}
 
 	o.isValid = true // Successfully validated!
@@ -580,8 +576,6 @@ func (o *operation) resolveMethod(mux *Mux) error {
 	default:
 		methodConf := mux.methods[uriPath]
 		if methodConf == nil {
-			// TODO: if the service is known, but the method is not, we should send to the client
-			//       a proper RPC error (encoded per protocol handler) with an Unimplemented code.
 			return errNotFound
 		}
 		o.restTarget = methodConf.httpRule
