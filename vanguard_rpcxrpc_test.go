@@ -28,14 +28,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestMux_RPCxRPC(t *testing.T) {
 	t.Parallel()
 
-	services := []protoreflect.FullName{
+	serviceNames := []string{
 		testv1connect.LibraryServiceName,
 		testv1connect.ContentServiceName,
 	}
@@ -66,23 +65,24 @@ func TestMux_RPCxRPC(t *testing.T) {
 
 	makeServer := func(protocol Protocol, codec, compression string) testServer {
 		opts := []ServiceOption{
-			WithProtocols(protocol),
-			WithCodecs(codec),
+			WithTargetProtocols(protocol),
+			WithTargetCodecs(codec),
 		}
 		if compression == CompressionIdentity {
-			opts = append(opts, WithNoCompression())
+			opts = append(opts, WithNoTargetCompression())
 		} else {
-			opts = append(opts, WithCompression(compression))
+			opts = append(opts, WithTargetCompression(compression))
 		}
-		hdlr := protocolAssertMiddleware(protocol, codec, compression, serveMux)
+		svcHandler := protocolAssertMiddleware(protocol, codec, compression, serveMux)
 		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
 
-		mux := &Mux{}
-		for _, service := range services {
-			err := mux.RegisterServiceByName(hdlr, service, opts...)
-			require.NoError(t, err)
+		services := make([]*Service, len(serviceNames))
+		for i, svcName := range serviceNames {
+			services[i] = NewService(svcName, svcHandler, opts...)
 		}
-		server := httptest.NewUnstartedServer(mux)
+		handler, err := NewHandler(services)
+		require.NoError(t, err)
+		server := httptest.NewUnstartedServer(handler)
 		server.EnableHTTP2 = true
 		server.StartTLS()
 		disableCompression(server)

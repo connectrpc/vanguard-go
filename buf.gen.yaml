@@ -12,3 +12,7 @@ plugins:
   - plugin: buf.build/connectrpc/go:v1.11.0
     out: internal/gen
     opt: paths=source_relative
+  # gRPC generated code is used by vanguardgrpc examples
+  - plugin: buf.build/grpc/go:v1.3.0
+    out: internal/gen
+    opt: paths=source_relative

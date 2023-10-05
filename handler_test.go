@@ -44,20 +44,25 @@ func TestHandler_Errors(t *testing.T) {
 	// These tests should not reach the underlying handler or any particular protocol
 	// handler implementation (other than extracting request metadata).
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusTeapot)
 	})
-	grpcMux := &Mux{Protocols: []Protocol{ProtocolGRPC, ProtocolGRPCWeb}}
-	connectMux := &Mux{Protocols: []Protocol{ProtocolConnect}}
-	allMux := &Mux{} // supports all three
-	for _, mux := range []*Mux{grpcMux, connectMux, allMux} {
-		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.LibraryServiceName))
-		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.ContentServiceName))
+	services := []*Service{
+		NewService(testv1connect.LibraryServiceName, rpcHandler),
+		NewService(testv1connect.ContentServiceName, rpcHandler),
 	}
+	handler, err := NewHandler(services)
+	require.NoError(t, err)
+	unknownHandler, err := NewHandler(services, WithUnknownHandler(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusFailedDependency)
+		}),
+	))
+	require.NoError(t, err)
 
 	testCases := []struct {
 		name                    string
-		mux                     *Mux // use allMux if nil
+		handler                 *Handler // use handler if nil
 		useHTTP1                bool
 		requestURL              string
 		requestMethod           string
@@ -358,18 +363,14 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
-			name: "unknown handler",
-			mux: &Mux{
-				UnknownHandler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-					writer.WriteHeader(http.StatusTeapot)
-				}),
-			},
+			name:          "unknown handler",
+			handler:       unknownHandler,
 			requestURL:    "/vanguard.test.v1.LibraryService/UnknownMethod",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
 			},
-			expectedCode: http.StatusTeapot,
+			expectedCode: http.StatusFailedDependency,
 		},
 	}
 
@@ -378,9 +379,9 @@ func TestHandler_Errors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			targetMux := allMux
-			if testCase.mux != nil {
-				targetMux = testCase.mux
+			vanguardHandler := handler
+			if testCase.handler != nil {
+				vanguardHandler = testCase.handler
 			}
 			req := httptest.NewRequest(testCase.requestMethod, testCase.requestURL, http.NoBody)
 			if testCase.useHTTP1 {
@@ -396,7 +397,7 @@ func TestHandler_Errors(t *testing.T) {
 				}
 			}
 			respWriter := httptest.NewRecorder()
-			targetMux.ServeHTTP(respWriter, req)
+			vanguardHandler.ServeHTTP(respWriter, req)
 			resp := respWriter.Result()
 			err := resp.Body.Close()
 			require.NoError(t, err)
@@ -439,15 +440,15 @@ func TestHandler_PassThrough(t *testing.T) {
 			handler.ServeHTTP(respWriter, request)
 		})
 	}
-	_, contentHandler := testv1connect.NewContentServiceHandler(
+	contentPath, contentHandler := testv1connect.NewContentServiceHandler(
 		testv1connect.UnimplementedContentServiceHandler{},
 		connect.WithInterceptors(&interceptor),
 	)
-	var mux Mux
-	require.NoError(t, mux.RegisterServiceByName(checkPassThrough(contentHandler), testv1connect.ContentServiceName))
+	handler, err := NewHandler([]*Service{NewService(contentPath, checkPassThrough(contentHandler))})
+	require.NoError(t, err)
 
 	// Use HTTP/2 so we can test a bidi stream.
-	server := httptest.NewUnstartedServer(&mux)
+	server := httptest.NewUnstartedServer(handler)
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	t.Cleanup(server.Close)

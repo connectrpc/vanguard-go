@@ -38,7 +38,7 @@ func TestMux_RPCxREST(t *testing.T) {
 	t.Parallel()
 
 	var interceptor testInterceptor
-	services := []protoreflect.FullName{
+	serviceNames := []string{
 		testv1connect.LibraryServiceName,
 		testv1connect.ContentServiceName,
 	}
@@ -71,29 +71,27 @@ func TestMux_RPCxREST(t *testing.T) {
 		// We use an "always-stable" codec for determinism in tests.
 		codec := &stableJSONCodec{}
 		opts := []ServiceOption{
-			WithProtocols(ProtocolREST),
-			WithCodecs(codec.Name()),
+			WithTargetProtocols(ProtocolREST),
+			WithTargetCodecs(codec.Name()),
 		}
 		if compression == CompressionIdentity {
-			opts = append(opts, WithNoCompression())
+			opts = append(opts, WithNoTargetCompression())
 		} else {
-			opts = append(opts, WithCompression(compression))
+			opts = append(opts, WithTargetCompression(compression))
 		}
-		hdlr := interceptor.restUnaryHandler(codec, comp)
+		svcHandler := interceptor.restUnaryHandler(codec, comp)
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
 
-		mux := &Mux{}
-		mux.AddCodec(CodecJSON, func(res TypeResolver) Codec {
+		newCodec := func(res TypeResolver) Codec {
 			return &stableJSONCodec{JSONCodec: *DefaultJSONCodec(res)}
-		})
-		for _, service := range services {
-			if err := mux.RegisterServiceByName(
-				hdlr, service, opts...,
-			); err != nil {
-				t.Fatal(err)
-			}
 		}
-		server := httptest.NewUnstartedServer(mux)
+		services := make([]*Service, len(serviceNames))
+		for i, svcName := range serviceNames {
+			services[i] = NewService(svcName, svcHandler, opts...)
+		}
+		handler, err := NewHandler(services, WithCodec(newCodec))
+		require.NoError(t, err)
+		server := httptest.NewUnstartedServer(handler)
 		server.EnableHTTP2 = true
 		server.StartTLS()
 		disableCompression(server)

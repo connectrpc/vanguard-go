@@ -24,7 +24,6 @@ import (
 	"sync/atomic"
 )
 
-//nolint:gochecknoglobals
 var idSource atomic.Int64
 
 func TraceHandler(handler http.Handler) http.Handler {

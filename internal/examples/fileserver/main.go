@@ -41,20 +41,20 @@ func main() {
 		log.Fatal(err)
 	}
 
-	contentService := &ContentService{
+	// Create Connect handler.
+	serviceHandler := &ContentService{
 		FS: os.DirFS(*directory),
 	}
-	_, contentHandler := testv1connect.NewContentServiceHandler(contentService)
-
-	mux := &vanguard.Mux{}
-	if err := mux.RegisterServiceByName(
-		contentHandler,
-		testv1connect.ContentServiceName,
-	); err != nil {
+	// And wrap it with Vanguard.
+	service := vanguard.NewService(testv1connect.NewContentServiceHandler(serviceHandler))
+	handler, err := vanguard.NewHandler([]*vanguard.Service{service})
+	if err != nil {
 		log.Fatal(err)
 	}
+	// Now handler also supports REST requests, translated to Connect
+	// using the HTTP annotations on the ContentService definition.
 	log.Printf("Serving %s on HTTP port: %s\n", *directory, *port)
-	log.Fatal(http.ListenAndServe(":"+*port, mux))
+	log.Fatal(http.ListenAndServe(":"+*port, handler))
 }
 
 var indexHTMLTemplate = template.Must(template.New("http").Parse(`

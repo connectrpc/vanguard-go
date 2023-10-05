@@ -27,6 +27,7 @@ linters-settings:
       - ok bool
       - op *operation
       - op Operation
+      - h *Handler
       - t *ttStream
       - rw *responseWriter
 linters:

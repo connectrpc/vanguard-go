@@ -24,10 +24,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 	"time"
 
 	"connectrpc.com/grpcreflect"
@@ -40,90 +37,74 @@ import (
 )
 
 func main() {
-	muxes := []*vanguard.Mux{
-		{
-			Protocols: []vanguard.Protocol{vanguard.ProtocolConnect},
+	// We use three separate handlers to serve with three different ports.
+	// Each is configured to transform requests to a different protocol.
+	serverOptions := map[int][]vanguard.ServiceOption{
+		// All requests to port 30301 will get translated to the Connect protocol
+		// and then sent to the pets-be server.
+		30301: {
+			vanguard.WithTargetProtocols(vanguard.ProtocolConnect),
 		},
-		{
-			Protocols: []vanguard.Protocol{vanguard.ProtocolGRPC},
-			Codecs:    []string{vanguard.CodecProto},
+		// All requests to port 30302 will get translated to the gRPC protocol
+		// and JSON data will get transcoded to the Protobuf binary format.
+		30302: {
+			vanguard.WithTargetProtocols(vanguard.ProtocolGRPC),
+			vanguard.WithTargetCodecs(vanguard.CodecProto),
 		},
-		{
-			Protocols: []vanguard.Protocol{vanguard.ProtocolGRPCWeb},
-			Codecs:    []string{vanguard.CodecProto},
+		// And requests to port 30303 will get translated to gRPC-Web, Protobuf binary.
+		30303: {
+			vanguard.WithTargetProtocols(vanguard.ProtocolGRPCWeb),
+			vanguard.WithTargetCodecs(vanguard.CodecProto),
 		},
 	}
+
+	// This server proxies requests to the backend (after translating to a particular RPC protocol).
 	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "127.0.0.1:30304"})
+	// The gRPC protocol *requires* HTTP/2 and can't work with HTTP 1.1.
+	// So we make the proxy smart enough to always use H2C (to use HTTP/2
+	// without TLS) when the protocol is gRPC.
 	proxy.Transport = h2cIfGRPCTransport{h2c: &http2.Transport{
 		AllowHTTP: true,
 		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, network, addr)
 		},
 	}}
-	listeners := make([]net.Listener, len(muxes))
-	svrs := make([]*http.Server, len(muxes))
-	for i, mux := range muxes {
-		proxy := proxy
-		if i == 1 {
-			// HACK: for the gRPC one, make sure the proxy uses h2c to talk to gRPC server.
-			clone := *proxy
-			proxy.Transport = &http2.Transport{
-				AllowHTTP: true,
-				DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-					return (&net.Dialer{}).DialContext(ctx, network, addr)
-				},
-			}
-			proxy = &clone
-		}
-		err := mux.RegisterServiceByName(proxy, petstorev2connect.PetServiceName)
+
+	listeners := make([]net.Listener, 0, len(serverOptions))
+	svrs := make([]*http.Server, 0, len(serverOptions))
+	for serverPort, opts := range serverOptions {
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", serverPort))
 		if err != nil {
 			log.Fatal(err)
 		}
-		port := 30301 + i
-		listeners[i], err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+
+		// Wrap the proxy handler with Vanguard, so it can accept any kind of request and then
+		// transform it to a particular protocol (based on the port used to send the request)
+		// before sending to the pets-be server.
+		handler, err := vanguard.NewHandler(
+			[]*vanguard.Service{vanguard.NewService(petstorev2connect.PetServiceName, proxy, opts...)},
+		)
 		if err != nil {
 			log.Fatal(err)
 		}
+
 		serveMux := http.NewServeMux()
-		serveMux.Handle("/", internal.TraceHandler(mux))
+		// Note: the handler will trace incoming requests to stdout. This provides insight
+		// into the protocol transformation, when compared to the corresponding requests
+		// in the output of the pets-be backend server.
+		serveMux.Handle("/", internal.TraceHandler(handler))
 		serveMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(petstorev2connect.PetServiceName)))
-		svrs[i] = &http.Server{
+
+		listeners = append(listeners, listener)
+		svrs = append(svrs, &http.Server{
 			Addr:              ":http",
 			Handler:           h2c.NewHandler(serveMux, &http2.Server{}),
 			ReadHeaderTimeout: 15 * time.Second,
-		}
+		})
 	}
 
-	grp, ctx := errgroup.WithContext(context.Background())
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	grp.Go(func() error {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-signals:
-		}
-
-		log.Println("Shutting down...")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		shutdownGroup, ctx := errgroup.WithContext(ctx)
-		for i := range svrs {
-			svr := svrs[i]
-			shutdownGroup.Go(func() error {
-				if err := svr.Shutdown(ctx); err != nil {
-					return errors.New("failed to shutdown gracefully after 5 seconds")
-				}
-				return nil
-			})
-		}
-		err := shutdownGroup.Wait()
-		if err == nil {
-			log.Println("Shutdown complete.")
-		}
-		return err
-	})
-
+	// Start the HTTP servers for all three ports.
+	grp, _ := errgroup.WithContext(context.Background())
 	for i := range svrs {
 		listener := listeners[i]
 		svr := svrs[i]
@@ -140,6 +121,9 @@ func main() {
 	}
 }
 
+// h2cIfGRPCTransport is a round tripper that will use its configured
+// h2c transport for requests in the gRPC protocol. It will use
+// http.DefaultTransport for other requests.
 type h2cIfGRPCTransport struct {
 	h2c http.RoundTripper
 }

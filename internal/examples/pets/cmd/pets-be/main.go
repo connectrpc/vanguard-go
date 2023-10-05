@@ -15,17 +15,12 @@
 package main
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"connectrpc.com/grpcreflect"
@@ -34,27 +29,37 @@ import (
 	"connectrpc.com/vanguard/internal/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
-	"golang.org/x/sync/errgroup"
 )
 
 func main() {
-	mux := &vanguard.Mux{
-		Protocols: []vanguard.Protocol{vanguard.ProtocolREST},
-		Codecs:    []string{vanguard.CodecJSON},
-	}
+	// Create a reverse proxy, to forward requests to https://petstore.swagger.io/v2/.
 	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: "petstore.swagger.io", Path: "/v2/"})
+	// Note: we will trace proxied requests to stdout, so that you can see the details
+	// of the transformation with actual requests by running this program and sending
+	// RPC requests to it.
 	proxy.Transport = internal.TraceTransport(http.DefaultTransport)
 	director := proxy.Director
 	proxy.Director = func(r *http.Request) {
 		director(r)
 		r.Host = r.URL.Host
 	}
-	if err := mux.RegisterServiceByName(proxy, petstorev2connect.PetServiceName); err != nil {
+
+	// Wrap the proxy handler with Vanguard, so it can accept Connect, gRPC, or gRPC-Web
+	// and transform the requests to REST+JSON.
+	handler, err := vanguard.NewHandler(
+		[]*vanguard.Service{vanguard.NewService(petstorev2connect.PetServiceName, proxy)},
+		vanguard.WithTargetProtocols(vanguard.ProtocolREST),
+	)
+	if err != nil {
 		log.Fatal(err)
 	}
 
 	serveMux := http.NewServeMux()
-	serveMux.Handle("/", internal.TraceHandler(mux))
+	// Similar to above, we trace incoming requests to stdout. That way you can see the
+	// original RPC request and the proxied REST request to see Vanguard in action.
+	serveMux.Handle("/", internal.TraceHandler(handler))
+	// We add gRPC reflection support so that you can use tools like `buf curl` or `grpcurl`
+	// with this server.
 	serveMux.Handle(grpcreflect.NewHandlerV1(grpcreflect.NewStaticReflector(petstorev2connect.PetServiceName)))
 
 	listener, err := net.Listen("tcp", "127.0.0.1:30304")
@@ -62,38 +67,13 @@ func main() {
 		log.Fatal(err)
 	}
 	svr := &http.Server{
-		Addr:              ":http",
+		Addr: ":http",
+		// We use h2c to support HTTP/2 without TLS (and thus support the gRPC protocol).
 		Handler:           h2c.NewHandler(serveMux, &http2.Server{}),
 		ReadHeaderTimeout: 15 * time.Second,
 	}
-
-	grp, ctx := errgroup.WithContext(context.Background())
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-	grp.Go(func() error {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-signals:
-		}
-
-		log.Println("Shutting down...")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := svr.Shutdown(ctx); err != nil {
-			return errors.New("failed to shutdown gracefully after 5 seconds")
-		}
-		log.Println("Shutdown complete.")
-		return nil
-	})
-	grp.Go(func() error {
-		err := svr.Serve(listener)
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("server failed: %w", err)
-		}
-		return nil
-	})
-	if err := grp.Wait(); err != nil {
+	err = svr.Serve(listener)
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}
 }

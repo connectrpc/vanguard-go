@@ -38,72 +38,23 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func ExampleMux_connectToGRPC() {
+func ExampleNewHandler_restToConnect() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// RPC service implementing testv1connect.LibraryService annotations.
 	svc := &libraryRPC{}
 
-	httpMux := http.NewServeMux()
-	httpMux.Handle(testv1connect.NewLibraryServiceHandler(svc))
-
-	// Create a Mux and register the service as a gRPC service.
-	mux := &vanguard.Mux{}
-	if err := mux.RegisterServiceByName(
-		httpMux, testv1connect.LibraryServiceName,
-		vanguard.WithProtocols(vanguard.ProtocolGRPC),
-		vanguard.WithNoCompression(),
-	); err != nil {
-		log.Fatal(err)
-	}
-
-	// Create the server.
-	// (NB: This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewUnstartedServer(mux)
-	server.EnableHTTP2 = true
-	server.StartTLS()
-	defer server.Close()
-
-	// Create a connect client and call the service.
-	client := testv1connect.NewLibraryServiceClient(server.Client(), server.URL)
-
-	// Call the service using Connect translated by the middleware to
-	// gRPC.
-	rsp, err := client.GetBook(
-		context.Background(),
-		connect.NewRequest(&testv1.GetBookRequest{
-			Name: "shelves/top/books/1",
-		}),
-	)
+	handler, err := vanguard.NewHandler([]*vanguard.Service{
+		vanguard.NewService(testv1connect.NewLibraryServiceHandler(svc)),
+	})
 	if err != nil {
-		log.Fatal(err)
-	}
-	log.Println(rsp.Msg.Title)
-	// Output: Do Androids Dream of Electric Sheep?
-}
-
-func ExampleMux_restToGRPC() {
-	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
-
-	// RPC service implementing testv1connect.LibraryService annotations.
-	svc := &libraryRPC{}
-
-	httpMux := http.NewServeMux()
-	httpMux.Handle(testv1connect.NewLibraryServiceHandler(svc))
-
-	// Create a Mux and register the service as a gRPC service.
-	mux := &vanguard.Mux{}
-	if err := mux.RegisterServiceByName(
-		httpMux, testv1connect.LibraryServiceName,
-		vanguard.WithProtocols(vanguard.ProtocolGRPC),
-		vanguard.WithNoCompression(),
-	); err != nil {
-		log.Fatal(err)
+		log.Println("error:", err)
+		return
 	}
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewServer(mux)
+	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := server.Client()
 
@@ -128,7 +79,8 @@ func ExampleMux_restToGRPC() {
 
 	rsp, err := client.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		log.Println("error:", err)
+		return
 	}
 	defer rsp.Body.Close()
 	log.Println(rsp.Status)
@@ -144,26 +96,25 @@ func ExampleMux_restToGRPC() {
 	// Arthur C. Clarke
 }
 
-func ExampleMux_connectToREST() {
+func ExampleNewHandler_connectToREST() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// REST service implementing testv1connect.LibraryService annotations.
 	svc := &libraryREST{}
 
-	// Create a Mux and register the service as a REST service.
-	mux := &vanguard.Mux{}
-	if err := mux.RegisterServiceByName(
-		svc, testv1connect.LibraryServiceName,
-		vanguard.WithProtocols(vanguard.ProtocolREST),
-		vanguard.WithCodecs(vanguard.CodecJSON),
-		vanguard.WithNoCompression(),
-	); err != nil {
-		log.Fatal(err)
+	handler, err := vanguard.NewHandler(
+		[]*vanguard.Service{vanguard.NewService(testv1connect.LibraryServiceName, svc)},
+		// This tells vanguard that it must transform requests to REST.
+		vanguard.WithTargetProtocols(vanguard.ProtocolREST),
+	)
+	if err != nil {
+		log.Println("error:", err)
+		return
 	}
 
 	// Create the server.
 	// (NB: This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewServer(mux)
+	server := httptest.NewServer(handler)
 	defer server.Close()
 
 	// Create a connect client and call the service.
@@ -175,7 +126,8 @@ func ExampleMux_connectToREST() {
 		}),
 	)
 	if err != nil {
-		log.Fatal(err)
+		log.Println("error:", err)
+		return
 	}
 	log.Println(rsp.Msg.Description)
 	// Output: Have you seen Blade Runner?

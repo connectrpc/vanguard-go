@@ -76,12 +76,11 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 		libClient     testv1connect.LibraryServiceClient
 	}
 	type testRequest struct {
-		name            string
-		clientOptions   []connect.ClientOption
-		muxWithSettings *Mux            // Does not need to configure MaxMessageBufferSize
-		muxSvcOpts      []ServiceOption // Does not need to include WithMaxMessageBufferBytes
-		invoke          func(testClients, http.Header, []proto.Message) (http.Header, []proto.Message, http.Header, error)
-		stream          testStream
+		name          string
+		clientOptions []connect.ClientOption
+		svcOpts       []ServiceOption // Does not need to include WithMaxMessageBufferBytes
+		invoke        func(testClients, http.Header, []proto.Message) (http.Header, []proto.Message, http.Header, error)
+		stream        testStream
 	}
 	ctx := context.Background()
 	testCases := []struct {
@@ -99,9 +98,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 			reqs: []testRequest{
 				{
 					// Connect unary request; gRPC server
-					name:            "must_buffer_request",
-					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolGRPC}},
-					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolGRPC)},
+					name:    "must_buffer_request",
+					svcOpts: []ServiceOption{WithTargetProtocols(ProtocolGRPC)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
 					},
@@ -127,10 +125,9 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 			reqs: []testRequest{
 				{
 					// gRPC unary request; Connect server
-					name:            "must_buffer_response",
-					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
-					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
-					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					name:          "must_buffer_response",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
 					},
@@ -149,9 +146,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// gRPC-Web response with trailers too large
-					name:            "buffer_grpcweb_endstream_trailers",
-					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolGRPCWeb}},
-					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolGRPCWeb)},
+					name:    "buffer_grpcweb_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetProtocols(ProtocolGRPCWeb)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
 					},
@@ -173,9 +169,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// gRPC-Web response with error too large
-					name:            "buffer_grpcweb_endstream_error",
-					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolGRPCWeb}},
-					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolGRPCWeb)},
+					name:    "buffer_grpcweb_endstream_error",
+					svcOpts: []ServiceOption{WithTargetProtocols(ProtocolGRPCWeb)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
 					},
@@ -197,10 +192,9 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// Connect streaming response with error too large
-					name:            "buffer_connect_endstream_trailers",
-					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
-					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
-					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					name:          "buffer_connect_endstream_trailers",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
 					},
@@ -222,10 +216,9 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// Connect streaming response with error too large
-					name:            "buffer_connect_endstream_trailers",
-					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
-					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
-					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					name:          "buffer_connect_endstream_trailers",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
 					},
@@ -257,9 +250,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 			reqs: []testRequest{
 				{
 					// Proto request transformed to JSON
-					name:            "must_buffer_request_unary",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					name:    "must_buffer_request_unary",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
 					},
@@ -272,9 +264,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 					},
 				},
 				{
-					name:            "must_buffer_request_stream",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					name:    "must_buffer_request_stream",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromClientStream(ctx, clients.contentClient.Upload, hdrs, msgs)
 					},
@@ -305,9 +296,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 			reqs: []testRequest{
 				{
 					// Proto response transformed to JSON
-					name:            "must_buffer_response_unary",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					name:    "must_buffer_response_unary",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
 					},
@@ -325,9 +315,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 					},
 				},
 				{
-					name:            "must_buffer_response_stream",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON)},
+					name:    "must_buffer_response_stream",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
 					},
@@ -349,9 +338,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// gRPC-Web response with trailers too large
-					name:            "buffer_grpcweb_endstream_trailers",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolGRPCWeb}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolGRPCWeb)},
+					name:    "buffer_grpcweb_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolGRPCWeb)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
 					},
@@ -373,9 +361,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// gRPC-Web response with error too large
-					name:            "buffer_grpcweb_endstream_error",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolGRPCWeb}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolGRPCWeb)},
+					name:    "buffer_grpcweb_endstream_error",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolGRPCWeb)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
 					},
@@ -397,9 +384,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// Connect streaming response with error too large
-					name:            "buffer_connect_endstream_trailers",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolConnect}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolConnect)},
+					name:    "buffer_connect_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolConnect)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
 					},
@@ -421,9 +407,8 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 				},
 				{
 					// Connect streaming response with error too large
-					name:            "buffer_connect_endstream_trailers",
-					muxWithSettings: &Mux{Codecs: []string{CodecJSON}, Protocols: []Protocol{ProtocolConnect}},
-					muxSvcOpts:      []ServiceOption{WithCodecs(CodecJSON), WithProtocols(ProtocolConnect)},
+					name:    "buffer_connect_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolConnect)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
 					},
@@ -457,10 +442,9 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 			reqs: []testRequest{
 				{
 					// gRPC request; Connect unary response with error
-					name:            "must_buffer_error_response",
-					clientOptions:   []connect.ClientOption{connect.WithGRPC()},
-					muxWithSettings: &Mux{Protocols: []Protocol{ProtocolConnect}},
-					muxSvcOpts:      []ServiceOption{WithProtocols(ProtocolConnect)},
+					name:          "must_buffer_error_response",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
 					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
 						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
 					},
@@ -481,21 +465,28 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 		},
 	}
 	muxTestModes := []struct {
-		name    string
-		makeMux func(*testRequest) (*Mux, []ServiceOption)
+		name          string
+		optsOnService bool
+		makeMux       func(*testRequest, []*Service) (http.Handler, error)
 	}{
 		{
-			name: "mux_settings",
-			makeMux: func(req *testRequest) (*Mux, []ServiceOption) {
-				mux := req.muxWithSettings
-				mux.MaxMessageBufferBytes = 1024
-				return mux, nil
+			name:          "default_svc_opts",
+			optsOnService: false,
+			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
+				opts := make([]HandlerOption, 0, len(req.svcOpts)+2)
+				for _, svcOpt := range req.svcOpts {
+					opts = append(opts, svcOpt)
+				}
+				opts = append(opts, WithMaxMessageBufferBytes(1024))
+				return NewHandler(svcs, opts...)
 			},
 		},
 		{
-			name: "mux_svc_options",
-			makeMux: func(req *testRequest) (*Mux, []ServiceOption) {
-				return &Mux{}, append(req.muxSvcOpts, WithMaxMessageBufferBytes(1024))
+			name:          "per_svc_options",
+			optsOnService: true,
+			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
+				// svcs already have options defined on them
+				return NewHandler(svcs, WithMaxMessageBufferBytes(1024))
 			},
 		},
 	}
@@ -514,18 +505,22 @@ func TestMux_BufferTooLargeFails(t *testing.T) {
 							t.Parallel()
 
 							var expectationChecked atomic.Bool
-							hdlr := http.HandlerFunc(func(respWriter http.ResponseWriter, req *http.Request) {
+							rpcHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, req *http.Request) {
 								serveMux.ServeHTTP(respWriter, req)
 								defer expectationChecked.Store(true)
 								testCase.expectation(t, respWriter, req)
 							})
 
-							mux, svcOpts := mode.makeMux(testReq)
-							err := mux.RegisterServiceByName(hdlr, testv1connect.LibraryServiceName, svcOpts...)
+							var svcOpts []ServiceOption
+							if mode.optsOnService {
+								svcOpts = testReq.svcOpts
+							}
+							handler, err := mode.makeMux(testReq, []*Service{
+								NewService(testv1connect.LibraryServiceName, rpcHandler, svcOpts...),
+								NewService(testv1connect.ContentServiceName, rpcHandler, svcOpts...),
+							})
 							require.NoError(t, err)
-							err = mux.RegisterServiceByName(hdlr, testv1connect.ContentServiceName, svcOpts...)
-							require.NoError(t, err)
-							server := httptest.NewUnstartedServer(mux)
+							server := httptest.NewUnstartedServer(handler)
 							server.EnableHTTP2 = true
 							server.StartTLS()
 							disableCompression(server)
@@ -554,7 +549,7 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	t.Parallel()
 
 	var interceptor testInterceptor
-	_, hdlr := testv1connect.NewLibraryServiceHandler(
+	_, svcHandler := testv1connect.NewLibraryServiceHandler(
 		testv1connect.UnimplementedLibraryServiceHandler{},
 		connect.WithInterceptors(
 			connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
@@ -569,36 +564,39 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 		),
 	)
 
-	muxWithSetting := &Mux{MaxGetURLBytes: 512, Compressors: []string{}}
-	err := muxWithSetting.RegisterServiceByName(hdlr, testv1connect.LibraryServiceName)
-	require.NoError(t, err)
-	serverWithSetting := httptest.NewServer(muxWithSetting)
-	disableCompression(serverWithSetting)
-	t.Cleanup(serverWithSetting.Close)
-
-	muxWithSvcOption := &Mux{}
-	err = muxWithSvcOption.RegisterServiceByName(
-		hdlr,
-		testv1connect.LibraryServiceName,
+	handlerWithDefaultSvcOpt, err := NewHandler(
+		[]*Service{NewService(testv1connect.LibraryServiceName, svcHandler)},
 		WithMaxGetURLBytes(512),
-		WithNoCompression(),
+		WithNoTargetCompression(),
 	)
 	require.NoError(t, err)
-	serverWithSvcOption := httptest.NewServer(muxWithSvcOption)
-	disableCompression(serverWithSvcOption)
-	t.Cleanup(serverWithSvcOption.Close)
+	serverWithDefaultSvcOpt := httptest.NewServer(handlerWithDefaultSvcOpt)
+	disableCompression(serverWithDefaultSvcOpt)
+	t.Cleanup(serverWithDefaultSvcOpt.Close)
+
+	handlerWithPerSvcOpt, err := NewHandler([]*Service{
+		NewService(
+			testv1connect.LibraryServiceName, svcHandler,
+			WithMaxGetURLBytes(512),
+			WithNoTargetCompression(),
+		),
+	})
+	require.NoError(t, err)
+	serverWithPerSvcOpt := httptest.NewServer(handlerWithPerSvcOpt)
+	disableCompression(serverWithPerSvcOpt)
+	t.Cleanup(serverWithPerSvcOpt.Close)
 
 	testCases := []struct {
 		name   string
 		server *httptest.Server
 	}{
 		{
-			name:   "with_mux_setting",
-			server: serverWithSetting,
+			name:   "with_default_svc_option",
+			server: serverWithDefaultSvcOpt,
 		},
 		{
-			name:   "with_svc_option",
-			server: serverWithSvcOption,
+			name:   "with_per_svc_option",
+			server: serverWithPerSvcOpt,
 		},
 	}
 
@@ -728,17 +726,15 @@ func TestMux_MessageHooks(t *testing.T) {
 			return nil
 		}
 	}
-	makeHooks := func(req, resp bool) func(context.Context, Operation) (Hooks, error) {
-		return func(_ context.Context, _ Operation) (Hooks, error) {
-			var hooks Hooks
-			if req {
-				hooks.OnClientRequestMessage = hookFactory(true)
-			}
-			if resp {
-				hooks.OnServerResponseMessage = hookFactory(false)
-			}
-			return hooks, nil
+	makeHooks := func(req, resp bool) Hooks {
+		var hooks Hooks
+		if req {
+			hooks.OnClientRequestMessage = hookFactory(true)
 		}
+		if resp {
+			hooks.OnServerResponseMessage = hookFactory(false)
+		}
+		return hooks
 	}
 
 	serverCases := []struct {
@@ -763,15 +759,16 @@ func TestMux_MessageHooks(t *testing.T) {
 	}
 	for i := range serverCases {
 		serverCase := &serverCases[i]
-		mux := &Mux{
-			HooksCallback: makeHooks(serverCase.reqHook, serverCase.respHook),
-		}
-		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
+		handler, err := NewHandler(
+			[]*Service{NewService(testv1connect.ContentServiceName, contentHandler)},
+			WithHooks(makeHooks(serverCase.reqHook, serverCase.respHook)),
+		)
+		require.NoError(t, err)
 		// propagate test name into context so that request and response hooks can access it
 		setContextHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
 			testName := request.Header.Get("Test")
 			ctx := context.WithValue(request.Context(), testCaseNameContextKey{}, testName)
-			mux.ServeHTTP(respWriter, request.WithContext(ctx))
+			handler.ServeHTTP(respWriter, request.WithContext(ctx))
 		})
 		// Use HTTP/2 so we can test a bidi stream.
 		server := httptest.NewUnstartedServer(setContextHandler)
@@ -1115,7 +1112,7 @@ func TestMux_HookOrder(t *testing.T) {
 		connect.WithInterceptors(&interceptor),
 	)
 
-	var hooks testHooks
+	var testHooks testHooks
 	errorCases := []struct {
 		name    string
 		failure hookKind
@@ -1123,10 +1120,6 @@ func TestMux_HookOrder(t *testing.T) {
 	}{
 		{
 			name: "normal",
-		},
-		{
-			name:    "hooks_callback_fails",
-			failure: hookKindInit,
 		},
 		{
 			name:    "hook_client_req_headers_fails",
@@ -1151,57 +1144,52 @@ func TestMux_HookOrder(t *testing.T) {
 	}
 	errHookFailed := newConnectError(connect.CodeAlreadyExists, "hook failed")
 	for i := range errorCases {
+		hooks := Hooks{
+			OnClientRequestHeaders:  testHooks.requestHeaders,
+			OnClientRequestMessage:  testHooks.requestMessage,
+			OnServerResponseHeaders: testHooks.responseHeaders,
+			OnServerResponseMessage: testHooks.responseMessage,
+			OnOperationFinish:       testHooks.finish,
+			OnOperationFail:         testHooks.fail,
+		}
 		errCase := errorCases[i]
-		var callback func(context.Context, Operation) (Hooks, error)
-		if errCase.failure == 0 {
-			callback = hooks.init
-		} else {
-			callback = func(ctx context.Context, op Operation) (Hooks, error) {
-				hooks, err := hooks.init(ctx, op)
-				switch errCase.failure {
-				case hookKindInit:
-					err = errHookFailed
-				case hookKindRequestHeaders:
-					prev := hooks.OnClientRequestHeaders
-					hooks.OnClientRequestHeaders = func(ctx context.Context, op Operation, headers http.Header) error {
-						_ = prev(ctx, op, headers)
-						return errHookFailed
-					}
-				case hookKindRequestMessage:
-					prev := hooks.OnClientRequestMessage
-					hooks.OnClientRequestMessage = func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
-						_ = prev(ctx, op, msg, compressed, size)
-						return errHookFailed
-					}
-				case hookKindResponseHeaders:
-					prev := hooks.OnServerResponseHeaders
-					hooks.OnServerResponseHeaders = func(ctx context.Context, op Operation, statusCode int, headers http.Header) error {
-						_ = prev(ctx, op, statusCode, headers)
-						return errHookFailed
-					}
-				case hookKindResponseMessage:
-					prev := hooks.OnServerResponseMessage
-					hooks.OnServerResponseMessage = func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
-						_ = prev(ctx, op, msg, compressed, size)
-						return errHookFailed
-					}
-				case hookKindFail:
-					prev := hooks.OnOperationFail
-					hooks.OnOperationFail = func(ctx context.Context, op Operation, trailers http.Header, err error) error {
-						_ = prev(ctx, op, trailers, err)
-						return errHookFailed
-					}
-				}
-				return hooks, err
+		switch errCase.failure {
+		case hookKindRequestHeaders:
+			hooks.OnClientRequestHeaders = func(ctx context.Context, op Operation, headers http.Header) error {
+				_ = testHooks.requestHeaders(ctx, op, headers)
+				return errHookFailed
+			}
+		case hookKindRequestMessage:
+			hooks.OnClientRequestMessage = func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
+				_ = testHooks.requestMessage(ctx, op, msg, compressed, size)
+				return errHookFailed
+			}
+		case hookKindResponseHeaders:
+			hooks.OnServerResponseHeaders = func(ctx context.Context, op Operation, statusCode int, headers http.Header) error {
+				_ = testHooks.responseHeaders(ctx, op, statusCode, headers)
+				return errHookFailed
+			}
+		case hookKindResponseMessage:
+			hooks.OnServerResponseMessage = func(ctx context.Context, op Operation, msg proto.Message, compressed bool, size int) error {
+				_ = testHooks.responseMessage(ctx, op, msg, compressed, size)
+				return errHookFailed
+			}
+		case hookKindFail:
+			hooks.OnOperationFail = func(ctx context.Context, op Operation, trailers http.Header, err error) error {
+				_ = testHooks.fail(ctx, op, trailers, err)
+				return errHookFailed
 			}
 		}
-		mux := &Mux{HooksCallback: callback}
-		require.NoError(t, mux.RegisterServiceByName(contentHandler, testv1connect.ContentServiceName))
+		handler, err := NewHandler(
+			[]*Service{NewService(testv1connect.ContentServiceName, contentHandler)},
+			WithHooks(hooks),
+		)
+		require.NoError(t, err)
 		// propagate test name into context so that hooks can access it
 		setContextHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, request *http.Request) {
 			testName := request.Header.Get("Test")
 			ctx := context.WithValue(request.Context(), testCaseNameContextKey{}, testName)
-			mux.ServeHTTP(respWriter, request.WithContext(ctx))
+			handler.ServeHTTP(respWriter, request.WithContext(ctx))
 		})
 		// Use HTTP/2 so we can test a bidi stream.
 		server := httptest.NewUnstartedServer(setContextHandler)
@@ -1243,7 +1231,6 @@ func TestMux_HookOrder(t *testing.T) {
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindResponseHeaders,
@@ -1270,7 +1257,6 @@ func TestMux_HookOrder(t *testing.T) {
 				},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindResponseHeaders,
@@ -1300,7 +1286,6 @@ func TestMux_HookOrder(t *testing.T) {
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindRequestMessage,
@@ -1331,7 +1316,6 @@ func TestMux_HookOrder(t *testing.T) {
 				},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindRequestMessage,
@@ -1380,7 +1364,6 @@ func TestMux_HookOrder(t *testing.T) {
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindResponseHeaders,
@@ -1417,7 +1400,6 @@ func TestMux_HookOrder(t *testing.T) {
 				},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindResponseHeaders,
@@ -1454,7 +1436,6 @@ func TestMux_HookOrder(t *testing.T) {
 				rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindResponseHeaders,
@@ -1487,7 +1468,6 @@ func TestMux_HookOrder(t *testing.T) {
 				},
 			},
 			events: []hookKind{
-				hookKindInit,
 				hookKindRequestHeaders,
 				hookKindRequestMessage,
 				hookKindResponseHeaders,
@@ -1547,7 +1527,7 @@ func TestMux_HookOrder(t *testing.T) {
 					}
 
 					// Now we inspect the hooks that were called.
-					op, events := hooks.getEvents(t)
+					op, events := testHooks.getEvents(t)
 					require.Equal(t, testReq.stream.method, "/"+string(op.Method().Parent().FullName())+"/"+string(op.Method().Name()))
 					require.LessOrEqual(t, len(events), len(testReq.events))
 					for i, event := range events {
@@ -1571,44 +1551,52 @@ func TestRuleSelector(t *testing.T) {
 	t.Parallel()
 
 	var interceptor testInterceptor
-	serveMux := http.NewServeMux()
-	serveMux.Handle(testv1connect.NewLibraryServiceHandler(
+	svc := NewService(testv1connect.NewLibraryServiceHandler(
 		testv1connect.UnimplementedLibraryServiceHandler{},
 		connect.WithInterceptors(&interceptor),
 	))
-	mux := &Mux{}
-	assert.NoError(t, mux.RegisterServiceByName(serveMux, testv1connect.LibraryServiceName))
 
-	assert.ErrorContains(t, mux.RegisterRules(&annotations.HttpRule{
+	_, err := NewHandler([]*Service{svc}, WithRules(&annotations.HttpRule{
 		Selector: "grpc.health.v1.Health.Check",
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/healthz",
 		},
-	}), "rule \"grpc.health.v1.Health.Check\" does not match any methods")
-	assert.ErrorContains(t, mux.RegisterRules(&annotations.HttpRule{
+	}))
+	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.Check\" does not match any methods")
+
+	_, err = NewHandler([]*Service{svc}, WithRules(&annotations.HttpRule{
 		Selector: "invalid.*.Get",
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/v1/*",
 		},
-	}), "wildcard selector \"invalid.*.Get\" must be at the end")
-	assert.ErrorContains(t, mux.RegisterRules(&annotations.HttpRule{
+	}))
+	assert.ErrorContains(t, err, "wildcard selector \"invalid.*.Get\" must be at the end")
+
+	_, err = NewHandler([]*Service{svc}, WithRules(&annotations.HttpRule{
 		Selector: "grpc.health.v1.Health.*",
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/healthz",
 		},
-	}), "rule \"grpc.health.v1.Health.*\" does not match any methods")
-	assert.ErrorContains(t, mux.RegisterRules(&annotations.HttpRule{
+	}))
+	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.*\" does not match any methods")
+
+	_, err = NewHandler([]*Service{svc}, WithRules(&annotations.HttpRule{
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/v1/*",
 		},
-	}), "rule missing selector")
-
-	assert.NoError(t, mux.RegisterRules(&annotations.HttpRule{
-		Selector: "vanguard.test.v1.LibraryService.GetBook",
-		Pattern: &annotations.HttpRule_Get{
-			Get: "/v1/selector/{name=shelves/*/books/*}",
-		},
 	}))
+	assert.ErrorContains(t, err, "rule missing selector")
+
+	handler, err := NewHandler(
+		[]*Service{svc},
+		WithRules(&annotations.HttpRule{
+			Selector: "vanguard.test.v1.LibraryService.GetBook",
+			Pattern: &annotations.HttpRule_Get{
+				Get: "/v1/selector/{name=shelves/*/books/*}",
+			},
+		}),
+	)
+	require.NoError(t, err)
 
 	ctx := context.Background()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/v1/selector/shelves/123/books/456", http.NoBody)
@@ -1637,7 +1625,7 @@ func TestRuleSelector(t *testing.T) {
 	})
 	defer interceptor.del(t)
 
-	mux.ServeHTTP(rsp, req)
+	handler.ServeHTTP(rsp, req)
 	result := rsp.Result()
 	defer result.Body.Close()
 
@@ -2452,8 +2440,7 @@ type testCaseNameContextKey struct{}
 type hookKind int
 
 const (
-	hookKindInit = hookKind(iota + 1)
-	hookKindRequestHeaders
+	hookKindRequestHeaders = hookKind(iota + 1)
 	hookKindRequestMessage
 	hookKindResponseHeaders
 	hookKindResponseMessage
@@ -2463,8 +2450,6 @@ const (
 
 func (k hookKind) String() string {
 	switch k {
-	case hookKindInit:
-		return "init"
 	case hookKindRequestHeaders:
 		return "request headers"
 	case hookKindRequestMessage:
@@ -2504,18 +2489,6 @@ func (h *testHooks) addEvent(ctx context.Context, op Operation, kind hookKind) e
 	}
 	ops[op] = append(ops[op], kind)
 	return nil
-}
-
-func (h *testHooks) init(ctx context.Context, op Operation) (Hooks, error) {
-	err := h.addEvent(ctx, op, hookKindInit)
-	return Hooks{
-		OnClientRequestHeaders:  h.requestHeaders,
-		OnClientRequestMessage:  h.requestMessage,
-		OnServerResponseHeaders: h.responseHeaders,
-		OnServerResponseMessage: h.responseMessage,
-		OnOperationFinish:       h.finish,
-		OnOperationFail:         h.fail,
-	}, err
 }
 
 func (h *testHooks) requestHeaders(ctx context.Context, op Operation, _ http.Header) error {
