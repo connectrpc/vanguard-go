@@ -54,7 +54,8 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 }
 
 func (r restClientProtocol) endMustBeInHeaders() bool {
-	// Streaming RPCs are not supported for REST.
+	// TODO: when we support server streams over REST, this should return
+	// false when streaming
 	return true
 }
 
@@ -62,10 +63,10 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	var reqMeta requestMeta
 	reqMeta.compression = headers.Get("Content-Encoding")
 	headers.Del("Content-Encoding")
-	// A REST client could use "q" weights in the `Accept-Encoding` header, which
-	// would currently cause the middleware to not recognize the compression.
-	// We may want to address this. We'd need to sort the values by their weight
-	// since other protocols don't allow weights with acceptable encodings.
+	// TODO: A REST client could use "q" weights in the `Accept-Encoding` header, which
+	//       would currently cause the middleware to not recognize the compression.
+	//       We may want to address this. We'd need to sort the values by their weight
+	//       since other protocols don't allow weights with acceptable encodings.
 	reqMeta.acceptCompression = parseMultiHeader(headers.Values("Accept-Encoding"))
 	headers.Del("Accept-Encoding")
 
@@ -113,9 +114,9 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	cerr := end.err
 	if cerr != nil && !wasInHeaders {
-		// Uh oh. We already flushed headers and started writing body. What can we do?
-		// Should this log? If we are using http/2, is there some way we could send
-		// a "goaway" frame to the client, to indicate abnormal end of stream?
+		// TODO: Uh oh. We already flushed headers and started writing body. What can we do?
+		//       Should this log? If we are using http/2, is there some way we could send
+		//       a "goaway" frame to the client, to indicate abnormal end of stream?
 		return nil
 	}
 	if cerr == nil {
@@ -125,7 +126,7 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 	bin, err := op.client.codec.MarshalAppend(nil, stat)
 	if err != nil {
 		// Hardcode the error to be a JSON-encoded gRPC status.
-		bin = []byte(`{"code": 13, "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
+		bin = []byte(`{"code":13,"message":"failed to marshal end error"}`)
 	}
 	_, _ = writer.Write(bin)
 	return nil
@@ -259,7 +260,7 @@ func (r restServerProtocol) protocol() Protocol {
 }
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	// google.api.HttpBody payloads override the content-type.
+	// TODO: don't set content-type on no body requests.
 	headers["Content-Type"] = []string{"application/" + meta.codec}
 	if meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}

@@ -184,7 +184,7 @@ func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer
 	buffer := op.bufferPool.Get()
 	defer op.bufferPool.Put(buffer)
 	_ = trailers.Write(buffer)
-	// Send envelope uncompressed.
+	// TODO: Send envelope compressed if possible.
 	env := envelope{trailer: true, length: uint32(buffer.Len())}
 	envBytes := g.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
