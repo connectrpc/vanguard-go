@@ -49,8 +49,8 @@ type Codec interface {
 // This is used to encode messages that end up in the URL query string,
 // for the Connect protocol when unary methods use the HTTP GET method.
 // If the codec in use does not implement StableCodec then HTTP GET
-// methods will not be used; a Mux will send all unary RPCs that use the
-// Connect protocol and that codec as POST requests.
+// methods will not be used. Instead, all unary RPCs that get transformed
+// to the Connect protocol with that codec will use POST requests.
 type StableCodec interface {
 	Codec
 	// MarshalAppendStable is the same as MarshalAppend except that the
@@ -64,47 +64,53 @@ type StableCodec interface {
 	IsBinary() bool
 }
 
-// RESTCodec is a Codec with additional methods for marshalling and unmarshalling
-// individual fields of a message. This is necessary to support query string
-// variables and request and response bodies whose value is a specific field, not
-// an entire message. The extra methods are only used by the REST protocol.
-type RESTCodec interface {
-	Codec
-	// MarshalAppendField marshals just the given field of the given message to
-	// bytes, and appends it to the given base byte slice.
-	MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
-	// UnmarshalField unmarshals the given data into the given field of the given
-	// message.
-	UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
+// ProtoCodec implements Codec for the Protobuf binary format. This
+// codec also implements StableCodec so may be used with Connect unary
+// requests using the GET HTTP method.
+//
+// If you create your own instantiate where MarshalOptions.Deterministic
+// is set to true, then both MarshalAppend and MarshalAppendStable will
+// have deterministic output.
+type ProtoCodec struct {
+	proto.MarshalOptions
+	proto.UnmarshalOptions
 }
 
-// DefaultProtoCodec is the default codec factory used for
-// the codec name "proto". The given resolver is used to
-// unmarshal extensions.
-//
-// The returned codec implements StableCodec, in addition to
-// Codec.
-func DefaultProtoCodec(res TypeResolver) Codec {
-	return protoCodec{
-		UnmarshalOptions: proto.UnmarshalOptions{Resolver: res},
-	}
+var _ StableCodec = (*ProtoCodec)(nil)
+
+func (p *ProtoCodec) Name() string {
+	return CodecProto
 }
 
-// DefaultJSONCodec is the default codec factory used for the codec named
-// "json". The given resolver is used to unmarshal extensions and also to
-// marshal and unmarshal instances of google.protobuf.Any.
-//
-// By default, the returned codec is configured to emit unpopulated fields
-// when marshalling and to discard unknown fields when unmarshalling.
-func DefaultJSONCodec(res TypeResolver) *JSONCodec {
-	return &JSONCodec{
-		MarshalOptions:   protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
-		UnmarshalOptions: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
-	}
+func (p *ProtoCodec) IsBinary() bool {
+	return true
+}
+
+func (p *ProtoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+	return proto.MarshalOptions{}.MarshalAppend(base, msg)
+}
+
+func (p *ProtoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
+	opts := p.MarshalOptions
+	opts.Deterministic = true
+	return opts.MarshalAppend(base, msg)
+}
+
+func (p *ProtoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+	return p.UnmarshalOptions.Unmarshal(bytes, msg)
 }
 
 // JSONCodec implements Codec for the JSON format. It uses the [protojson]
-// package for its implementation.
+// package for its implementation. This codec also implements StableCodec
+// so may be used with Connect unary requests using the GET HTTP method.
+//
+// This type contains additional methods that are needed by the REST
+// protocol. If you intend to customize the behavior of the JSON codec
+// and to use it with the REST protocol, you should use this type and
+// customize its fields, or embed it. Otherwise, if you configure a
+// Codec named "json" that does not have these additional methods,
+// runtime errors will occur if the handler needs to translate requests
+// from or to the REST protocol.
 type JSONCodec struct {
 	// MarshalOptions is used for marshalling data to JSON.
 	MarshalOptions protojson.MarshalOptions
@@ -112,22 +118,22 @@ type JSONCodec struct {
 	UnmarshalOptions protojson.UnmarshalOptions
 }
 
-var _ StableCodec = JSONCodec{}
-var _ RESTCodec = JSONCodec{}
+var _ StableCodec = (*JSONCodec)(nil)
+var _ restCodec = (*JSONCodec)(nil)
 
-func (j JSONCodec) Name() string {
+func (j *JSONCodec) Name() string {
 	return CodecJSON
 }
 
-func (j JSONCodec) IsBinary() bool {
+func (j *JSONCodec) IsBinary() bool {
 	return false
 }
 
-func (j JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+func (j *JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return j.MarshalOptions.MarshalAppend(base, msg)
 }
 
-func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
+func (j *JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	data, err := j.MarshalOptions.MarshalAppend(base, msg)
 	if err != nil {
 		return nil, err
@@ -135,7 +141,7 @@ func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, 
 	return jsonStabilize(data)
 }
 
-func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+func (j *JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
 	}
@@ -193,7 +199,7 @@ func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field prot
 	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
-func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
+func (j *JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
 	}
@@ -213,11 +219,11 @@ func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoref
 	return j.Unmarshal(buf.Bytes(), msg)
 }
 
-func (j JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+func (j *JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return j.UnmarshalOptions.Unmarshal(bytes, msg)
 }
 
-func (j JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
+func (j *JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
 	if !j.MarshalOptions.UseProtoNames {
 		return field.JSONName()
 	}
@@ -228,44 +234,18 @@ func (j JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
 	return string(field.Name())
 }
 
-type protoCodec struct {
-	proto.MarshalOptions
-	proto.UnmarshalOptions
-}
-
-var _ StableCodec = protoCodec{}
-
-func (p protoCodec) Name() string {
-	return CodecProto
-}
-
-func (p protoCodec) IsBinary() bool {
-	return true
-}
-
-func (p protoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
-	return proto.MarshalOptions{}.MarshalAppend(base, msg)
-}
-
-func (p protoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
-	opts := p.MarshalOptions
-	opts.Deterministic = true
-	return opts.MarshalAppend(base, msg)
-}
-
-func (p protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return p.UnmarshalOptions.Unmarshal(bytes, msg)
-}
-
-func jsonStabilize(data []byte) ([]byte, error) {
-	// NB: Because json.Compact only removes whitespace, never elongating data, it is
-	//     safe to use the same backing slice as source and destination. This is safe
-	//     for the same reason that copy is safe even when the two slices overlap.
-	buf := bytes.NewBuffer(data[:0])
-	if err := json.Compact(buf, data); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+// restCodec is a Codec with additional methods for marshalling and unmarshalling
+// individual fields of a message. This is necessary to support query string
+// variables and request and response bodies whose value is a specific field, not
+// an entire message. The extra methods are only used by the REST protocol.
+type restCodec interface {
+	Codec
+	// MarshalAppendField marshals just the given field of the given message to
+	// bytes, and appends it to the given base byte slice.
+	MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
+	// UnmarshalField unmarshals the given data into the given field of the given
+	// message.
+	UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
 }
 
 type codecMap map[string]func(TypeResolver) Codec
@@ -279,4 +259,28 @@ func (m codecMap) get(name string, resolver TypeResolver) Codec {
 		return nil
 	}
 	return codecFn(resolver)
+}
+
+func defaultProtoCodec(res TypeResolver) Codec {
+	return &ProtoCodec{
+		UnmarshalOptions: proto.UnmarshalOptions{Resolver: res},
+	}
+}
+
+func defaultJSONCodec(res TypeResolver) *JSONCodec {
+	return &JSONCodec{
+		MarshalOptions:   protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
+		UnmarshalOptions: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
+	}
+}
+
+func jsonStabilize(data []byte) ([]byte, error) {
+	// NB: Because json.Compact only removes whitespace, never elongating data, it is
+	//     safe to use the same backing slice as source and destination. This is safe
+	//     for the same reason that copy is safe even when the two slices overlap.
+	buf := bytes.NewBuffer(data[:0])
+	if err := json.Compact(buf, data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

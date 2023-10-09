@@ -194,9 +194,9 @@ func (r restClientProtocol) prepareUnmarshalledRequestFromBody(op *operation, sr
 	if leafField == nil {
 		return op.client.codec.Unmarshal(src, msg.Interface())
 	}
-	restCodec, ok := op.client.codec.(RESTCodec)
+	restCodec, ok := op.client.codec.(restCodec)
 	if !ok {
-		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be unmarshalled",
+		return fmt.Errorf("codec %q (%T) does not implement restCodec, so non-message request body cannot be unmarshalled",
 			op.client.codec.Name(), op.client.codec)
 	}
 	return restCodec.UnmarshalField(src, msg.Interface(), leafField)
@@ -234,10 +234,10 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 	if leafField == nil {
 		return op.client.codec.MarshalAppend(base, msg.Interface())
 	}
-	restCodec, ok := op.client.codec.(RESTCodec)
+	restCodec, ok := op.client.codec.(restCodec)
 	if !ok {
 		return nil,
-			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be marshalled",
+			fmt.Errorf("codec %q (%T) does not implement restCodec, so non-message response body cannot be marshalled",
 				op.client.codec.Name(), op.client.codec)
 	}
 	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
@@ -339,10 +339,10 @@ func (r restServerProtocol) prepareMarshalledRequest(op *operation, base []byte,
 	if leafField == nil {
 		return op.server.codec.MarshalAppend(base, msg.Interface())
 	}
-	restCodec, ok := op.server.codec.(RESTCodec)
+	restCodec, ok := op.server.codec.(restCodec)
 	if !ok {
 		return nil,
-			fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message request body cannot be marshalled",
+			fmt.Errorf("codec %q (%T) does not implement restCodec, so non-message request body cannot be marshalled",
 				op.server.codec.Name(), op.server.codec)
 	}
 	return restCodec.MarshalAppendField(base, msg.Interface(), leafField)
@@ -368,9 +368,9 @@ func (r restServerProtocol) prepareUnmarshalledResponse(op *operation, src []byt
 	if leafField == nil {
 		return op.server.codec.Unmarshal(src, msg.Interface())
 	}
-	restCodec, ok := op.server.codec.(RESTCodec)
+	restCodec, ok := op.server.codec.(restCodec)
 	if !ok {
-		return fmt.Errorf("codec %q (%T) does not implement RESTCodec, so non-message response body cannot be unmarshalled",
+		return fmt.Errorf("codec %q (%T) does not implement restCodec, so non-message response body cannot be unmarshalled",
 			op.server.codec.Name(), op.server.codec)
 	}
 	return restCodec.UnmarshalField(src, msg.Interface(), leafField)

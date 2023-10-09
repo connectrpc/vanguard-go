@@ -493,7 +493,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			})
 		}
 	}
-	codec := DefaultJSONCodec(protoregistry.GlobalTypes)
+	codec := defaultJSONCodec(protoregistry.GlobalTypes)
 	for _, opts := range testOpts {
 		opts := opts
 		t.Run(opts.name, func(t *testing.T) {

@@ -71,9 +71,9 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 
 	transcoderOpts := transcoderOptions{
 		codecs: codecMap{
-			CodecProto: DefaultProtoCodec,
+			CodecProto: defaultProtoCodec,
 			CodecJSON: func(res TypeResolver) Codec {
-				return DefaultJSONCodec(res)
+				return defaultJSONCodec(res)
 			},
 		},
 		compressors: compressionMap{
