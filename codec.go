@@ -78,24 +78,32 @@ type ProtoCodec struct {
 
 var _ StableCodec = (*ProtoCodec)(nil)
 
+// Name returns the name of this codec. It always returns "proto".
 func (p *ProtoCodec) Name() string {
 	return CodecProto
 }
 
+// IsBinary reports whether this codec is a binary format. It always
+// returns true.
 func (p *ProtoCodec) IsBinary() bool {
 	return true
 }
 
+// MarshalAppend implements Codec, serializing the given msg into the
+// Protobuf binary format.
 func (p *ProtoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(base, msg)
 }
 
+// MarshalAppendStable implements StableCodec.
 func (p *ProtoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	opts := p.MarshalOptions
 	opts.Deterministic = true
 	return opts.MarshalAppend(base, msg)
 }
 
+// Unmarshal implements Codec, de-serializing the given bytes into the
+// given msg.
 func (p *ProtoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return p.UnmarshalOptions.Unmarshal(bytes, msg)
 }
@@ -107,10 +115,10 @@ func (p *ProtoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 // This type contains additional methods that are needed by the REST
 // protocol. If you intend to customize the behavior of the JSON codec
 // and to use it with the REST protocol, you should use this type and
-// customize its fields, or embed it. Otherwise, if you configure a
-// Codec named "json" that does not have these additional methods,
-// runtime errors will occur if the handler needs to translate requests
-// from or to the REST protocol.
+// customize its fields, or embed it. Otherwise, operations to a Handler
+// will fail if it needs to translate requests to or from the REST
+// protocol but a Codec named "json" is configured that does not have
+// these additional methods.
 type JSONCodec struct {
 	// MarshalOptions is used for marshalling data to JSON.
 	MarshalOptions protojson.MarshalOptions
@@ -121,18 +129,24 @@ type JSONCodec struct {
 var _ StableCodec = (*JSONCodec)(nil)
 var _ restCodec = (*JSONCodec)(nil)
 
+// Name returns the name of this codec. It always returns "json".
 func (j *JSONCodec) Name() string {
 	return CodecJSON
 }
 
+// IsBinary reports whether this codec is a binary format. It always
+// returns false.
 func (j *JSONCodec) IsBinary() bool {
 	return false
 }
 
+// MarshalAppend implements Codec, serializing the given msg into the
+// JSON format.
 func (j *JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return j.MarshalOptions.MarshalAppend(base, msg)
 }
 
+// MarshalAppendStable implements StableCodec.
 func (j *JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	data, err := j.MarshalOptions.MarshalAppend(base, msg)
 	if err != nil {
@@ -141,6 +155,10 @@ func (j *JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte,
 	return jsonStabilize(data)
 }
 
+// MarshalAppendField serializes the given field of the given msg, appending
+// the result to the given base. This operation is required for a Codec to
+// be used with the REST protocol, where individual fields can be serialized
+// to URI path components or query string parameters.
 func (j *JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
@@ -199,6 +217,16 @@ func (j *JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field pro
 	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
+// Unmarshal implements Codec, de-serializing the given bytes into the
+// given msg.
+func (j *JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+	return j.UnmarshalOptions.Unmarshal(bytes, msg)
+}
+
+// UnmarshalField de0serializes the given field of the given msg from the
+// given data. This operation is required for a Codec to be used with the
+// REST protocol, where individual fields can be de-serialized from URI
+// path components or query string parameters.
 func (j *JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
@@ -217,10 +245,6 @@ func (j *JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protore
 	//     a decent bit of protojson to reproduce (lot of new code to test
 	//     and to maintain) and risks inadvertently diverging from protojson.
 	return j.Unmarshal(buf.Bytes(), msg)
-}
-
-func (j *JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return j.UnmarshalOptions.Unmarshal(bytes, msg)
 }
 
 func (j *JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
