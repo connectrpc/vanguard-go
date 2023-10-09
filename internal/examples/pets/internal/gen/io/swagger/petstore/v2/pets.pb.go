@@ -18,6 +18,16 @@
 // 	protoc        (unknown)
 // source: io/swagger/petstore/v2/pets.proto
 
+// The service defined herein comes from v2 of the Petstore service, which
+// is used as an example for Swagger/OpenAPI. The Swagger spec can be found
+// here: https://petstore.swagger.io/v2/swagger.json
+// A human-friendly HTML view of this API is also available at
+// https://petstore.swagger.io.
+//
+// This file defines only the "pet" service. The spec for this site also
+// includes "store" and "user" services which are not supported via these
+// RPC definitions.
+
 package petstorev2
 
 import (
