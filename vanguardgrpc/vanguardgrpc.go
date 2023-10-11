@@ -25,7 +25,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// NewHandler returns a Vanguard handler that wraps the given gRPC server. All
+// NewTranscoder returns a Vanguard handler that wraps the given gRPC server. All
 // services registered with the server will be supported by the returned handler.
 // The Vanguard handler will be configured to transcode incoming requests to the
 // gRPC protocol.
@@ -50,7 +50,7 @@ import (
 //			DiscardUnknown: true,
 //		},
 //	})
-func NewHandler(server *grpc.Server, opts ...vanguard.TranscoderOption) (http.Handler, error) {
+func NewTranscoder(server *grpc.Server, opts ...vanguard.TranscoderOption) (http.Handler, error) {
 	codecs := make([]string, 1, 2)
 	codecs[0] = vanguard.CodecProto
 	if encoding.GetCodec(vanguard.CodecJSON) != nil {

@@ -32,7 +32,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func ExampleNewHandler_connectToGRPC() {
+func ExampleNewTranscoder_connectToGRPC() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// Configure gRPC servers to support JSON.
@@ -47,7 +47,7 @@ func ExampleNewHandler_connectToGRPC() {
 	testv1.RegisterLibraryServiceServer(grpcServer, svc)
 
 	// Create a vanguard handler for all services registered in grpcServer
-	handler, err := vanguardgrpc.NewHandler(grpcServer)
+	handler, err := vanguardgrpc.NewTranscoder(grpcServer)
 	if err != nil {
 		log.Println("error:", err)
 		return

@@ -39,10 +39,10 @@ func main() {
 	server := grpc.NewServer()
 	elizav1grpc.RegisterElizaServiceServer(server, elizaImpl{})
 
-	// Now wrap it with a Vanguard handler to upgrade it to
+	// Now wrap it with a Vanguard transcoder to upgrade it to
 	// also supporting Connect and gRPC-Web (and even REST,
 	// if the gRPC service schemas have HTTP annotations).
-	handler, err := vanguardgrpc.NewHandler(server)
+	handler, err := vanguardgrpc.NewTranscoder(server)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
