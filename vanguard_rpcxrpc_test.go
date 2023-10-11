@@ -80,7 +80,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 		for i, svcName := range serviceNames {
 			services[i] = NewService(svcName, svcHandler, opts...)
 		}
-		handler, err := NewHandler(services)
+		handler, err := NewTranscoder(services)
 		require.NoError(t, err)
 		server := httptest.NewUnstartedServer(handler)
 		server.EnableHTTP2 = true

@@ -126,7 +126,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		reqGRPCBody := envelopePayload(1, reqMsgProtoComp)
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
-		handler, err := NewHandler(
+		handler, err := NewTranscoder(
 			[]*Service{NewService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
@@ -169,7 +169,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 	b.Run("REST_json/gRPC_proto/Convert", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
-		handler, err := NewHandler(
+		handler, err := NewTranscoder(
 			[]*Service{NewService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
@@ -216,7 +216,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		reqGRPCBody := envelopePayload(0, reqMsgProto)
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
-		handler, err := NewHandler(
+		handler, err := NewTranscoder(
 			[]*Service{NewService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspMsgJSON, http.Header{
@@ -257,7 +257,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 	b.Run("connect_json/gRPC_proto/Convert", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
-		handler, err := NewHandler(
+		handler, err := NewTranscoder(
 			[]*Service{NewService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
@@ -302,7 +302,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 	b.Run("connect_proto_gzip/gRPC_proto_gzip/Translate", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
-		handler, err := NewHandler(
+		handler, err := NewTranscoder(
 			[]*Service{NewService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
@@ -350,7 +350,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		_, _ = rand.Read(largePayload)
 		rspGRPC := envelopePayload(0, marshalProto(&emptypb.Empty{}))
 
-		handler, err := NewHandler(
+		handler, err := NewTranscoder(
 			[]*Service{NewService(
 				testv1connect.ContentServiceName,
 				benchHandler(b, rspGRPC, http.Header{

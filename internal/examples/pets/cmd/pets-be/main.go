@@ -46,7 +46,7 @@ func main() {
 
 	// Wrap the proxy handler with Vanguard, so it can accept Connect, gRPC, or gRPC-Web
 	// and transform the requests to REST+JSON.
-	handler, err := vanguard.NewHandler(
+	handler, err := vanguard.NewTranscoder(
 		[]*vanguard.Service{vanguard.NewService(petstorev2connect.PetServiceName, proxy)},
 		vanguard.WithTargetProtocols(vanguard.ProtocolREST),
 	)

@@ -38,13 +38,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func ExampleNewHandler_restToConnect() {
+func ExampleNewTranscoder_restToConnect() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// RPC service implementing testv1connect.LibraryService annotations.
 	svc := &libraryRPC{}
 
-	handler, err := vanguard.NewHandler([]*vanguard.Service{
+	handler, err := vanguard.NewTranscoder([]*vanguard.Service{
 		vanguard.NewService(testv1connect.NewLibraryServiceHandler(svc)),
 	})
 	if err != nil {
@@ -96,13 +96,13 @@ func ExampleNewHandler_restToConnect() {
 	// Arthur C. Clarke
 }
 
-func ExampleNewHandler_connectToREST() {
+func ExampleNewTranscoder_connectToREST() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// REST service implementing testv1connect.LibraryService annotations.
 	svc := &libraryREST{}
 
-	handler, err := vanguard.NewHandler(
+	handler, err := vanguard.NewTranscoder(
 		[]*vanguard.Service{vanguard.NewService(testv1connect.LibraryServiceName, svc)},
 		// This tells vanguard that it must transform requests to REST.
 		vanguard.WithTargetProtocols(vanguard.ProtocolREST),

@@ -50,7 +50,7 @@ import (
 //			DiscardUnknown: true,
 //		},
 //	})
-func NewHandler(server *grpc.Server, opts ...vanguard.HandlerOption) (http.Handler, error) {
+func NewHandler(server *grpc.Server, opts ...vanguard.TranscoderOption) (http.Handler, error) {
 	codecs := make([]string, 1, 2)
 	codecs[0] = vanguard.CodecProto
 	if encoding.GetCodec(vanguard.CodecJSON) != nil {
@@ -61,14 +61,14 @@ func NewHandler(server *grpc.Server, opts ...vanguard.HandlerOption) (http.Handl
 	for svcName := range svcInfo {
 		services = append(services, vanguard.NewService(svcName, server))
 	}
-	allOptions := make([]vanguard.HandlerOption, 0, 2+len(opts))
+	allOptions := make([]vanguard.TranscoderOption, 0, 2+len(opts))
 	allOptions = append(
 		allOptions,
 		vanguard.WithTargetCodecs(codecs...),
 		vanguard.WithTargetProtocols(vanguard.ProtocolGRPC),
 	)
 	allOptions = append(allOptions, opts...)
-	return vanguard.NewHandler(services, allOptions...)
+	return vanguard.NewTranscoder(services, allOptions...)
 }
 
 // JSONCodec implements gRPC's [encoding.Codec] interface using the

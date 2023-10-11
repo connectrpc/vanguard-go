@@ -92,7 +92,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		for i, svcName := range serviceNames {
 			services[i] = NewService(svcName, svcHandler, opts...)
 		}
-		handler, err := NewHandler(services)
+		handler, err := NewTranscoder(services)
 		require.NoError(t, err)
 		return testMux{name: name, handler: handler}
 	}

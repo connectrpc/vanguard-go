@@ -15,16 +15,13 @@
 package vanguard
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"net/http"
 	"strings"
-	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/api/annotations"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -45,7 +42,7 @@ const (
 	DefaultMaxGetURLBytes        = 8 * 1024
 )
 
-// NewHandler creates a new Vanguard handler for the given services, with the
+// NewTranscoder creates a new Vanguard handler for the given services, with the
 // configuration described by the given options. A non-nil error is returned if
 // there is an issue with this configuration.
 //
@@ -65,14 +62,14 @@ const (
 // If any options given implement ServiceOption, they are treated as default service
 // options and apply to all configured services, unless overridden by a particular
 // service.
-func NewHandler(services []*Service, opts ...HandlerOption) (*Handler, error) {
+func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, error) {
 	for _, svc := range services {
 		if svc.err != nil {
 			return nil, svc.err
 		}
 	}
 
-	handlerOpts := handlerOptions{
+	transcoderOpts := transcoderOptions{
 		codecs: codecMap{
 			CodecProto: DefaultProtoCodec,
 			CodecJSON: func(res TypeResolver) Codec {
@@ -93,43 +90,42 @@ func NewHandler(services []*Service, opts ...HandlerOption) (*Handler, error) {
 		},
 	}
 	for _, opt := range opts {
-		opt.applyToHandler(&handlerOpts)
+		opt.applyToTranscoder(&transcoderOpts)
 	}
 
-	handler := &Handler{
-		codecs:         handlerOpts.codecs,
-		compressors:    handlerOpts.compressors,
-		unknownHandler: handlerOpts.unknownHandler,
-		defaultHooks:   handlerOpts.defaultServiceOptions.hooks,
+	transcoder := &Transcoder{
+		codecs:         transcoderOpts.codecs,
+		compressors:    transcoderOpts.compressors,
+		unknownHandler: transcoderOpts.unknownHandler,
 		methods:        map[string]*methodConfig{},
 	}
 	for _, svc := range services {
-		if err := registerService(svc, handler, handlerOpts.defaultServiceOptions); err != nil {
+		if err := registerService(svc, transcoder, transcoderOpts.defaultServiceOptions); err != nil {
 			return nil, err
 		}
 	}
-	if err := registerRules(handlerOpts.rules, handler); err != nil {
+	if err := registerRules(transcoderOpts.rules, transcoder); err != nil {
 		return nil, err
 	}
-	return handler, nil
+	return transcoder, nil
 }
 
-// HandlerOption is an option used to configure a Vanguard handler. See NewHandler.
-type HandlerOption interface {
-	applyToHandler(*handlerOptions)
+// TranscoderOption is an option used to configure a Transcoder. See NewTranscoder.
+type TranscoderOption interface {
+	applyToTranscoder(*transcoderOptions)
 }
 
 // WithRules returns an option that adds HTTP transcoding configuration to the set of
 // configured services. The given rules must have a selector defined, and the selector
-// must match at least one configured method. Otherwise, NewHandler will report a
+// must match at least one configured method. Otherwise, NewTranscoder will report a
 // configuration error.
-func WithRules(rules ...*annotations.HttpRule) HandlerOption {
-	return handlerOptionFunc(func(opts *handlerOptions) {
+func WithRules(rules ...*annotations.HttpRule) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
 		opts.rules = append(opts.rules, rules...)
 	})
 }
 
-// WithCodec returns an option that instructs the Vanguard handler to use the given
+// WithCodec returns an option that instructs the transcoder to use the given
 // function for instantiating codec implementations. The function is immediately
 // invoked in order to determine the name of the codec. The name reported by codecs
 // created with the function should all return the same name. (Otherwise, behavior
@@ -138,9 +134,9 @@ func WithRules(rules ...*annotations.HttpRule) HandlerOption {
 // By default, "proto" and "json" codecs are supported using default options. This
 // option can be used to support additional codecs or to override the default
 // implementations (such as to change serialization or de-serialization options).
-func WithCodec(newCodec func(TypeResolver) Codec) HandlerOption {
+func WithCodec(newCodec func(TypeResolver) Codec) TranscoderOption {
 	codecName := newCodec(protoregistry.GlobalTypes).Name()
-	return handlerOptionFunc(func(opts *handlerOptions) {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
 		if opts.codecs == nil {
 			opts.codecs = codecMap{}
 		}
@@ -148,15 +144,15 @@ func WithCodec(newCodec func(TypeResolver) Codec) HandlerOption {
 	})
 }
 
-// WithCompression returns an option that instructs the Vanguard handler to use the
-// given functions to instantiate compressors and decompressors for the given compression
+// WithCompression returns an option that instructs the transcoder to use the given
+// functions to instantiate compressors and decompressors for the given compression
 // algorithm name.
 //
 // By default, "gzip" compression is supported using default options. This option can be
 // used to support additional compression algorithms or to override the default "gzip"
 // implementation (such as to change the compression level).
-func WithCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) HandlerOption {
-	return handlerOptionFunc(func(opts *handlerOptions) {
+func WithCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
 		if opts.codecs == nil {
 			opts.compressors = compressionMap{}
 		}
@@ -164,11 +160,11 @@ func WithCompression(name string, newCompressor func() connect.Compressor, newDe
 	})
 }
 
-// WithUnknownHandler returns an option that instructs the Vanguard handler to delegate
-// to the given handler when a request arrives for an unknown endpoint. If no such option
+// WithUnknownHandler returns an option that instructs the transcoder to delegate to
+// the given handler when a request arrives for an unknown endpoint. If no such option
 // is used, the Vanguard handler will reply with a simple "404 Not Found" error.
-func WithUnknownHandler(unknownHandler http.Handler) HandlerOption {
-	return handlerOptionFunc(func(opts *handlerOptions) {
+func WithUnknownHandler(unknownHandler http.Handler) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
 		opts.unknownHandler = unknownHandler
 	})
 }
@@ -184,15 +180,15 @@ type Service struct {
 // NewService creates a new service definition for the given service path and handler.
 // The service path must be the service's fully-qualified name, with an optional leading
 // and trailing slash. This means you can provide generated constants for service names
-// or you can provide the path returned by a New*Handler function generated by the
+// or you can provide the path returned by a New*Transcoder function generated by the
 // [Protobuf plugin for Connect Go]. In fact, if you do not need to specify any
-// service-specific options, you can wrap the call to New*Handler with NewService
+// service-specific options, you can wrap the call to New*Transcoder with NewService
 // like so:
 //
 //	vanguard.NewService(elizav1connect.NewElizaServiceHandler(elizaImpl))
 //
 // If the given service path does not reflect a known service (one whose schema is
-// registered with the Protobuf runtime, usually from generated code), NewHandler
+// registered with the Protobuf runtime, usually from generated code), NewTranscoder
 // will return an error. For these cases, where the corresponding service schema may
 // be dynamically retrieved, use NewServiceWithSchema instead.
 //
@@ -224,25 +220,25 @@ func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Ha
 // ServiceOption is an option for configuring how the middleware will handle
 // requests to a particular RPC service. See NewService and NewServiceWithSchema.
 //
-// A ServiceOption may also be passed to NewHandler, as a HandlerOption. When
+// A ServiceOption may also be passed to NewTranscoder, as a TranscoderOption. When
 // used this way, the option represents a default service option that will apply
 // to all services. Such default options may be overridden for a particular
 // service via an option passed to NewService or NewServiceWithSchema. Note that
-// any ServiceOption passed directly to NewHandler is considered a default,
+// any ServiceOption passed directly to NewTranscoder is considered a default,
 // regardless of the order. In other words, when it is passed as an option after
 // a WithServices option, it still applies as a default to those prior services.
 type ServiceOption interface {
 	applyToService(*serviceOptions)
-	applyToHandler(*handlerOptions)
+	applyToTranscoder(*transcoderOptions)
 }
 
-var _ HandlerOption = ServiceOption(nil)
+var _ TranscoderOption = ServiceOption(nil)
 
 // WithTargetProtocols returns a service option indicating that the service handler
 // supports protocols. By default, the handler is assumed to support all but the
 // REST protocol, which is true if the handler is a Connect handler (created
 // using generated code from the protoc-gen-connect-go plugin or an explicit
-// call to one of the New*Handler functions in the "connectrpc.com/connect"
+// call to one of the New*Transcoder functions in the "connectrpc.com/connect"
 // package).
 func WithTargetProtocols(protocols ...Protocol) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
@@ -323,28 +319,7 @@ func WithMaxGetURLBytes(limit uint32) ServiceOption {
 	})
 }
 
-// WithHooks sets the given callbacks for hooking into the RPC flow.
-// This overrides any callback defined on the Mux.
-//
-// For invalid requests (where Operation.IsValid returns false), only
-// a single hook (Hooks.OnClientRequestHeaders) is invoked and nothing
-// further (not even Hooks.OnOperationFail). If the operation is not
-// valid because the intended endpoint cannot be determined or is not
-// known, a per-service option cannot be applied. So in this case, only
-// the Hooks configured as a default service option (where WithHooks was
-// passed directly to NewHandler) will be used.
-//
-// Otherwise, for valid operations, the Hooks.OnClientRequestHeaders and
-// a completion hook (either Hooks.OnOperationFinish or Hooks.OnOperationFail)
-// will always be invoked, even when a hook aborts the operation with an
-// error.
-func WithHooks(hooks Hooks) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.hooks = &hooks
-	})
-}
-
-type handlerOptions struct {
+type transcoderOptions struct {
 	defaultServiceOptions serviceOptions
 	rules                 []*annotations.HttpRule
 	unknownHandler        http.Handler
@@ -352,7 +327,7 @@ type handlerOptions struct {
 	compressors           compressionMap
 }
 
-func registerService(svc *Service, h *Handler, svcOpts serviceOptions) error {
+func registerService(svc *Service, transcoder *Transcoder, svcOpts serviceOptions) error {
 	for _, opt := range svc.opts {
 		opt.applyToService(&svcOpts)
 	}
@@ -370,14 +345,14 @@ func registerService(svc *Service, h *Handler, svcOpts serviceOptions) error {
 		return fmt.Errorf("service %s was configured with no target codecs", svc.schema.FullName())
 	}
 	for codecName := range svcOpts.codecNames {
-		if _, known := h.codecs[codecName]; !known {
+		if _, known := transcoder.codecs[codecName]; !known {
 			return fmt.Errorf("codec %s is not known; use WithCodec to configure known codecs", codecName)
 		}
 	}
 
 	// empty svcOpts.compressorNames is okay
 	for compressorName := range svcOpts.compressorNames {
-		if _, known := h.compressors[compressorName]; !known {
+		if _, known := transcoder.compressors[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use WithCompression to configure known algorithms", compressorName)
 		}
 	}
@@ -396,14 +371,14 @@ func registerService(svc *Service, h *Handler, svcOpts serviceOptions) error {
 	methods := svc.schema.Methods()
 	for i, length := 0, methods.Len(); i < length; i++ {
 		methodDesc := methods.Get(i)
-		if err := registerMethod(svc.handler, methodDesc, h, &svcOpts); err != nil {
+		if err := registerMethod(svc.handler, methodDesc, transcoder, &svcOpts); err != nil {
 			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
 		}
 	}
 	return nil
 }
 
-func registerRules(rules []*annotations.HttpRule, h *Handler) error {
+func registerRules(rules []*annotations.HttpRule, transcoder *Transcoder) error {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -423,7 +398,7 @@ func registerRules(rules []*annotations.HttpRule, h *Handler) error {
 				return fmt.Errorf("wildcard selector %q must be whole component", rule.GetSelector())
 			}
 		}
-		for _, methodConf := range h.methods {
+		for _, methodConf := range transcoder.methods {
 			methodName := string(methodConf.descriptor.FullName())
 			if !strings.HasPrefix(methodName, selector) {
 				continue
@@ -437,7 +412,7 @@ func registerRules(rules []*annotations.HttpRule, h *Handler) error {
 	}
 	for methodConf, rules := range methodRules {
 		for _, rule := range rules {
-			if err := addRule(rule, methodConf, h); err != nil {
+			if err := addRule(rule, methodConf, transcoder); err != nil {
 				// TODO: use the multi-error type errors.Join()
 				return err
 			}
@@ -446,21 +421,21 @@ func registerRules(rules []*annotations.HttpRule, h *Handler) error {
 	return nil
 }
 
-func registerMethod(rpcHandler http.Handler, methodDesc protoreflect.MethodDescriptor, h *Handler, opts *serviceOptions) error {
+func registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, transcoder *Transcoder, opts *serviceOptions) error {
 	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
-	if _, ok := h.methods[methodPath]; ok {
+	if _, ok := transcoder.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodConf := &methodConfig{
 		serviceOptions: opts,
 		descriptor:     methodDesc,
 		methodPath:     methodPath,
-		handler:        rpcHandler,
+		handler:        handler,
 	}
-	if h.methods == nil {
-		h.methods = make(map[string]*methodConfig, 1)
+	if transcoder.methods == nil {
+		transcoder.methods = make(map[string]*methodConfig, 1)
 	}
-	h.methods[methodPath] = methodConf
+	transcoder.methods[methodPath] = methodConf
 
 	switch {
 	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
@@ -474,16 +449,16 @@ func registerMethod(rpcHandler http.Handler, methodDesc protoreflect.MethodDescr
 	}
 
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		if err := addRule(httpRule, methodConf, h); err != nil {
+		if err := addRule(httpRule, methodConf, transcoder); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func addRule(httpRule *annotations.HttpRule, methodConf *methodConfig, h *Handler) error {
+func addRule(httpRule *annotations.HttpRule, methodConf *methodConfig, transcoder *Transcoder) error {
 	methodPath := methodConf.methodPath
-	firstTarget, err := h.restRoutes.addRoute(methodConf, httpRule)
+	firstTarget, err := transcoder.restRoutes.addRoute(methodConf, httpRule)
 	if err != nil {
 		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
 	}
@@ -492,162 +467,11 @@ func addRule(httpRule *annotations.HttpRule, methodConf *methodConfig, h *Handle
 		if len(rule.AdditionalBindings) > 0 {
 			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
 		}
-		if _, err := h.restRoutes.addRoute(methodConf, rule); err != nil {
+		if _, err := transcoder.restRoutes.addRoute(methodConf, rule); err != nil {
 			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 		}
 	}
 	return nil
-}
-
-// Operation represents an in-progress RPC operation. This is supplied to
-// hook callback methods.
-//
-// Operation is not thread-safe. These methods should only be invoked from
-// the goroutine that runs the Hooks callback method.
-type Operation interface {
-	// IsValid returns true if the operation is valid. If it returns
-	// false, then there was an error in the incoming request that
-	// prevents some of hte operation details from being ascertained.
-	//
-	// When this returns false, Method may return nil and ClientInfo
-	// and HandlerInfo may report invalid attributes (like unknown
-	// protocol or blank codec name).
-	IsValid() bool
-
-	// HTTPRequestLine provides access to properties of the client's
-	// HTTP request line. These are available, even if IsValid returns
-	// false.
-	HTTPRequestLine() (method, path, queryString, httpVersion string)
-
-	// Method returns the descriptor of the RPC method being invoked.
-	Method() protoreflect.MethodDescriptor
-	// Deadline returns the time at which this operation must complete,
-	// per a deadline sent by the client. It returns a zero time and false
-	// when the client did not include a deadline.
-	Deadline() (time.Time, bool)
-	// ClientInfo returns information about the client side of the operation.
-	// This includes the incoming protocol, codec, and compression.
-	ClientInfo() PeerInfo
-	// HandlerInfo returns information about the server handler side of the
-	// operation. These properties will vary from those returned by ClientInfo
-	// when the middleware is transcoding the protocol, re-encoding messages,
-	// or using a different compression algorithm.
-	HandlerInfo() PeerInfo
-
-	doNotImplement() // allows us to add methods to this interface in the future
-}
-
-// PeerInfo describes operation attributes for one of peers. Every operation has
-// two peers: the client that initiated the request, and the server handler that
-// will act on the request.
-//
-// PeerInfo is not thread-safe. These methods should only be invoked from the
-// goroutine that runs the Hooks callback method.
-type PeerInfo interface {
-	// Protocol indicates the protocol this peer uses.
-	Protocol() Protocol
-	// Codec indicates the name of the codec that this peer uses.
-	Codec() string
-	// RequestCompression indicates the name of the compression algorithm that
-	// this peer uses. If no compression is used, this returns the empty string.
-	RequestCompression() string
-	// ResponseCompression will not be known until after response headers have
-	// been received. If this method is invoked before then, it will return
-	// the empty string, even if compression ultimately is used in the response.
-	ResponseCompression() string
-
-	doNotImplement() // allows us to add methods to this interface in the future
-}
-
-// Hooks represents a set of observability/validation hooks that are invoked
-// as an RPC operation is executed.
-//
-// When any of them is non-nil, that function will be invoked when the relevant
-// occurs when processing an RPC.
-type Hooks struct {
-	// OnClientRequestHeaders is invoked immediately at the start of an
-	// operation, providing access to the request headers. If it returns
-	// an error, the operation is immediately aborted, and the server
-	// handler is never invoked.
-	//
-	// The headers can vary from the actual headers sent by the client as
-	// protocol-specific headers (like those indicating the protocol, the
-	// message encoding format, compression algorithm, and timeout) will
-	// have already been removed. The relevant information is instead
-	// available via attributes of the Operation.
-	//
-	// If Operation.IsValid returns false for the given operation, no
-	// subsequent hooks will be invoked, not even OnOperationFail.
-	// Any configured unknown handler may be invoked if the operation
-	// is invalid because the intended endpoint could not be determined
-	// or is unknown to the handler.
-	OnClientRequestHeaders func(context.Context, Operation, http.Header) error
-	// OnClientRequestMessage is invoked for each request message received
-	// from the client. For unary RPCs, this will always be exactly one per
-	// operation. For client and bidirectional streaming RPCs, this can be
-	// called zero or more times.
-	//
-	// If an error is returned, the operation is immediately aborted, and
-	// the message is not sent to the server. The client will observe the
-	// returned error (as translated to an RPC error), but the server will
-	// observe a cancelled error.
-	//
-	// The provided compressed flag and wireSize are the details of the
-	// message sent by the client. The wire size of the data sent to the
-	// server handler may differ if the middleware is transcoding the
-	// protocol, re-encoding messages to a different format, or applying
-	// a different compression algorithm.
-	//
-	// The reported wireSize is based on the data read from the request
-	// body. If the request was constructed from components of the URL
-	// path or the query string, those bytes are not reported, and the
-	// size could be reported as zero even if the request is not empty.
-	// If the client protocol uses envelopes to delimit messages, the
-	// envelope size is NOT included in the reported wireSize.
-	OnClientRequestMessage func(ctx context.Context, op Operation, req proto.Message, compressed bool, wireSize int) error
-	// OnServerResponseHeaders is invoked when response headers are received
-	// from the server.  If it returns an error, the operation is immediately
-	// aborted. The client will observe the returned error (as translated to
-	// an RPC error), but the server will observe a cancelled error.
-	OnServerResponseHeaders func(ctx context.Context, op Operation, statusCode int, headers http.Header) error
-	// OnServerResponseMessage is invoked for each response message received
-	// from the server. For unary RPCs, this will always be either zero (on
-	// failure) or one (on success) per operation. For server and
-	// bidirectional streaming RPCs, this can be called zero or more times.
-	//
-	// If an error is returned, the operation is immediately aborted, and the
-	// message is not sent to the client. The client and server will both
-	// observe the returned error (as translated to an RPC error for the
-	// client). The server will receive the error from the corresponding call
-	// to [http.ResponseWriter.Write]. Subsequent attempts to write to the
-	// response will observe a cancelled error.
-	//
-	// The provided compressed flag and wireSize are the details of the
-	// message sent by the server. The wire size of the data sent to the
-	// client may differ if the middleware is transcoding the protocol,
-	// re-encoding messages to a different format, or applying a different
-	// compression algorithm.
-	OnServerResponseMessage func(ctx context.Context, op Operation, rsp proto.Message, compressed bool, wireSize int) error
-	// OnOperationFinish is called if and when the operation completes
-	// successfully. If the operation does not complete successfully, then
-	// OnOperationFail will be called instead.
-	//
-	// This is the only callback that does not return an error. At this point
-	// the RPC has completed successfully, so it is too late to inject an error.
-	OnOperationFinish func(ctx context.Context, op Operation, trailers http.Header)
-	// OnOperationFail is called when the operation completes unsuccessfully.
-	// If a non-nil error is returned, it will replace the given err when the
-	// error is sent to the client.
-	OnOperationFail func(ctx context.Context, op Operation, trailers http.Header, err error) error
-}
-
-func (h Hooks) isEmpty() bool {
-	return h.OnClientRequestHeaders == nil &&
-		h.OnClientRequestMessage == nil &&
-		h.OnServerResponseHeaders == nil &&
-		h.OnServerResponseMessage == nil &&
-		h.OnOperationFinish == nil &&
-		h.OnOperationFail == nil
 }
 
 // TypeResolver can resolve message and extension types and is used to instantiate
@@ -661,9 +485,9 @@ type TypeResolver interface {
 	protoregistry.ExtensionTypeResolver
 }
 
-type handlerOptionFunc func(*handlerOptions)
+type transcoderOptionFunc func(*transcoderOptions)
 
-func (f handlerOptionFunc) applyToHandler(opts *handlerOptions) {
+func (f transcoderOptionFunc) applyToTranscoder(opts *transcoderOptions) {
 	f(opts)
 }
 
@@ -673,7 +497,7 @@ func (f serviceOptionFunc) applyToService(opts *serviceOptions) {
 	f(opts)
 }
 
-func (f serviceOptionFunc) applyToHandler(opts *handlerOptions) {
+func (f serviceOptionFunc) applyToTranscoder(opts *transcoderOptions) {
 	f(&opts.defaultServiceOptions)
 }
 
@@ -684,7 +508,6 @@ type serviceOptions struct {
 	preferredCodec              string
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
-	hooks                       *Hooks
 }
 
 type methodConfig struct {

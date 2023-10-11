@@ -81,7 +81,7 @@ func main() {
 		// Wrap the proxy handler with Vanguard, so it can accept any kind of request and then
 		// transform it to a particular protocol (based on the port used to send the request)
 		// before sending to the pets-be server.
-		handler, err := vanguard.NewHandler(
+		handler, err := vanguard.NewTranscoder(
 			[]*vanguard.Service{vanguard.NewService(petstorev2connect.PetServiceName, proxy, opts...)},
 		)
 		if err != nil {

@@ -47,7 +47,7 @@ func main() {
 	}
 	// And wrap it with Vanguard.
 	service := vanguard.NewService(testv1connect.NewContentServiceHandler(serviceHandler))
-	handler, err := vanguard.NewHandler([]*vanguard.Service{service})
+	handler, err := vanguard.NewTranscoder([]*vanguard.Service{service})
 	if err != nil {
 		log.Fatal(err)
 	}
