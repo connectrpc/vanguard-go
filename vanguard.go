@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package vanguard is an RPC transcoder for Connect, gRPC, gRPC-Web and REST
+// protocols.
 package vanguard
 
 import (

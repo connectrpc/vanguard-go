@@ -115,18 +115,24 @@ type JSONCodec struct {
 var _ StableCodec = JSONCodec{}
 var _ RESTCodec = JSONCodec{}
 
+// Name returns the name of this codec. It always returns "json".
 func (j JSONCodec) Name() string {
 	return CodecJSON
 }
 
+// IsBinary returns false, indicating that JSON is a text format.
 func (j JSONCodec) IsBinary() bool {
 	return false
 }
 
+// Marshal serializes the given value to bytes. If the given value does
+// not implement proto.Message, an error is returned.
 func (j JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return j.MarshalOptions.MarshalAppend(base, msg)
 }
 
+// MarshalAppendStable is the same as MarshalAppend except that the
+// bytes produced must be deterministic and stable.
 func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	data, err := j.MarshalOptions.MarshalAppend(base, msg)
 	if err != nil {
@@ -135,6 +141,8 @@ func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, 
 	return jsonStabilize(data)
 }
 
+// MarshalAppendField marshals just the given field of the given message to
+// bytes, and appends it to the given base byte slice.
 func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
@@ -193,6 +201,8 @@ func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field prot
 	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
+// UnmarshalField unmarshals the given data into the given field of the given
+// message.
 func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
@@ -213,6 +223,8 @@ func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoref
 	return j.Unmarshal(buf.Bytes(), msg)
 }
 
+// Unmarshal de-serializes the given bytes into the given value. If the
+// given value does not implement proto.Message, an error is returned.
 func (j JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return j.UnmarshalOptions.Unmarshal(bytes, msg)
 }
@@ -235,24 +247,32 @@ type protoCodec struct {
 
 var _ StableCodec = protoCodec{}
 
+// Name returns the name of this codec. It always returns "proto".
 func (p protoCodec) Name() string {
 	return CodecProto
 }
 
+// IsBinary returns true, indicating that Protobuf is a binary format.
 func (p protoCodec) IsBinary() bool {
 	return true
 }
 
+// Marshal serializes the given value to bytes. If the given value does
+// not implement proto.Message, an error is returned.
 func (p protoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(base, msg)
 }
 
+// MarshalAppendStable is the same as MarshalAppend except that the
+// bytes produced must be deterministic and stable.
 func (p protoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	opts := p.MarshalOptions
 	opts.Deterministic = true
 	return opts.MarshalAppend(base, msg)
 }
 
+// Unmarshal de-serializes the given bytes into the given value. If the
+// given value does not implement proto.Message, an error is returned.
 func (p protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return p.UnmarshalOptions.Unmarshal(bytes, msg)
 }
