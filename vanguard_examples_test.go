@@ -44,9 +44,9 @@ func ExampleNewTranscoder_restToConnect() {
 	// RPC service implementing testv1connect.LibraryService annotations.
 	svc := &libraryRPC{}
 
-	handler, err := vanguard.NewTranscoder([]*vanguard.Service{
-		vanguard.NewService(testv1connect.NewLibraryServiceHandler(svc)),
-	})
+	handler, err := vanguard.NewTranscoder(
+		vanguard.WithService(testv1connect.NewLibraryServiceHandler(svc)),
+	)
 	if err != nil {
 		log.Println("error:", err)
 		return
@@ -103,9 +103,11 @@ func ExampleNewTranscoder_connectToREST() {
 	svc := &libraryREST{}
 
 	handler, err := vanguard.NewTranscoder(
-		[]*vanguard.Service{vanguard.NewService(testv1connect.LibraryServiceName, svc)},
+		vanguard.WithService(testv1connect.LibraryServiceName, svc),
 		// This tells vanguard that it must transform requests to REST.
-		vanguard.WithTargetProtocols(vanguard.ProtocolREST),
+		vanguard.WithDefaultServiceOptions(
+			vanguard.WithTargetProtocols(vanguard.ProtocolREST),
+		),
 	)
 	if err != nil {
 		log.Println("error:", err)

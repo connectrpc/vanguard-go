@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package vanguardgrpc is a vanguard option that wraps a gRPC server.
 package vanguardgrpc
 
 import (
 	"fmt"
-	"net/http"
 
 	"connectrpc.com/vanguard"
 	"google.golang.org/grpc"
@@ -25,12 +25,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// NewTranscoder returns a Vanguard handler that wraps the given gRPC server. All
-// services registered with the server will be supported by the returned handler.
-// The Vanguard handler will be configured to transcode incoming requests to the
-// gRPC protocol.
+// WithGRPCServer returns a vanguard.TranscoderOption that wraps the given gRPC
+// server. All services registered to the server will be supported by the
+// returned option. Each service will be configured to transcode incoming requests
+// to the gRPC protocol.
 //
-// The returned handler will allow data in the "proto" codec through, but must
+// The returned option will allow data in the "proto" codec through, but must
 // transcode other codecs to "proto".  If a gRPC Codec has been registered with the
 // name "json" (via [encoding.RegisterCodec]) then the Vanguard handler will pass
 // JSON requests through unchanged as well.
@@ -50,25 +50,23 @@ import (
 //			DiscardUnknown: true,
 //		},
 //	})
-func NewTranscoder(server *grpc.Server, opts ...vanguard.TranscoderOption) (http.Handler, error) {
+func WithGRPCServer(server *grpc.Server, serviceOptions ...vanguard.ServiceOption) vanguard.TranscoderOption {
 	codecs := make([]string, 1, 2)
 	codecs[0] = vanguard.CodecProto
 	if encoding.GetCodec(vanguard.CodecJSON) != nil {
 		codecs = append(codecs, vanguard.CodecJSON)
 	}
-	svcInfo := server.GetServiceInfo()
-	services := make([]*vanguard.Service, 0, len(svcInfo))
-	for svcName := range svcInfo {
-		services = append(services, vanguard.NewService(svcName, server))
-	}
-	allOptions := make([]vanguard.TranscoderOption, 0, 2+len(opts))
-	allOptions = append(
-		allOptions,
-		vanguard.WithTargetCodecs(codecs...),
+	svcOpts := append([]vanguard.ServiceOption{
 		vanguard.WithTargetProtocols(vanguard.ProtocolGRPC),
-	)
-	allOptions = append(allOptions, opts...)
-	return vanguard.NewTranscoder(services, allOptions...)
+		vanguard.WithTargetCodecs(codecs...),
+	}, serviceOptions...)
+
+	svcInfo := server.GetServiceInfo()
+	opts := make([]vanguard.TranscoderOption, 0, len(svcInfo))
+	for svcName := range svcInfo {
+		opts = append(opts, vanguard.WithService(svcName, server, svcOpts...))
+	}
+	return vanguard.WithTranscoderOptions(opts...)
 }
 
 // JSONCodec implements gRPC's [encoding.Codec] interface using the

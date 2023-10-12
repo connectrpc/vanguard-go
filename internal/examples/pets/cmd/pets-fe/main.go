@@ -82,7 +82,7 @@ func main() {
 		// transform it to a particular protocol (based on the port used to send the request)
 		// before sending to the pets-be server.
 		handler, err := vanguard.NewTranscoder(
-			[]*vanguard.Service{vanguard.NewService(petstorev2connect.PetServiceName, proxy, opts...)},
+			vanguard.WithService(petstorev2connect.PetServiceName, proxy, opts...),
 		)
 		if err != nil {
 			log.Fatal(err)

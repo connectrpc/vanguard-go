@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/vanguard"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"connectrpc.com/vanguard/vanguardgrpc"
@@ -47,7 +48,9 @@ func ExampleNewTranscoder_connectToGRPC() {
 	testv1.RegisterLibraryServiceServer(grpcServer, svc)
 
 	// Create a vanguard handler for all services registered in grpcServer
-	handler, err := vanguardgrpc.NewTranscoder(grpcServer)
+	handler, err := vanguard.NewTranscoder(
+		vanguardgrpc.WithGRPCServer(grpcServer),
+	)
 	if err != nil {
 		log.Println("error:", err)
 		return

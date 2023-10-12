@@ -70,14 +70,14 @@ func TestMux_RPCxREST(t *testing.T) {
 		}
 		// We use an "always-stable" codec for determinism in tests.
 		codec := &stableJSONCodec{}
-		opts := []ServiceOption{
+		svcOpts := []ServiceOption{
 			WithTargetProtocols(ProtocolREST),
 			WithTargetCodecs(codec.Name()),
 		}
 		if compression == CompressionIdentity {
-			opts = append(opts, WithNoTargetCompression())
+			svcOpts = append(svcOpts, WithNoTargetCompression())
 		} else {
-			opts = append(opts, WithTargetCompression(compression))
+			svcOpts = append(svcOpts, WithTargetCompression(compression))
 		}
 		svcHandler := interceptor.restUnaryHandler(codec, comp)
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
@@ -85,11 +85,12 @@ func TestMux_RPCxREST(t *testing.T) {
 		newCodec := func(res TypeResolver) Codec {
 			return &stableJSONCodec{JSONCodec: *DefaultJSONCodec(res)}
 		}
-		services := make([]*Service, len(serviceNames))
+		opts := make([]TranscoderOption, len(serviceNames)+1)
 		for i, svcName := range serviceNames {
-			services[i] = NewService(svcName, svcHandler, opts...)
+			opts[i] = WithService(svcName, svcHandler, svcOpts...)
 		}
-		handler, err := NewTranscoder(services, WithCodec(newCodec))
+		opts[len(opts)-1] = WithCodec(newCodec)
+		handler, err := NewTranscoder(opts...)
 		require.NoError(t, err)
 		server := httptest.NewUnstartedServer(handler)
 		server.EnableHTTP2 = true

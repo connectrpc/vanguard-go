@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package vanguard is an RPC transcoder for Connect, gRPC, gRPC-Web and REST
+// protocols.
 package vanguard
 
 import (
@@ -42,33 +44,17 @@ const (
 	DefaultMaxGetURLBytes        = 8 * 1024
 )
 
-// NewTranscoder creates a new Vanguard handler for the given services, with the
-// configuration described by the given options. A non-nil error is returned if
-// there is an issue with this configuration.
+// NewTranscoder creates a new Transcoder configured with the given options.
+// A non-nil error is returned if there is an issue with this configuration.
 //
-// The returned handler does the routing and dispatch to the RPC handlers
-// associated with each provided service. Routing supports more than just the
-// service path provided to NewService since HTTP transcoding annotations are
-// used to also support REST-ful URI paths for each method.
-//
-// The returned handler also acts like a middleware, transparently "upgrading"
+// The returned transcoder also acts like a middleware, transparently "upgrading"
 // the RPC handlers to support incoming request protocols they wouldn't otherwise
 // support. This can be used to upgrade Connect handlers to support REST requests
 // (based on HTTP transcoding configuration) or gRPC handlers to support Connect,
 // gRPC-Web, or REST. This can even be used with a reverse proxy handler, to
 // translate all incoming requests to a single protocol that another backend server
 // supports.
-//
-// If any options given implement ServiceOption, they are treated as default service
-// options and apply to all configured services, unless overridden by a particular
-// service.
-func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, error) {
-	for _, svc := range services {
-		if svc.err != nil {
-			return nil, svc.err
-		}
-	}
-
+func NewTranscoder(opts ...TranscoderOption) (*Transcoder, error) {
 	transcoderOpts := transcoderOptions{
 		codecs: codecMap{
 			CodecProto: DefaultProtoCodec,
@@ -90,21 +76,22 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		},
 	}
 	for _, opt := range opts {
-		opt.applyToTranscoder(&transcoderOpts)
+		if err := opt.applyToTranscoder(&transcoderOpts); err != nil {
+			return nil, err
+		}
 	}
-
 	transcoder := &Transcoder{
 		codecs:         transcoderOpts.codecs,
 		compressors:    transcoderOpts.compressors,
 		unknownHandler: transcoderOpts.unknownHandler,
 		methods:        map[string]*methodConfig{},
 	}
-	for _, svc := range services {
-		if err := registerService(svc, transcoder, transcoderOpts.defaultServiceOptions); err != nil {
+	for _, svc := range transcoderOpts.services {
+		if err := transcoder.registerService(svc, transcoderOpts.defaultServiceOptions); err != nil {
 			return nil, err
 		}
 	}
-	if err := registerRules(transcoderOpts.rules, transcoder); err != nil {
+	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
 		return nil, err
 	}
 	return transcoder, nil
@@ -112,7 +99,7 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 
 // TranscoderOption is an option used to configure a Transcoder. See NewTranscoder.
 type TranscoderOption interface {
-	applyToTranscoder(*transcoderOptions)
+	applyToTranscoder(*transcoderOptions) error
 }
 
 // WithRules returns an option that adds HTTP transcoding configuration to the set of
@@ -120,8 +107,9 @@ type TranscoderOption interface {
 // must match at least one configured method. Otherwise, NewTranscoder will report a
 // configuration error.
 func WithRules(rules ...*annotations.HttpRule) TranscoderOption {
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
+	return transcoderOptionFunc(func(opts *transcoderOptions) error {
 		opts.rules = append(opts.rules, rules...)
+		return nil
 	})
 }
 
@@ -136,11 +124,12 @@ func WithRules(rules ...*annotations.HttpRule) TranscoderOption {
 // implementations (such as to change serialization or de-serialization options).
 func WithCodec(newCodec func(TypeResolver) Codec) TranscoderOption {
 	codecName := newCodec(protoregistry.GlobalTypes).Name()
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
+	return transcoderOptionFunc(func(opts *transcoderOptions) error {
 		if opts.codecs == nil {
 			opts.codecs = codecMap{}
 		}
 		opts.codecs[codecName] = newCodec
+		return nil
 	})
 }
 
@@ -152,11 +141,12 @@ func WithCodec(newCodec func(TypeResolver) Codec) TranscoderOption {
 // used to support additional compression algorithms or to override the default "gzip"
 // implementation (such as to change the compression level).
 func WithCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) TranscoderOption {
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
+	return transcoderOptionFunc(func(opts *transcoderOptions) error {
 		if opts.codecs == nil {
 			opts.compressors = compressionMap{}
 		}
 		opts.compressors[name] = newCompressionPool(name, newCompressor, newDecompressor)
+		return nil
 	})
 }
 
@@ -164,75 +154,94 @@ func WithCompression(name string, newCompressor func() connect.Compressor, newDe
 // the given handler when a request arrives for an unknown endpoint. If no such option
 // is used, the Vanguard handler will reply with a simple "404 Not Found" error.
 func WithUnknownHandler(unknownHandler http.Handler) TranscoderOption {
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
+	return transcoderOptionFunc(func(opts *transcoderOptions) error {
 		opts.unknownHandler = unknownHandler
+		return nil
 	})
 }
 
-// Service represents the configuration for a single RPC service.
-type Service struct {
-	err     error
+// WithTranscoderOptions returns an option that applies the given options to the
+// transcoder. This is a convenience option that allows the use of multiple options
+// as a single option.
+func WithTranscoderOptions(opts ...TranscoderOption) TranscoderOption {
+	return transcoderOptionFunc(func(transcoderOpts *transcoderOptions) error {
+		for _, opt := range opts {
+			if err := opt.applyToTranscoder(transcoderOpts); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// WithDefaultServiceOptions applies the given service options to all services
+// as defaults. Each default options may be overridden for a particular
+// service via an option passed to WithService or WithServiceFromSchema.
+func WithDefaultServiceOptions(opts ...ServiceOption) TranscoderOption {
+	return transcoderOptionFunc(func(transcoderOpts *transcoderOptions) error {
+		for _, opt := range opts {
+			opt.applyToService(&transcoderOpts.defaultServiceOptions)
+		}
+		return nil
+	})
+}
+
+// service represents the configuration for a single RPC service.
+type service struct {
 	schema  protoreflect.ServiceDescriptor
 	handler http.Handler
 	opts    []ServiceOption
 }
 
-// NewService creates a new service definition for the given service path and handler.
+// WithService creates a new service definition for the given service path and handler.
 // The service path must be the service's fully-qualified name, with an optional leading
 // and trailing slash. This means you can provide generated constants for service names
 // or you can provide the path returned by a New*Transcoder function generated by the
 // [Protobuf plugin for Connect Go]. In fact, if you do not need to specify any
-// service-specific options, you can wrap the call to New*Transcoder with NewService
-// like so:
+// service-specific options, you can wrap the call to NewTranscoder like so:
 //
-//	vanguard.NewService(elizav1connect.NewElizaServiceHandler(elizaImpl))
+//	vanguard.WithService(elizav1connect.NewElizaServiceHandler(elizaImpl))
 //
 // If the given service path does not reflect a known service (one whose schema is
 // registered with the Protobuf runtime, usually from generated code), NewTranscoder
 // will return an error. For these cases, where the corresponding service schema may
-// be dynamically retrieved, use NewServiceWithSchema instead.
+// be dynamically retrieved, use WithServiceFromSchema instead.
 //
 // [Protobuf plugin for Connect Go]: https://pkg.go.dev/connectrpc.com/connect@v1.11.1/cmd/protoc-gen-connect-go
-func NewService(servicePath string, handler http.Handler, opts ...ServiceOption) *Service {
+func WithService(servicePath string, handler http.Handler, opts ...ServiceOption) TranscoderOption {
 	serviceName := strings.TrimSuffix(strings.TrimPrefix(servicePath, "/"), "/")
 	desc, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(serviceName))
 	if err != nil {
-		return &Service{err: fmt.Errorf("could not resolve schema for service at path %q: %w", servicePath, err)}
+		return transcoderOptionFunc(func(opts *transcoderOptions) error {
+			return fmt.Errorf("could not resolve schema for service at path %q: %w", servicePath, err)
+		})
 	}
-	svcDesc, ok := desc.(protoreflect.ServiceDescriptor)
+	schema, ok := desc.(protoreflect.ServiceDescriptor)
 	if !ok {
-		return &Service{
-			err: fmt.Errorf("could not resolve schema for service at path %q: resolved descriptor is %s, not a service", servicePath, descKind(desc)),
-		}
+		return transcoderOptionFunc(func(opts *transcoderOptions) error {
+			return fmt.Errorf("could not resolve schema for service at path %q: resolved descriptor is %s, not a service", servicePath, descKind(desc))
+		})
 	}
-	return NewServiceWithSchema(svcDesc, handler, opts...)
+	return WithServiceFromSchema(schema, handler, opts...)
 }
 
-// NewServiceWithSchema creates a new service using the given schema and handler.
-func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) *Service {
-	return &Service{
-		schema:  schema,
-		handler: handler,
-		opts:    opts,
-	}
+// WithServiceFromSchema creates a new service using the given schema and handler.
+func WithServiceFromSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) TranscoderOption {
+	return transcoderOptionFunc(func(transcoderOpts *transcoderOptions) error {
+		transcoderOpts.services = append(transcoderOpts.services, service{
+			schema:  schema,
+			handler: handler,
+			opts:    opts,
+		})
+		return nil
+	})
 }
 
 // ServiceOption is an option for configuring how the middleware will handle
-// requests to a particular RPC service. See NewService and NewServiceWithSchema.
-//
-// A ServiceOption may also be passed to NewTranscoder, as a TranscoderOption. When
-// used this way, the option represents a default service option that will apply
-// to all services. Such default options may be overridden for a particular
-// service via an option passed to NewService or NewServiceWithSchema. Note that
-// any ServiceOption passed directly to NewTranscoder is considered a default,
-// regardless of the order. In other words, when it is passed as an option after
-// a WithServices option, it still applies as a default to those prior services.
+// requests to a particular RPC service. See WithService and WithServiceFromSchema.
 type ServiceOption interface {
 	applyToService(*serviceOptions)
-	applyToTranscoder(*transcoderOptions)
 }
-
-var _ TranscoderOption = ServiceOption(nil)
 
 // WithTargetProtocols returns a service option indicating that the service handler
 // supports protocols. By default, the handler is assumed to support all but the
@@ -325,9 +334,10 @@ type transcoderOptions struct {
 	unknownHandler        http.Handler
 	codecs                codecMap
 	compressors           compressionMap
+	services              []service
 }
 
-func registerService(svc *Service, transcoder *Transcoder, svcOpts serviceOptions) error {
+func (t *Transcoder) registerService(svc service, svcOpts serviceOptions) error {
 	for _, opt := range svc.opts {
 		opt.applyToService(&svcOpts)
 	}
@@ -345,14 +355,14 @@ func registerService(svc *Service, transcoder *Transcoder, svcOpts serviceOption
 		return fmt.Errorf("service %s was configured with no target codecs", svc.schema.FullName())
 	}
 	for codecName := range svcOpts.codecNames {
-		if _, known := transcoder.codecs[codecName]; !known {
+		if _, known := t.codecs[codecName]; !known {
 			return fmt.Errorf("codec %s is not known; use WithCodec to configure known codecs", codecName)
 		}
 	}
 
 	// empty svcOpts.compressorNames is okay
 	for compressorName := range svcOpts.compressorNames {
-		if _, known := transcoder.compressors[compressorName]; !known {
+		if _, known := t.compressors[compressorName]; !known {
 			return fmt.Errorf("compression algorithm %s is not known; use WithCompression to configure known algorithms", compressorName)
 		}
 	}
@@ -371,14 +381,14 @@ func registerService(svc *Service, transcoder *Transcoder, svcOpts serviceOption
 	methods := svc.schema.Methods()
 	for i, length := 0, methods.Len(); i < length; i++ {
 		methodDesc := methods.Get(i)
-		if err := registerMethod(svc.handler, methodDesc, transcoder, &svcOpts); err != nil {
+		if err := t.registerMethod(svc.handler, methodDesc, &svcOpts); err != nil {
 			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
 		}
 	}
 	return nil
 }
 
-func registerRules(rules []*annotations.HttpRule, transcoder *Transcoder) error {
+func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -398,7 +408,7 @@ func registerRules(rules []*annotations.HttpRule, transcoder *Transcoder) error 
 				return fmt.Errorf("wildcard selector %q must be whole component", rule.GetSelector())
 			}
 		}
-		for _, methodConf := range transcoder.methods {
+		for _, methodConf := range t.methods {
 			methodName := string(methodConf.descriptor.FullName())
 			if !strings.HasPrefix(methodName, selector) {
 				continue
@@ -412,7 +422,7 @@ func registerRules(rules []*annotations.HttpRule, transcoder *Transcoder) error 
 	}
 	for methodConf, rules := range methodRules {
 		for _, rule := range rules {
-			if err := addRule(rule, methodConf, transcoder); err != nil {
+			if err := t.addRule(rule, methodConf); err != nil {
 				// TODO: use the multi-error type errors.Join()
 				return err
 			}
@@ -421,9 +431,9 @@ func registerRules(rules []*annotations.HttpRule, transcoder *Transcoder) error 
 	return nil
 }
 
-func registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, transcoder *Transcoder, opts *serviceOptions) error {
+func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts *serviceOptions) error {
 	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
-	if _, ok := transcoder.methods[methodPath]; ok {
+	if _, ok := t.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	methodConf := &methodConfig{
@@ -432,10 +442,10 @@ func registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescript
 		methodPath:     methodPath,
 		handler:        handler,
 	}
-	if transcoder.methods == nil {
-		transcoder.methods = make(map[string]*methodConfig, 1)
+	if t.methods == nil {
+		t.methods = make(map[string]*methodConfig, 1)
 	}
-	transcoder.methods[methodPath] = methodConf
+	t.methods[methodPath] = methodConf
 
 	switch {
 	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
@@ -449,16 +459,16 @@ func registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescript
 	}
 
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		if err := addRule(httpRule, methodConf, transcoder); err != nil {
+		if err := t.addRule(httpRule, methodConf); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func addRule(httpRule *annotations.HttpRule, methodConf *methodConfig, transcoder *Transcoder) error {
+func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) error {
 	methodPath := methodConf.methodPath
-	firstTarget, err := transcoder.restRoutes.addRoute(methodConf, httpRule)
+	firstTarget, err := t.restRoutes.addRoute(methodConf, httpRule)
 	if err != nil {
 		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
 	}
@@ -467,7 +477,7 @@ func addRule(httpRule *annotations.HttpRule, methodConf *methodConfig, transcode
 		if len(rule.AdditionalBindings) > 0 {
 			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
 		}
-		if _, err := transcoder.restRoutes.addRoute(methodConf, rule); err != nil {
+		if _, err := t.restRoutes.addRoute(methodConf, rule); err != nil {
 			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 		}
 	}
@@ -485,20 +495,16 @@ type TypeResolver interface {
 	protoregistry.ExtensionTypeResolver
 }
 
-type transcoderOptionFunc func(*transcoderOptions)
+type transcoderOptionFunc func(*transcoderOptions) error
 
-func (f transcoderOptionFunc) applyToTranscoder(opts *transcoderOptions) {
-	f(opts)
+func (f transcoderOptionFunc) applyToTranscoder(opts *transcoderOptions) error {
+	return f(opts)
 }
 
 type serviceOptionFunc func(*serviceOptions)
 
 func (f serviceOptionFunc) applyToService(opts *serviceOptions) {
 	f(opts)
-}
-
-func (f serviceOptionFunc) applyToTranscoder(opts *transcoderOptions) {
-	f(&opts.defaultServiceOptions)
 }
 
 type serviceOptions struct {

@@ -46,8 +46,9 @@ func main() {
 		FS: os.DirFS(*directory),
 	}
 	// And wrap it with Vanguard.
-	service := vanguard.NewService(testv1connect.NewContentServiceHandler(serviceHandler))
-	handler, err := vanguard.NewTranscoder([]*vanguard.Service{service})
+	handler, err := vanguard.NewTranscoder(
+		vanguard.WithService(testv1connect.NewContentServiceHandler(serviceHandler)),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

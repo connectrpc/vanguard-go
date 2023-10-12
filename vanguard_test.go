@@ -45,12 +45,14 @@ func TestRuleSelector(t *testing.T) {
 	t.Parallel()
 
 	var interceptor testInterceptor
-	svc := NewService(testv1connect.NewLibraryServiceHandler(
-		testv1connect.UnimplementedLibraryServiceHandler{},
-		connect.WithInterceptors(&interceptor),
-	))
+	svc := WithService(
+		testv1connect.NewLibraryServiceHandler(
+			testv1connect.UnimplementedLibraryServiceHandler{},
+			connect.WithInterceptors(&interceptor),
+		),
+	)
 
-	_, err := NewTranscoder([]*Service{svc}, WithRules(&annotations.HttpRule{
+	_, err := NewTranscoder(svc, WithRules(&annotations.HttpRule{
 		Selector: "grpc.health.v1.Health.Check",
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/healthz",
@@ -58,7 +60,7 @@ func TestRuleSelector(t *testing.T) {
 	}))
 	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.Check\" does not match any methods")
 
-	_, err = NewTranscoder([]*Service{svc}, WithRules(&annotations.HttpRule{
+	_, err = NewTranscoder(svc, WithRules(&annotations.HttpRule{
 		Selector: "invalid.*.Get",
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/v1/*",
@@ -66,7 +68,7 @@ func TestRuleSelector(t *testing.T) {
 	}))
 	assert.ErrorContains(t, err, "wildcard selector \"invalid.*.Get\" must be at the end")
 
-	_, err = NewTranscoder([]*Service{svc}, WithRules(&annotations.HttpRule{
+	_, err = NewTranscoder(svc, WithRules(&annotations.HttpRule{
 		Selector: "grpc.health.v1.Health.*",
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/healthz",
@@ -74,7 +76,7 @@ func TestRuleSelector(t *testing.T) {
 	}))
 	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.*\" does not match any methods")
 
-	_, err = NewTranscoder([]*Service{svc}, WithRules(&annotations.HttpRule{
+	_, err = NewTranscoder(svc, WithRules(&annotations.HttpRule{
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/v1/*",
 		},
@@ -82,8 +84,7 @@ func TestRuleSelector(t *testing.T) {
 	assert.ErrorContains(t, err, "rule missing selector")
 
 	handler, err := NewTranscoder(
-		[]*Service{svc},
-		WithRules(&annotations.HttpRule{
+		svc, WithRules(&annotations.HttpRule{
 			Selector: "vanguard.test.v1.LibraryService.GetBook",
 			Pattern: &annotations.HttpRule_Get{
 				Get: "/v1/selector/{name=shelves/*/books/*}",
@@ -882,6 +883,8 @@ func runRPCTestCase[Client any](
 	if receivedErr == nil {
 		assert.NoError(t, err)
 	} else {
+		t.Log("expected error:", receivedErr)
+		t.Log("actual error:", err)
 		assert.Equal(t, receivedErr.Code(), connect.CodeOf(err))
 	}
 	// Also check the error observed by the server.

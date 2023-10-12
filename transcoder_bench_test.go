@@ -127,7 +127,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
 		handler, err := NewTranscoder(
-			[]*Service{NewService(
+			WithService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
 					"Grpc-Encoding": []string{"gzip"},
@@ -136,8 +136,10 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
-			)},
-			WithTargetProtocols(ProtocolGRPC),
+			),
+			WithDefaultServiceOptions(
+				WithTargetProtocols(ProtocolGRPC),
+			),
 		)
 		require.NoError(b, err)
 
@@ -170,7 +172,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
 		handler, err := NewTranscoder(
-			[]*Service{NewService(
+			WithService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
 					"Content-Type": []string{"application/grpc+proto"},
@@ -178,10 +180,12 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
-			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
-			WithNoTargetCompression(),
+			),
+			WithDefaultServiceOptions(
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+				WithNoTargetCompression(),
+			),
 		)
 		require.NoError(b, err)
 
@@ -217,15 +221,17 @@ func BenchmarkServeHTTP(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
 		handler, err := NewTranscoder(
-			[]*Service{NewService(
+			WithService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspMsgJSON, http.Header{
 					"Content-Type": []string{"application/json"},
 				}, nil),
-			)},
-			WithTargetProtocols(ProtocolREST),
-			WithTargetCodecs(CodecJSON),
-			WithNoTargetCompression(),
+			),
+			WithDefaultServiceOptions(
+				WithTargetProtocols(ProtocolREST),
+				WithTargetCodecs(CodecJSON),
+				WithNoTargetCompression(),
+			),
 		)
 		require.NoError(b, err)
 
@@ -258,7 +264,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
 		handler, err := NewTranscoder(
-			[]*Service{NewService(
+			WithService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
 					"Content-Type": []string{"application/grpc+proto"},
@@ -266,10 +272,12 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
-			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
-			WithNoTargetCompression(),
+			),
+			WithDefaultServiceOptions(
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+				WithNoTargetCompression(),
+			),
 		)
 		require.NoError(b, err)
 
@@ -303,7 +311,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
 		handler, err := NewTranscoder(
-			[]*Service{NewService(
+			WithService(
 				testv1connect.LibraryServiceName,
 				benchHandler(b, rspGRPCBody, http.Header{
 					"Content-Type":  []string{"application/grpc+proto"},
@@ -312,9 +320,11 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
-			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
+			),
+			WithDefaultServiceOptions(
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+			),
 		)
 		require.NoError(b, err)
 
@@ -351,7 +361,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 		rspGRPC := envelopePayload(0, marshalProto(&emptypb.Empty{}))
 
 		handler, err := NewTranscoder(
-			[]*Service{NewService(
+			WithService(
 				testv1connect.ContentServiceName,
 				benchHandler(b, rspGRPC, http.Header{
 					"Content-Type":  []string{"application/grpc+proto"},
@@ -360,9 +370,11 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
-			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
+			),
+			WithDefaultServiceOptions(
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+			),
 		)
 		require.NoError(b, err)
 

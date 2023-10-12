@@ -31,11 +31,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
-// all supported input protocols (Connect, gRPC, gRPC-Web, REST) into a protocol that the
-// service handlers support. It can do simple routing based on RPC method name, for simple
-// protocols like Connect, gRPC, and gRPC-Web; but it can also route based on REST-ful URI
-// paths configured with HTTP transcoding annotations.
+// Transcoder implements protocol conversion to and from all supported protocols,
+// encoding formats, and compression schemes. It can do simple routing based on
+// RPC method name, for simple protocols like Connect, gRPC, and gRPC-Web. It
+// also will route based on REST-ful URI paths configured with HTTP transcoding
+// annotations.
 type Transcoder struct {
 	bufferPool     bufferPool
 	codecs         codecMap

@@ -64,23 +64,23 @@ func TestMux_RPCxRPC(t *testing.T) {
 	))
 
 	makeServer := func(protocol Protocol, codec, compression string) testServer {
-		opts := []ServiceOption{
+		svcOpts := []ServiceOption{
 			WithTargetProtocols(protocol),
 			WithTargetCodecs(codec),
 		}
 		if compression == CompressionIdentity {
-			opts = append(opts, WithNoTargetCompression())
+			svcOpts = append(svcOpts, WithNoTargetCompression())
 		} else {
-			opts = append(opts, WithTargetCompression(compression))
+			svcOpts = append(svcOpts, WithTargetCompression(compression))
 		}
 		svcHandler := protocolAssertMiddleware(protocol, codec, compression, serveMux)
 		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
 
-		services := make([]*Service, len(serviceNames))
+		opts := make([]TranscoderOption, len(serviceNames))
 		for i, svcName := range serviceNames {
-			services[i] = NewService(svcName, svcHandler, opts...)
+			opts[i] = WithService(svcName, svcHandler, svcOpts...)
 		}
-		handler, err := NewTranscoder(services)
+		handler, err := NewTranscoder(opts...)
 		require.NoError(t, err)
 		server := httptest.NewUnstartedServer(handler)
 		server.EnableHTTP2 = true

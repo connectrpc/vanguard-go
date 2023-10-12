@@ -28,6 +28,7 @@ import (
 
 	"buf.build/gen/go/connectrpc/eliza/grpc/go/connectrpc/eliza/v1/elizav1grpc"
 	elizav1 "buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
+	"connectrpc.com/vanguard"
 	"connectrpc.com/vanguard/vanguardgrpc"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -42,7 +43,9 @@ func main() {
 	// Now wrap it with a Vanguard transcoder to upgrade it to
 	// also supporting Connect and gRPC-Web (and even REST,
 	// if the gRPC service schemas have HTTP annotations).
-	handler, err := vanguardgrpc.NewTranscoder(server)
+	handler, err := vanguard.NewTranscoder(
+		vanguardgrpc.WithGRPCServer(server),
+	)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

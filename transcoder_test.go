@@ -89,7 +89,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 	}{
 		{
 			name: "enveloping_reader",
-			expectation: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
+			expectation: func(t *testing.T, _ http.ResponseWriter, req *http.Request) {
 				t.Helper()
 				_, ok := req.Body.(*envelopingReader)
 				assert.True(t, ok, "request body should be *envelopingReader")
@@ -114,7 +114,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 		},
 		{
 			name: "enveloping_writer",
-			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+			expectation: func(t *testing.T, rsp http.ResponseWriter, _ *http.Request) {
 				t.Helper()
 				rw, ok := rsp.(*responseWriter)
 				require.True(t, ok, "response writer should be *responseWriter")
@@ -466,26 +466,28 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 	muxTestModes := []struct {
 		name          string
 		optsOnService bool
-		makeMux       func(*testRequest, []*Service) (http.Handler, error)
+		makeMux       func(*testRequest, ...TranscoderOption) (http.Handler, error)
 	}{
 		{
 			name:          "default_svc_opts",
 			optsOnService: false,
-			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
-				opts := make([]TranscoderOption, 0, len(req.svcOpts)+2)
-				for _, svcOpt := range req.svcOpts {
-					opts = append(opts, svcOpt)
-				}
-				opts = append(opts, WithMaxMessageBufferBytes(1024))
-				return NewTranscoder(svcs, opts...)
+			makeMux: func(req *testRequest, opts ...TranscoderOption) (http.Handler, error) {
+				svcOpts := append([]ServiceOption{
+					WithMaxMessageBufferBytes(1024),
+				}, req.svcOpts...)
+				opts = append(opts, WithDefaultServiceOptions(svcOpts...))
+				return NewTranscoder(opts...)
 			},
 		},
 		{
 			name:          "per_svc_options",
 			optsOnService: true,
-			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
+			makeMux: func(_ *testRequest, opts ...TranscoderOption) (http.Handler, error) {
 				// svcs already have options defined on them
-				return NewTranscoder(svcs, WithMaxMessageBufferBytes(1024))
+				opts = append(opts, WithDefaultServiceOptions(
+					WithMaxMessageBufferBytes(1024),
+				))
+				return NewTranscoder(opts...)
 			},
 		},
 	}
@@ -514,10 +516,10 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 							if mode.optsOnService {
 								svcOpts = testReq.svcOpts
 							}
-							handler, err := mode.makeMux(testReq, []*Service{
-								NewService(testv1connect.LibraryServiceName, rpcHandler, svcOpts...),
-								NewService(testv1connect.ContentServiceName, rpcHandler, svcOpts...),
-							})
+							handler, err := mode.makeMux(testReq,
+								WithService(testv1connect.LibraryServiceName, rpcHandler, svcOpts...),
+								WithService(testv1connect.ContentServiceName, rpcHandler, svcOpts...),
+							)
 							require.NoError(t, err)
 							server := httptest.NewUnstartedServer(handler)
 							server.EnableHTTP2 = true
@@ -564,22 +566,24 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	)
 
 	handlerWithDefaultSvcOpt, err := NewTranscoder(
-		[]*Service{NewService(testv1connect.LibraryServiceName, svcHandler)},
-		WithMaxGetURLBytes(512),
-		WithNoTargetCompression(),
+		WithService(testv1connect.LibraryServiceName, svcHandler),
+		WithDefaultServiceOptions(
+			WithMaxGetURLBytes(512),
+			WithNoTargetCompression(),
+		),
 	)
 	require.NoError(t, err)
 	serverWithDefaultSvcOpt := httptest.NewServer(handlerWithDefaultSvcOpt)
 	disableCompression(serverWithDefaultSvcOpt)
 	t.Cleanup(serverWithDefaultSvcOpt.Close)
 
-	handlerWithPerSvcOpt, err := NewTranscoder([]*Service{
-		NewService(
+	handlerWithPerSvcOpt, err := NewTranscoder(
+		WithService(
 			testv1connect.LibraryServiceName, svcHandler,
 			WithMaxGetURLBytes(512),
 			WithNoTargetCompression(),
 		),
-	})
+	)
 	require.NoError(t, err)
 	serverWithPerSvcOpt := httptest.NewServer(handlerWithPerSvcOpt)
 	disableCompression(serverWithPerSvcOpt)
@@ -658,17 +662,17 @@ func TestTranscoder_Errors(t *testing.T) {
 	rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusTeapot)
 	})
-	services := []*Service{
-		NewService(testv1connect.LibraryServiceName, rpcHandler),
-		NewService(testv1connect.ContentServiceName, rpcHandler),
+	opts := []TranscoderOption{
+		WithService(testv1connect.LibraryServiceName, rpcHandler),
+		WithService(testv1connect.ContentServiceName, rpcHandler),
 	}
-	handler, err := NewTranscoder(services)
+	handler, err := NewTranscoder(opts...)
 	require.NoError(t, err)
-	unknownHandler, err := NewTranscoder(services, WithUnknownHandler(
+	unknownHandler, err := NewTranscoder(append(opts, WithUnknownHandler(
 		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 			writer.WriteHeader(http.StatusFailedDependency)
 		}),
-	))
+	))...)
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -1055,7 +1059,7 @@ func TestTranscoder_PassThrough(t *testing.T) {
 		testv1connect.UnimplementedContentServiceHandler{},
 		connect.WithInterceptors(&interceptor),
 	)
-	handler, err := NewTranscoder([]*Service{NewService(contentPath, checkPassThrough(contentHandler))})
+	handler, err := NewTranscoder(WithService(contentPath, checkPassThrough(contentHandler)))
 	require.NoError(t, err)
 
 	// Use HTTP/2 so we can test a bidi stream.
