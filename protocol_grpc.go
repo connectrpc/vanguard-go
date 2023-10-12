@@ -143,7 +143,7 @@ func (g grpcServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
 	return envBytes
 }
 
-func (g grpcServerProtocol) decodeEndFromMessage(_ *operation, _ io.Reader) (responseEnd, error) {
+func (g grpcServerProtocol) decodeEndFromMessage(_ *operation, _ *bytes.Buffer) (responseEnd, error) {
 	return responseEnd{}, errors.New("gRPC protocol does not allow embedding result/trailers in body")
 }
 
@@ -184,7 +184,7 @@ func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer
 	buffer := op.bufferPool.Get()
 	defer op.bufferPool.Put(buffer)
 	_ = trailers.Write(buffer)
-	// TODO: compress?
+	// TODO: Send envelope compressed if possible.
 	env := envelope{trailer: true, length: uint32(buffer.Len())}
 	envBytes := g.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
@@ -254,14 +254,7 @@ func (g grpcWebServerProtocol) encodeEnvelope(env envelope) envelopeBytes {
 	return grpcServerProtocol{}.encodeEnvelope(env)
 }
 
-func (g grpcWebServerProtocol) decodeEndFromMessage(op *operation, reader io.Reader) (responseEnd, error) {
-	// TODO: buffer size limit for headers/trailers; should use http.DefaultMaxHeaderBytes if not configured
-	buffer := op.bufferPool.Get()
-	defer op.bufferPool.Put(buffer)
-	_, err := buffer.ReadFrom(reader)
-	if err != nil {
-		return responseEnd{}, err
-	}
+func (g grpcWebServerProtocol) decodeEndFromMessage(_ *operation, buffer *bytes.Buffer) (responseEnd, error) {
 	headerLines := bytes.Split(buffer.Bytes(), []byte{'\r', '\n'})
 	trailers := make(http.Header, len(headerLines))
 	for i, headerLine := range headerLines {

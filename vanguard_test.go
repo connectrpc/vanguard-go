@@ -42,6 +42,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const (
+	defaultTestTimeout = 30 * time.Second
+)
+
 func TestMux_BufferTooLargeFails(t *testing.T) {
 	t.Parallel()
 
@@ -628,9 +632,12 @@ func TestMux_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 				connect.WithHTTPGetMaxURLSize(512, false),
 				connect.WithSendGzip(),
 			)
+			ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+			defer cancel()
+
 			req := connect.NewRequest(largeRequest)
 			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
-			_, err := client.GetBook(context.Background(), req)
+			_, err := client.GetBook(ctx, req)
 			// No error means it made through above interceptor unscathed
 			// (so server handler got a POST).
 			require.NoError(t, err)
@@ -1611,6 +1618,9 @@ func TestRuleSelector(t *testing.T) {
 	}))
 
 	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, defaultTestTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/v1/selector/shelves/123/books/456", http.NoBody)
 	require.NoError(t, err)
 	req.Header.Set("Message", "hello")
@@ -1792,6 +1802,9 @@ func (i *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		ctx context.Context,
 		req connect.AnyRequest,
 	) (_ connect.AnyResponse, resultError error) {
+		if err := assertTestTimeoutEncoded(ctx); err != nil {
+			return nil, err
+		}
 		val := req.Header().Get("test")
 		if val == "" {
 			return next(ctx, req)
@@ -1874,6 +1887,9 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
 	) (resultError error) {
+		if err := assertTestTimeoutEncoded(ctx); err != nil {
+			return err
+		}
 		val := conn.RequestHeader().Get("test")
 		if val == "" {
 			return next(ctx, conn)
@@ -2057,6 +2073,19 @@ func (i *testInterceptor) restUnaryHandler(
 			http.Error(rsp, "invalid test header", http.StatusInternalServerError)
 			return
 		}
+		timeoutStr := req.Header.Get("X-Server-Timeout")
+		timeout, err := restDecodeTimeout(timeoutStr)
+		if err != nil {
+			http.Error(rsp, "invalid timeout header", http.StatusInternalServerError)
+			return
+		}
+		ctx, cancel := context.WithTimeout(req.Context(), timeout)
+		defer cancel()
+		if err := assertTestTimeoutEncoded(ctx); err != nil {
+			http.Error(rsp, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		req = req.WithContext(ctx)
 		if err := handler(stream, rsp, req); err != nil {
 			stream.T.Error(err)
 			http.Error(rsp, err.Error(), http.StatusInternalServerError)
@@ -2178,6 +2207,8 @@ func outputFromUnary[Req, Resp any](
 	headers http.Header,
 	reqs []proto.Message,
 ) (http.Header, []proto.Message, http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTestTimeout)
+	defer cancel()
 	if len(reqs) != 1 {
 		return nil, nil, nil, fmt.Errorf("unary method takes exactly 1 request but got %d", len(reqs))
 	}
@@ -2200,6 +2231,8 @@ func outputFromServerStream[Req, Resp any](
 	headers http.Header,
 	reqs []proto.Message,
 ) (http.Header, []proto.Message, http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTestTimeout)
+	defer cancel()
 	if len(reqs) != 1 {
 		return nil, nil, nil, fmt.Errorf("unary method takes exactly 1 request but got %d", len(reqs))
 	}
@@ -2226,6 +2259,8 @@ func outputFromClientStream[Req, Resp any](
 	headers http.Header,
 	reqs []proto.Message,
 ) (http.Header, []proto.Message, http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTestTimeout)
+	defer cancel()
 	str := method(ctx)
 	for k, v := range headers {
 		str.RequestHeader()[k] = v
@@ -2255,6 +2290,8 @@ func outputFromBidiStream[Req, Resp any](
 	headers http.Header,
 	reqs []proto.Message,
 ) (http.Header, []proto.Message, http.Header, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaultTestTimeout)
+	defer cancel()
 	str := method(ctx)
 	defer func() {
 		_ = str.CloseResponse()
@@ -2562,4 +2599,21 @@ func newConnectError(code connect.Code, msg string) *connect.Error {
 	// so it doesn't happen in thread-unsafe way later.
 	err.Meta()
 	return err
+}
+
+// assert a 30 second timeout has been set.
+func assertTestTimeoutEncoded(ctx context.Context) error {
+	now := time.Now()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("context should have deadline")
+	}
+	if deadline.After(now.Add(defaultTestTimeout)) {
+		return errors.New("context deadline should be 30 seconds")
+	}
+	// Allow a little bit of slop.
+	if deadline.Before(now.Add(defaultTestTimeout - 5*time.Second)) {
+		return errors.New("context deadline should be at least 20 seconds")
+	}
+	return nil
 }

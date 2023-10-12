@@ -47,7 +47,6 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 	case connect.StreamTypeClient:
 		return restHTTPBodyRequest(op)
 	case connect.StreamTypeServer:
-		// TODO: support server streams even when body is not google.api.HttpBody
 		return restHTTPBodyResponse(op)
 	default:
 		return false
@@ -55,7 +54,8 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 }
 
 func (r restClientProtocol) endMustBeInHeaders() bool {
-	// TODO: when we support server streams over REST, this should return false when streaming
+	// TODO: when we support server streams over REST, this should return
+	// false when streaming
 	return true
 }
 
@@ -82,24 +82,23 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	headers.Del("Content-Type")
 
 	if timeoutStr := headers.Get("X-Server-Timeout"); timeoutStr != "" {
-		timeout, err := strconv.ParseFloat(timeoutStr, 64)
+		timeout, err := restDecodeTimeout(timeoutStr)
 		if err != nil {
 			return requestMeta{}, err
 		}
-		reqMeta.timeout = time.Duration(timeout * float64(time.Second))
+		reqMeta.timeout = timeout
+		reqMeta.hasTimeout = true
 	}
 	return reqMeta, nil
 }
 
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	isErr := meta.end != nil && meta.end.err != nil
-	// TODO: this formulation might only be valid when meta.codec is JSON; support other codecs.
-	// Headers are only set if they are not already set, specially to allow
-	// for google.api.HttpBody payloads.
+	// Only JSON is supported for now unless using google.api.HttpBody
+	// payloads which override the content-type.
 	if headers["Content-Type"] == nil {
 		headers["Content-Type"] = []string{"application/" + meta.codec}
 	}
-	// TODO: Content-Encoding to compress error, too?
 	if !isErr && meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
 	}
@@ -126,12 +125,9 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 	stat := grpcStatusFromError(cerr)
 	bin, err := op.client.codec.MarshalAppend(nil, stat)
 	if err != nil {
-		// TODO: This is always uses JSON whereas above we use the given codec.
-		//       If/when we support codecs for REST other than JSON, what should
-		//       we do here?
-		bin = []byte(`{"code": 13, "message": ` + strconv.Quote("failed to marshal end error: "+err.Error()) + `}`)
+		// Hardcode the error to be a JSON-encoded gRPC status.
+		bin = []byte(`{"code":13,"message":"failed to marshal end error"}`)
 	}
-	// TODO: compress?
 	_, _ = writer.Write(bin)
 	return nil
 }
@@ -272,9 +268,8 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 	if len(meta.acceptCompression) != 0 {
 		headers["Accept-Encoding"] = []string{strings.Join(meta.acceptCompression, ", ")}
 	}
-	if meta.timeout != 0 {
-		// Encode timeout as a float in seconds.
-		value := strconv.FormatFloat(meta.timeout.Seconds(), 'E', -1, 64)
+	if meta.hasTimeout {
+		value := restEncodeTimeout(meta.timeout)
 		headers["X-Server-Timeout"] = []string{value}
 	}
 }
@@ -393,12 +388,31 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 	urlPath = path
 	queryParams = query.Encode()
 	includeBody = op.restTarget.requestBodyFields != nil // can be len(0) if body is '*'
-	// TODO: Should this return an error if URL (path + query string) is greater than op.methodConf.maxGetURLSz?
 	return urlPath, queryParams, op.restTarget.method, includeBody, nil
 }
 
 func (r restServerProtocol) String() string {
 	return protocolNameREST
+}
+
+// Decode timeout as a float in seconds from X-Server-Timeout header.
+func restDecodeTimeout(timeout string) (time.Duration, error) {
+	if timeout == "" {
+		return 0, nil
+	}
+	val, err := strconv.ParseFloat(timeout, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid timeout %q: %w", timeout, err)
+	}
+	return time.Duration(val * float64(time.Second)), nil
+}
+
+// Encode timeout as a float in seconds for X-Server-Timeout header.
+func restEncodeTimeout(timeout time.Duration) string {
+	if timeout == 0 {
+		return ""
+	}
+	return strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64)
 }
 
 func restHTTPBodyRequest(op *operation) bool {

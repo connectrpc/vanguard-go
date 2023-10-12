@@ -379,10 +379,6 @@ func TestMux_RPCxRPC(t *testing.T) {
 				},
 			},
 		},
-		// TODO: Add more tests -- more permutations to catch things like trailers-only responses in gRPC,
-		//       empty client streams, empty server streams
-		// TODO: Exercise Connect GET for unary operations with Connect client
-		// TODO: Verify timeouts are propagated correctly
 	}
 	for _, opts := range testOpts {
 		opts := opts
