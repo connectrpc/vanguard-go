@@ -28,7 +28,9 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
@@ -45,7 +47,8 @@ type Transcoder struct {
 	unknownHandler http.Handler
 }
 
-// ServeHTTP implements http.Transcoder.
+// ServeHTTP implements http.Handler, dispatching requests for configured
+// services and transcoding protocols and message encoding as needed.
 func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op := t.newOperation(writer, request)
 	err := op.validate(t)
@@ -72,6 +75,153 @@ func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	}
 
 	op.handle()
+}
+
+func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error {
+	for _, opt := range svc.opts {
+		opt.applyToService(&svcOpts)
+	}
+
+	if len(svcOpts.protocols) == 0 {
+		return fmt.Errorf("service %s was configured with no target protocols", svc.schema.FullName())
+	}
+	for protocol := range svcOpts.protocols {
+		if protocol <= ProtocolUnknown || protocol > protocolMax {
+			return fmt.Errorf("protocol %d is not a valid value", protocol)
+		}
+	}
+
+	if len(svcOpts.codecNames) == 0 {
+		return fmt.Errorf("service %s was configured with no target codecs", svc.schema.FullName())
+	}
+	for codecName := range svcOpts.codecNames {
+		if _, known := t.codecs[codecName]; !known {
+			return fmt.Errorf("codec %s is not known; use WithCodec to configure known codecs", codecName)
+		}
+	}
+
+	// empty svcOpts.compressorNames is okay
+	for compressorName := range svcOpts.compressorNames {
+		if _, known := t.compressors[compressorName]; !known {
+			return fmt.Errorf("compression algorithm %s is not known; use WithCompression to configure known algorithms", compressorName)
+		}
+	}
+
+	if svcOpts.maxMsgBufferBytes <= 0 {
+		return fmt.Errorf("service %s is configured with an invalid max message buffer size: %d bytes", svc.schema.FullName(), svcOpts.maxMsgBufferBytes)
+	}
+	if svcOpts.maxGetURLBytes <= 0 {
+		return fmt.Errorf("service %s is configured with an invalid max GET URL length: %d bytes", svc.schema.FullName(), svcOpts.maxGetURLBytes)
+	}
+
+	if svcOpts.resolver == nil {
+		return fmt.Errorf("service %s is configured with a nil type resolver", svc.schema.FullName())
+	}
+
+	methods := svc.schema.Methods()
+	for i, length := 0, methods.Len(); i < length; i++ {
+		methodDesc := methods.Get(i)
+		if err := t.registerMethod(svc.handler, methodDesc, &svcOpts); err != nil {
+			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
+		}
+	}
+	return nil
+}
+
+func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	methodRules := make(map[*methodConfig][]*annotations.HttpRule)
+	for _, rule := range rules {
+		var applied bool
+		selector := rule.GetSelector()
+		if selector == "" {
+			return fmt.Errorf("rule missing selector")
+		}
+		if i := strings.Index(selector, "*"); i >= 0 {
+			if i != len(selector)-1 {
+				return fmt.Errorf("wildcard selector %q must be at the end", rule.GetSelector())
+			}
+			selector = selector[:len(selector)-1]
+			if len(selector) > 0 && !strings.HasSuffix(selector, ".") {
+				return fmt.Errorf("wildcard selector %q must be whole component", rule.GetSelector())
+			}
+		}
+		for _, methodConf := range t.methods {
+			methodName := string(methodConf.descriptor.FullName())
+			if !strings.HasPrefix(methodName, selector) {
+				continue
+			}
+			methodRules[methodConf] = append(methodRules[methodConf], rule)
+			applied = true
+		}
+		if !applied {
+			return fmt.Errorf("rule %q does not match any methods", rule.GetSelector())
+		}
+	}
+	for methodConf, rules := range methodRules {
+		for _, rule := range rules {
+			if err := t.addRule(rule, methodConf); err != nil {
+				// TODO: use the multi-error type errors.Join()
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts *serviceOptions) error {
+	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
+	if _, ok := t.methods[methodPath]; ok {
+		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
+	}
+	methodConf := &methodConfig{
+		serviceOptions: opts,
+		descriptor:     methodDesc,
+		methodPath:     methodPath,
+		handler:        handler,
+	}
+	if t.methods == nil {
+		t.methods = make(map[string]*methodConfig, 1)
+	}
+	t.methods[methodPath] = methodConf
+
+	switch {
+	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
+		methodConf.streamType = connect.StreamTypeBidi
+	case methodDesc.IsStreamingClient():
+		methodConf.streamType = connect.StreamTypeClient
+	case methodDesc.IsStreamingServer():
+		methodConf.streamType = connect.StreamTypeServer
+	default:
+		methodConf.streamType = connect.StreamTypeUnary
+	}
+
+	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
+		if err := t.addRule(httpRule, methodConf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) error {
+	methodPath := methodConf.methodPath
+	firstTarget, err := t.restRoutes.addRoute(methodConf, httpRule)
+	if err != nil {
+		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
+	}
+	methodConf.httpRule = firstTarget
+	for i, rule := range httpRule.AdditionalBindings {
+		if len(rule.AdditionalBindings) > 0 {
+			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
+		}
+		if _, err := t.restRoutes.addRoute(methodConf, rule); err != nil {
+			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
+		}
+	}
+	return nil
 }
 
 func (t *Transcoder) newOperation(writer http.ResponseWriter, request *http.Request) *operation {

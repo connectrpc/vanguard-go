@@ -42,7 +42,7 @@ const (
 	DefaultMaxGetURLBytes        = 8 * 1024
 )
 
-// NewTranscoder creates a new Vanguard handler for the given services, with the
+// NewTranscoder creates a new transcoder that handles the given services, with the
 // configuration described by the given options. A non-nil error is returned if
 // there is an issue with this configuration.
 //
@@ -100,11 +100,11 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		methods:        map[string]*methodConfig{},
 	}
 	for _, svc := range services {
-		if err := registerService(svc, transcoder, transcoderOpts.defaultServiceOptions); err != nil {
+		if err := transcoder.registerService(svc, transcoderOpts.defaultServiceOptions); err != nil {
 			return nil, err
 		}
 	}
-	if err := registerRules(transcoderOpts.rules, transcoder); err != nil {
+	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
 		return nil, err
 	}
 	return transcoder, nil
@@ -162,7 +162,7 @@ func WithCompression(name string, newCompressor func() connect.Compressor, newDe
 
 // WithUnknownHandler returns an option that instructs the transcoder to delegate to
 // the given handler when a request arrives for an unknown endpoint. If no such option
-// is used, the Vanguard handler will reply with a simple "404 Not Found" error.
+// is used, the transcoder will reply with a simple "404 Not Found" error.
 func WithUnknownHandler(unknownHandler http.Handler) TranscoderOption {
 	return transcoderOptionFunc(func(opts *transcoderOptions) {
 		opts.unknownHandler = unknownHandler
@@ -325,153 +325,6 @@ type transcoderOptions struct {
 	unknownHandler        http.Handler
 	codecs                codecMap
 	compressors           compressionMap
-}
-
-func registerService(svc *Service, transcoder *Transcoder, svcOpts serviceOptions) error {
-	for _, opt := range svc.opts {
-		opt.applyToService(&svcOpts)
-	}
-
-	if len(svcOpts.protocols) == 0 {
-		return fmt.Errorf("service %s was configured with no target protocols", svc.schema.FullName())
-	}
-	for protocol := range svcOpts.protocols {
-		if protocol <= ProtocolUnknown || protocol > protocolMax {
-			return fmt.Errorf("protocol %d is not a valid value", protocol)
-		}
-	}
-
-	if len(svcOpts.codecNames) == 0 {
-		return fmt.Errorf("service %s was configured with no target codecs", svc.schema.FullName())
-	}
-	for codecName := range svcOpts.codecNames {
-		if _, known := transcoder.codecs[codecName]; !known {
-			return fmt.Errorf("codec %s is not known; use WithCodec to configure known codecs", codecName)
-		}
-	}
-
-	// empty svcOpts.compressorNames is okay
-	for compressorName := range svcOpts.compressorNames {
-		if _, known := transcoder.compressors[compressorName]; !known {
-			return fmt.Errorf("compression algorithm %s is not known; use WithCompression to configure known algorithms", compressorName)
-		}
-	}
-
-	if svcOpts.maxMsgBufferBytes <= 0 {
-		return fmt.Errorf("service %s is configured with an invalid max message buffer size: %d bytes", svc.schema.FullName(), svcOpts.maxMsgBufferBytes)
-	}
-	if svcOpts.maxGetURLBytes <= 0 {
-		return fmt.Errorf("service %s is configured with an invalid max GET URL length: %d bytes", svc.schema.FullName(), svcOpts.maxGetURLBytes)
-	}
-
-	if svcOpts.resolver == nil {
-		return fmt.Errorf("service %s is configured with a nil type resolver", svc.schema.FullName())
-	}
-
-	methods := svc.schema.Methods()
-	for i, length := 0, methods.Len(); i < length; i++ {
-		methodDesc := methods.Get(i)
-		if err := registerMethod(svc.handler, methodDesc, transcoder, &svcOpts); err != nil {
-			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
-		}
-	}
-	return nil
-}
-
-func registerRules(rules []*annotations.HttpRule, transcoder *Transcoder) error {
-	if len(rules) == 0 {
-		return nil
-	}
-	methodRules := make(map[*methodConfig][]*annotations.HttpRule)
-	for _, rule := range rules {
-		var applied bool
-		selector := rule.GetSelector()
-		if selector == "" {
-			return fmt.Errorf("rule missing selector")
-		}
-		if i := strings.Index(selector, "*"); i >= 0 {
-			if i != len(selector)-1 {
-				return fmt.Errorf("wildcard selector %q must be at the end", rule.GetSelector())
-			}
-			selector = selector[:len(selector)-1]
-			if len(selector) > 0 && !strings.HasSuffix(selector, ".") {
-				return fmt.Errorf("wildcard selector %q must be whole component", rule.GetSelector())
-			}
-		}
-		for _, methodConf := range transcoder.methods {
-			methodName := string(methodConf.descriptor.FullName())
-			if !strings.HasPrefix(methodName, selector) {
-				continue
-			}
-			methodRules[methodConf] = append(methodRules[methodConf], rule)
-			applied = true
-		}
-		if !applied {
-			return fmt.Errorf("rule %q does not match any methods", rule.GetSelector())
-		}
-	}
-	for methodConf, rules := range methodRules {
-		for _, rule := range rules {
-			if err := addRule(rule, methodConf, transcoder); err != nil {
-				// TODO: use the multi-error type errors.Join()
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, transcoder *Transcoder, opts *serviceOptions) error {
-	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
-	if _, ok := transcoder.methods[methodPath]; ok {
-		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
-	}
-	methodConf := &methodConfig{
-		serviceOptions: opts,
-		descriptor:     methodDesc,
-		methodPath:     methodPath,
-		handler:        handler,
-	}
-	if transcoder.methods == nil {
-		transcoder.methods = make(map[string]*methodConfig, 1)
-	}
-	transcoder.methods[methodPath] = methodConf
-
-	switch {
-	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
-		methodConf.streamType = connect.StreamTypeBidi
-	case methodDesc.IsStreamingClient():
-		methodConf.streamType = connect.StreamTypeClient
-	case methodDesc.IsStreamingServer():
-		methodConf.streamType = connect.StreamTypeServer
-	default:
-		methodConf.streamType = connect.StreamTypeUnary
-	}
-
-	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		if err := addRule(httpRule, methodConf, transcoder); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func addRule(httpRule *annotations.HttpRule, methodConf *methodConfig, transcoder *Transcoder) error {
-	methodPath := methodConf.methodPath
-	firstTarget, err := transcoder.restRoutes.addRoute(methodConf, httpRule)
-	if err != nil {
-		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
-	}
-	methodConf.httpRule = firstTarget
-	for i, rule := range httpRule.AdditionalBindings {
-		if len(rule.AdditionalBindings) > 0 {
-			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
-		}
-		if _, err := transcoder.restRoutes.addRoute(methodConf, rule); err != nil {
-			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
-		}
-	}
-	return nil
 }
 
 // TypeResolver can resolve message and extension types and is used to instantiate
