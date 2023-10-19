@@ -78,33 +78,8 @@ type RESTCodec interface {
 	UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
 }
 
-// DefaultProtoCodec is the default codec factory used for
-// the codec name "proto". The given resolver is used to
-// unmarshal extensions.
-//
-// The returned codec implements StableCodec, in addition to
-// Codec.
-func DefaultProtoCodec(res TypeResolver) Codec {
-	return protoCodec{
-		UnmarshalOptions: proto.UnmarshalOptions{Resolver: res},
-	}
-}
-
-// DefaultJSONCodec is the default codec factory used for the codec named
-// "json". The given resolver is used to unmarshal extensions and also to
-// marshal and unmarshal instances of google.protobuf.Any.
-//
-// By default, the returned codec is configured to emit unpopulated fields
-// when marshalling and to discard unknown fields when unmarshalling.
-func DefaultJSONCodec(res TypeResolver) *JSONCodec {
-	return &JSONCodec{
-		MarshalOptions:   protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
-		UnmarshalOptions: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
-	}
-}
-
-// JSONCodec implements Codec for the JSON format. It uses the [protojson]
-// package for its implementation.
+// JSONCodec implements [Codec], [StableCodec], and [RESTCodec] for the JSON
+// format. It uses the [protojson] package for its implementation.
 type JSONCodec struct {
 	// MarshalOptions is used for marshalling data to JSON.
 	MarshalOptions protojson.MarshalOptions
@@ -114,6 +89,19 @@ type JSONCodec struct {
 
 var _ StableCodec = JSONCodec{}
 var _ RESTCodec = JSONCodec{}
+
+// NewJSONCodec is the default codec factory used for the codec named
+// "json". The given resolver is used to unmarshal extensions and also to
+// marshal and unmarshal instances of google.protobuf.Any.
+//
+// By default, the returned codec is configured to emit unpopulated fields
+// when marshalling and to discard unknown fields when unmarshalling.
+func NewJSONCodec(res TypeResolver) *JSONCodec {
+	return &JSONCodec{
+		MarshalOptions:   protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
+		UnmarshalOptions: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
+	}
+}
 
 func (j JSONCodec) Name() string {
 	return CodecJSON
@@ -228,33 +216,44 @@ func (j JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
 	return string(field.Name())
 }
 
-type protoCodec struct {
-	proto.MarshalOptions
-	proto.UnmarshalOptions
+// ProtoCodec implements [Codec] and [StableCodec] for the binary Protobuf
+// format. It uses the [proto] package for its implementation.
+type ProtoCodec struct {
+	unmarshal proto.UnmarshalOptions
 }
 
-var _ StableCodec = protoCodec{}
+var _ StableCodec = (*ProtoCodec)(nil)
 
-func (p protoCodec) Name() string {
+// NewProtoCodec is the default codec factory used for
+// the codec name "proto". The given resolver is used to
+// unmarshal extensions.
+//
+// The returned codec implements StableCodec, in addition to
+// Codec.
+func NewProtoCodec(res TypeResolver) *ProtoCodec {
+	return &ProtoCodec{
+		unmarshal: proto.UnmarshalOptions{Resolver: res},
+	}
+}
+
+func (p *ProtoCodec) Name() string {
 	return CodecProto
 }
 
-func (p protoCodec) IsBinary() bool {
+func (p *ProtoCodec) IsBinary() bool {
 	return true
 }
 
-func (p protoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
+func (p *ProtoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(base, msg)
 }
 
-func (p protoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
-	opts := p.MarshalOptions
-	opts.Deterministic = true
-	return opts.MarshalAppend(base, msg)
+func (p *ProtoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
+	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(base, msg)
 }
 
-func (p protoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return p.UnmarshalOptions.Unmarshal(bytes, msg)
+func (p *ProtoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
+	return p.unmarshal.Unmarshal(bytes, msg)
 }
 
 func jsonStabilize(data []byte) ([]byte, error) {

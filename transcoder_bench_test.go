@@ -42,7 +42,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 	// This benchmark is intended to measure the overhead of the
 	// ServeHTTP method of the server. It does not measure the
 	// overhead of the underlying HTTP server.
-	jsonCodec := DefaultJSONCodec(protoregistry.GlobalTypes)
+	jsonCodec := NewJSONCodec(protoregistry.GlobalTypes)
 
 	compress := func(b []byte) []byte {
 		var buf bytes.Buffer

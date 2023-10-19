@@ -83,7 +83,7 @@ func TestMux_RPCxREST(t *testing.T) {
 		name := fmt.Sprintf("%s_%s_%s", ProtocolREST, codec.Name(), compression)
 
 		newCodec := func(res TypeResolver) Codec {
-			return &stableJSONCodec{JSONCodec: *DefaultJSONCodec(res)}
+			return &stableJSONCodec{JSONCodec: *NewJSONCodec(res)}
 		}
 		services := make([]*Service, len(serviceNames))
 		for i, svcName := range serviceNames {
