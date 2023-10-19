@@ -86,7 +86,7 @@ func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error
 		return fmt.Errorf("service %s was configured with no target protocols", svc.schema.FullName())
 	}
 	for protocol := range svcOpts.protocols {
-		if protocol <= ProtocolUnknown || protocol > protocolMax {
+		if protocol <= protocolUnknown || protocol > protocolMax {
 			return fmt.Errorf("protocol %d is not a valid value", protocol)
 		}
 	}

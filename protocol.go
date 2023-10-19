@@ -37,13 +37,13 @@ const (
 	//     the preference order. So Connect is the highest preferred protocol,
 	//     then gRPC, etc.
 
-	// ProtocolUnknown is not a valid value. Since it is the zero value, this
+	// protocolUnknown is not a valid value. Since it is the zero value, this
 	// requires that all Protocol values must be explicitly initialized.
-	ProtocolUnknown = Protocol(iota)
+	protocolUnknown = Protocol(0)
 	// ProtocolConnect indicates the Connect protocol. This protocol supports
 	// unary and streaming endpoints. However, bidirectional streams are only
 	// supported when combined with HTTP/2.
-	ProtocolConnect
+	ProtocolConnect = Protocol(iota + 1)
 	// ProtocolGRPC indicates the gRPC protocol. This protocol can only be
 	// used in combination with HTTP/2. It supports unary and all kinds of
 	// streaming endpoints.
