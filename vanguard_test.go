@@ -585,7 +585,7 @@ func getCompressor(t *testing.T, name string) connect.Compressor {
 	t.Helper()
 	switch name {
 	case CompressionGzip:
-		return DefaultGzipCompressor()
+		return defaultGzipCompressor()
 	case CompressionIdentity:
 		return nil
 	default:
@@ -597,7 +597,7 @@ func getDecompressor(t *testing.T, name string) connect.Decompressor {
 	t.Helper()
 	switch name {
 	case CompressionGzip:
-		return DefaultGzipDecompressor()
+		return defaultGzipDecompressor()
 	case CompressionIdentity:
 		return nil
 	default:

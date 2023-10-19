@@ -478,7 +478,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			switch compression {
 			case CompressionGzip:
 				comp = newCompressionPool(
-					CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor,
+					CompressionGzip, defaultGzipCompressor, defaultGzipDecompressor,
 				)
 			case CompressionIdentity:
 				// nil

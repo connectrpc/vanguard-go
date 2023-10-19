@@ -79,7 +79,7 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 			},
 		},
 		compressors: compressionMap{
-			CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
+			CompressionGzip: newCompressionPool(CompressionGzip, defaultGzipCompressor, defaultGzipDecompressor),
 		},
 		defaultServiceOptions: serviceOptions{
 			maxMsgBufferBytes: DefaultMaxMessageBufferBytes,

@@ -23,18 +23,6 @@ import (
 	"connectrpc.com/connect"
 )
 
-// DefaultGzipCompressor is a factory for Compressor instances used by default
-// for the "gzip" encoding type.
-func DefaultGzipCompressor() connect.Compressor {
-	return gzip.NewWriter(io.Discard)
-}
-
-// DefaultGzipDecompressor is a factory for Decompressor instances used by
-// default for the "gzip" encoding type.
-func DefaultGzipDecompressor() connect.Decompressor {
-	return &gzip.Reader{}
-}
-
 type compressionMap map[string]*compressionPool
 
 func (m compressionMap) intersection(names []string) []string {
@@ -122,4 +110,16 @@ func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
 		return err
 	}
 	return decomp.Close()
+}
+
+// defaultGzipCompressor is a factory for Compressor instances used by default
+// for the "gzip" encoding type.
+func defaultGzipCompressor() connect.Compressor {
+	return gzip.NewWriter(io.Discard)
+}
+
+// defaultGzipDecompressor is a factory for Decompressor instances used by
+// default for the "gzip" encoding type.
+func defaultGzipDecompressor() connect.Decompressor {
+	return &gzip.Reader{}
 }
