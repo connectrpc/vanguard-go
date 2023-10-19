@@ -143,6 +143,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		for key, values := range input.meta {
 			req.Header[key] = values
 		}
+		req.Header["X-Server-Timeout"] = []string{"30"}
 		if isCompressed {
 			req.Header["Content-Encoding"] = []string{comp.Name()}
 		}

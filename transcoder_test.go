@@ -618,6 +618,9 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			})
 			defer interceptor.del(t)
 
+			ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+			defer cancel()
+
 			client := testv1connect.NewLibraryServiceClient(
 				testCase.server.Client(),
 				testCase.server.URL,
@@ -627,7 +630,7 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			)
 			req := connect.NewRequest(largeRequest)
 			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
-			_, err := client.GetBook(context.Background(), req)
+			_, err := client.GetBook(ctx, req)
 			// No error means it made through above interceptor unscathed
 			// (so server handler got a POST).
 			require.NoError(t, err)
@@ -643,7 +646,7 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			//     request before it gets that far.
 			req = connect.NewRequest(&testv1.GetBookRequest{Name: "foo/bar"})
 			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
-			_, err = client.GetBook(context.Background(), req)
+			_, err = client.GetBook(ctx, req)
 			require.ErrorContains(t, err, "server should only see POST; instead got GET")
 		})
 	}
