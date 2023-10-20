@@ -166,9 +166,8 @@ When creating a transcoder, you can supply options to customize it:
   also allows you to _add_ mappings to a service that does already have annotations.
 * You can add support for extra codecs, beyond "proto" and "json", and compression
   algorithms, beyond "gzip".
-
-You can also supply service options that act as default service options that will
-apply to every service (unless overridden via other options in a call to `NewService`).
+* You can supply a set of default service options that will apply to every service
+  (unless overridden via other options in a call to `NewService`).
 
 ```go
 transcoder = vanguard.NewTranscoder(
