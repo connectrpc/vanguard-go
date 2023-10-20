@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/vanguard"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"connectrpc.com/vanguard/vanguardgrpc"
@@ -36,10 +37,10 @@ func ExampleNewTranscoder_connectToGRPC() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// Configure gRPC servers to support JSON.
-	encoding.RegisterCodec(&vanguardgrpc.JSONCodec{
+	encoding.RegisterCodec(vanguardgrpc.NewGRPCCodec(&vanguard.JSONCodec{
 		MarshalOptions:   protojson.MarshalOptions{EmitUnpopulated: true},
 		UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
-	})
+	}))
 
 	// Now create a gRPC server that provides the test LibraryService.
 	svc := &libraryRPC{}
