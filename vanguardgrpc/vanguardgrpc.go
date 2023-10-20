@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package vanguardgrpc provides convenience functions to make it easy to
+// wrap your [grpc.Server] with a [vanguard.Transcoder], to upgrade it to
+// supporting Connect, gRPC-Web, and REST+JSON protocols.
 package vanguardgrpc
 
 import (
@@ -59,12 +62,11 @@ func NewTranscoder(server *grpc.Server, opts ...vanguard.TranscoderOption) (*van
 	for svcName := range svcInfo {
 		services = append(services, vanguard.NewService(svcName, server))
 	}
-	allOptions := make([]vanguard.TranscoderOption, 0, 2+len(opts))
-	allOptions = append(
-		allOptions,
+	allOptions := make([]vanguard.TranscoderOption, 0, 1+len(opts))
+	allOptions = append(allOptions, vanguard.WithDefaultServiceOptions(
 		vanguard.WithTargetCodecs(codecs...),
 		vanguard.WithTargetProtocols(vanguard.ProtocolGRPC),
-	)
+	))
 	allOptions = append(allOptions, opts...)
 	return vanguard.NewTranscoder(services, allOptions...)
 }

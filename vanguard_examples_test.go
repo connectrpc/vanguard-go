@@ -103,9 +103,12 @@ func ExampleNewTranscoder_connectToREST() {
 	svc := &libraryREST{}
 
 	handler, err := vanguard.NewTranscoder(
-		[]*vanguard.Service{vanguard.NewService(testv1connect.LibraryServiceName, svc)},
-		// This tells vanguard that it must transform requests to REST.
-		vanguard.WithTargetProtocols(vanguard.ProtocolREST),
+		[]*vanguard.Service{vanguard.NewService(
+			testv1connect.LibraryServiceName,
+			svc,
+			// This tells vanguard that it must transform requests to REST.
+			vanguard.WithTargetProtocols(vanguard.ProtocolREST),
+		)},
 	)
 	if err != nil {
 		log.Println("error:", err)

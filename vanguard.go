@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package vanguard provides a transcoder that acts like middleware for
+// your RPC handlers, augmenting them to support additional protocols
+// or message formats, including REST+JSON. The transcoder also acts as
+// a router, handling dispatch of configured REST-ful URI paths to the
+// right RPC handlers.
+//
+// Use NewService or NewServiceWithSchema to create Service definitions
+// wrap your existing HTTP and/or RPC handlers. Then pass those services
+// to NewTranscoder.
 package vanguard
 
 import (
@@ -81,18 +90,22 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		compressors: compressionMap{
 			CompressionGzip: newCompressionPool(CompressionGzip, defaultGzipCompressor, defaultGzipDecompressor),
 		},
-		defaultServiceOptions: serviceOptions{
-			maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
-			maxGetURLBytes:    DefaultMaxGetURLBytes,
-			resolver:          protoregistry.GlobalTypes,
-			preferredCodec:    CodecProto,
-			codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
-			compressorNames:   map[string]struct{}{CompressionGzip: {}},
-			protocols:         map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
-		},
 	}
 	for _, opt := range opts {
 		opt.applyToTranscoder(&transcoderOpts)
+	}
+
+	defaultServiceOptions := serviceOptions{
+		maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
+		maxGetURLBytes:    DefaultMaxGetURLBytes,
+		resolver:          protoregistry.GlobalTypes,
+		preferredCodec:    CodecProto,
+		codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
+		compressorNames:   map[string]struct{}{CompressionGzip: {}},
+		protocols:         map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
+	}
+	for _, opt := range transcoderOpts.defaultServiceOptions {
+		opt.applyToService(&defaultServiceOptions)
 	}
 
 	transcoder := &Transcoder{
@@ -102,7 +115,7 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		methods:        map[string]*methodConfig{},
 	}
 	for _, svc := range services {
-		if err := transcoder.registerService(svc, transcoderOpts.defaultServiceOptions); err != nil {
+		if err := transcoder.registerService(svc, defaultServiceOptions); err != nil {
 			return nil, err
 		}
 	}
@@ -115,6 +128,20 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 // TranscoderOption is an option used to configure a Transcoder. See NewTranscoder.
 type TranscoderOption interface {
 	applyToTranscoder(*transcoderOptions)
+}
+
+// WithDefaultServiceOptions returns an option that configures the given
+// service options as defaults. They will apply to all services passed to
+// NewTranscoder, except where overridden via an explicit ServiceOption
+// passed to NewService / NewServiceWithSchema.
+//
+// Providing multiple instances of this option will be cumulative: the
+// union of all defaults are used with later options overriding any
+// previous options.
+func WithDefaultServiceOptions(serviceOptions ...ServiceOption) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
+		opts.defaultServiceOptions = append(opts.defaultServiceOptions, serviceOptions...)
+	})
 }
 
 // WithRules returns an option that adds HTTP transcoding configuration to the set of
@@ -222,21 +249,12 @@ func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Ha
 
 // A ServiceOption configures how a Transcoder handles requests to a particular
 // RPC service. ServiceOptions can be passed to [NewService] and
-// [NewServiceWithSchema].
-//
-// A ServiceOption may also be passed to NewTranscoder, as a TranscoderOption. When
-// used this way, the option represents a default service option that will apply
-// to all services. Such default options may be overridden for a particular
-// service via an option passed to NewService or NewServiceWithSchema. Note that
-// any ServiceOption passed directly to NewTranscoder is considered a default,
-// regardless of the order. In other words, when it is passed as an option after
-// a WithServices option, it still applies as a default to those prior services.
+// [NewServiceWithSchema]. Default ServiceOptions, that apply to all services,
+// can be defined by passing a WithDefaultServiceOptions option to NewTranscoder.
+// This is useful when all or many services use the same options.
 type ServiceOption interface {
 	applyToService(*serviceOptions)
-	applyToTranscoder(*transcoderOptions)
 }
-
-var _ TranscoderOption = ServiceOption(nil)
 
 // WithTargetProtocols returns a service option indicating that the service handler
 // supports the listed protocols. By default, the handler is assumed to support
@@ -323,7 +341,7 @@ func WithMaxGetURLBytes(limit uint32) ServiceOption {
 }
 
 type transcoderOptions struct {
-	defaultServiceOptions serviceOptions
+	defaultServiceOptions []ServiceOption
 	rules                 []*annotations.HttpRule
 	unknownHandler        http.Handler
 	codecs                codecMap
@@ -351,10 +369,6 @@ type serviceOptionFunc func(*serviceOptions)
 
 func (f serviceOptionFunc) applyToService(opts *serviceOptions) {
 	f(opts)
-}
-
-func (f serviceOptionFunc) applyToTranscoder(opts *transcoderOptions) {
-	f(&opts.defaultServiceOptions)
 }
 
 type serviceOptions struct {

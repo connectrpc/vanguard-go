@@ -136,8 +136,8 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
+				WithTargetProtocols(ProtocolGRPC),
 			)},
-			WithTargetProtocols(ProtocolGRPC),
 		)
 		require.NoError(b, err)
 
@@ -178,10 +178,10 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+				WithNoTargetCompression(),
 			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
-			WithNoTargetCompression(),
 		)
 		require.NoError(b, err)
 
@@ -222,10 +222,10 @@ func BenchmarkServeHTTP(b *testing.B) {
 				benchHandler(b, rspMsgJSON, http.Header{
 					"Content-Type": []string{"application/json"},
 				}, nil),
+				WithTargetProtocols(ProtocolREST),
+				WithTargetCodecs(CodecJSON),
+				WithNoTargetCompression(),
 			)},
-			WithTargetProtocols(ProtocolREST),
-			WithTargetCodecs(CodecJSON),
-			WithNoTargetCompression(),
 		)
 		require.NoError(b, err)
 
@@ -266,10 +266,10 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+				WithNoTargetCompression(),
 			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
-			WithNoTargetCompression(),
 		)
 		require.NoError(b, err)
 
@@ -312,9 +312,9 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
 			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
 		)
 		require.NoError(b, err)
 
@@ -360,9 +360,9 @@ func BenchmarkServeHTTP(b *testing.B) {
 				}, http.Header{
 					"Grpc-Status": []string{"0"},
 				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
 			)},
-			WithTargetProtocols(ProtocolGRPC),
-			WithTargetCodecs(CodecProto),
 		)
 		require.NoError(b, err)
 

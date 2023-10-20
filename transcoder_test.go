@@ -472,12 +472,9 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 			name:          "default_svc_opts",
 			optsOnService: false,
 			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
-				opts := make([]TranscoderOption, 0, len(req.svcOpts)+2)
-				for _, svcOpt := range req.svcOpts {
-					opts = append(opts, svcOpt)
-				}
+				opts := append(make([]ServiceOption, 0, len(req.svcOpts)+1), req.svcOpts...)
 				opts = append(opts, WithMaxMessageBufferBytes(1024))
-				return NewTranscoder(svcs, opts...)
+				return NewTranscoder(svcs, WithDefaultServiceOptions(opts...))
 			},
 		},
 		{
@@ -485,7 +482,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 			optsOnService: true,
 			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
 				// svcs already have options defined on them
-				return NewTranscoder(svcs, WithMaxMessageBufferBytes(1024))
+				return NewTranscoder(svcs, WithDefaultServiceOptions(WithMaxMessageBufferBytes(1024)))
 			},
 		},
 	}
@@ -563,11 +560,12 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 		),
 	)
 
-	handlerWithDefaultSvcOpt, err := NewTranscoder(
-		[]*Service{NewService(testv1connect.LibraryServiceName, svcHandler)},
+	handlerWithDefaultSvcOpt, err := NewTranscoder([]*Service{NewService(
+		testv1connect.LibraryServiceName,
+		svcHandler,
 		WithMaxGetURLBytes(512),
 		WithNoTargetCompression(),
-	)
+	)})
 	require.NoError(t, err)
 	serverWithDefaultSvcOpt := httptest.NewServer(handlerWithDefaultSvcOpt)
 	disableCompression(serverWithDefaultSvcOpt)
