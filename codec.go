@@ -53,6 +53,7 @@ type Codec interface {
 // Connect protocol and that codec as POST requests.
 type StableCodec interface {
 	Codec
+
 	// MarshalAppendStable is the same as MarshalAppend except that the
 	// bytes produced must be deterministic and stable. Ideally, the
 	// produced bytes represent a *canonical* encoding. But this is not
@@ -70,6 +71,7 @@ type StableCodec interface {
 // an entire message. The extra methods are only used by the REST protocol.
 type RESTCodec interface {
 	Codec
+
 	// MarshalAppendField marshals just the given field of the given message to
 	// bytes, and appends it to the given base byte slice.
 	MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
@@ -81,9 +83,7 @@ type RESTCodec interface {
 // JSONCodec implements [Codec], [StableCodec], and [RESTCodec] for the JSON
 // format. It uses the [protojson] package for its implementation.
 type JSONCodec struct {
-	// MarshalOptions is used for marshalling data to JSON.
-	MarshalOptions protojson.MarshalOptions
-	// UnmarshalOptions is used for unmarshalling data from JSON.
+	MarshalOptions   protojson.MarshalOptions
 	UnmarshalOptions protojson.UnmarshalOptions
 }
 
