@@ -16,7 +16,6 @@ package vanguardgrpc
 
 import (
 	"fmt"
-	"net/http"
 
 	"connectrpc.com/vanguard"
 	"google.golang.org/grpc"
@@ -50,7 +49,7 @@ import (
 //			DiscardUnknown: true,
 //		},
 //	})
-func NewTranscoder(server *grpc.Server, opts ...vanguard.TranscoderOption) (http.Handler, error) {
+func NewTranscoder(server *grpc.Server, opts ...vanguard.TranscoderOption) (*vanguard.Transcoder, error) {
 	codecs := make([]string, 1, 2)
 	codecs[0] = vanguard.CodecProto
 	if encoding.GetCodec(vanguard.CodecJSON) != nil {
