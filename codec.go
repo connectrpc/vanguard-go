@@ -224,12 +224,8 @@ type ProtoCodec struct {
 
 var _ StableCodec = (*ProtoCodec)(nil)
 
-// NewProtoCodec is the default codec factory used for
-// the codec name "proto". The given resolver is used to
-// unmarshal extensions.
-//
-// The returned codec implements StableCodec, in addition to
-// Codec.
+// NewProtoCodec is the default codec factory used for the codec name "proto".
+// The given resolver is used to unmarshal extensions.
 func NewProtoCodec(res TypeResolver) *ProtoCodec {
 	return &ProtoCodec{
 		unmarshal: proto.UnmarshalOptions{Resolver: res},
