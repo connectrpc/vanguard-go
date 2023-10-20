@@ -445,10 +445,10 @@ func getBodyField(fields []protoreflect.FieldDescriptor, root protoreflect.Messa
 			continue
 		}
 		if i != len(fields)-1 {
-			// NB: This should not be possible since we validate the field types when
-			//     we build the fields path, when methods are configured with the mux.
-			//     This logic to construct an error is "just in case", like if we
-			//     introduce a bug such that the validation fails to catch this.
+			// This should not be possible since we validate the field types when
+			// we build the fields path, when methods are configured with the mux.
+			// This logic to construct an error is "just in case", like if we
+			// introduce a bug such that the validation fails to catch this.
 			var actual string
 			switch {
 			case field.IsList():

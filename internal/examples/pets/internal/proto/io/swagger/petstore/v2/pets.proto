@@ -67,9 +67,10 @@ message Tag {
 }
 
 enum Status {
-  // NB: These do not use standard naming practices in order to match
-  //     the JSON format of the Pet Store Open API schema, which uses
-  //     lower-case names for these constants.
+  // These do not use standard naming practices in order to match
+  // the JSON format of the Pet Store Open API schema, which uses
+  // lower-case names for these constants.
+
   unknown = 0;
   available = 1;
   pending = 2;

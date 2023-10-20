@@ -53,7 +53,7 @@ func ExampleNewTranscoder_restToConnect() {
 	}
 
 	// Create the server.
-	// (NB: This is a httptest.Server, but it could be any http.Server)
+	// (This is a httptest.Server, but it could be any http.Server)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 	client := server.Client()
@@ -113,7 +113,7 @@ func ExampleNewTranscoder_connectToREST() {
 	}
 
 	// Create the server.
-	// (NB: This is a httptest.Server, but it could be any http.Server)
+	// (This is a httptest.Server, but it could be any http.Server)
 	server := httptest.NewServer(handler)
 	defer server.Close()
 

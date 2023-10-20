@@ -643,7 +643,7 @@ func appendClientCompressionOptions(t *testing.T, opts []connect.ClientOption, c
 	switch compression {
 	case CompressionIdentity:
 		return append(opts,
-			// NB: nil factory functions *remove* support for gzip, which is otherwise on by default.
+			// nil factory functions *remove* support for gzip, which is otherwise on by default.
 			connect.WithAcceptCompression(
 				CompressionGzip, nil, nil,
 			),

@@ -641,9 +641,9 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 			// Sanity check that an RPC with a small request fails due to the above interceptor requiring POST
 			// (Just to confirm that the above function is indeed intercepting the request).
 			//
-			// NB: We don't need to reset the stream for the test interceptor to match the small request
-			//     because that interceptor won't see it. The other interceptor function should fail the
-			//     request before it gets that far.
+			// We don't need to reset the stream for the test interceptor to match the small request
+			// because that interceptor won't see it. The other interceptor function should fail the
+			// request before it gets that far.
 			req = connect.NewRequest(&testv1.GetBookRequest{Name: "foo/bar"})
 			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
 			_, err = client.GetBook(ctx, req)

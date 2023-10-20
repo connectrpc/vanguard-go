@@ -37,7 +37,7 @@ import (
 // a JSON codec should be registered before calling this function. If the server
 // program does not already register such a codec, it may do so via the following:
 //
-//	encoding.RegisterCodec(vanguardgrpc.NewGRPCCodec(&vanguard.JSONCodec{
+//	encoding.RegisterCodec(vanguardgrpc.NewCodec(&vanguard.JSONCodec{
 //		// These fields can be used to customize the serialization and
 //		// de-serialization behavior. The options presented below are
 //		// highly recommended.
@@ -69,11 +69,11 @@ func NewTranscoder(server *grpc.Server, opts ...vanguard.TranscoderOption) (*van
 	return vanguard.NewTranscoder(services, allOptions...)
 }
 
-// NewGRPCCodec returns a gRPC [encoding.Codec] that uses the given
+// NewCodec returns a gRPC [encoding.Codec] that uses the given
 // Vanguard Codec as its backing implementation. In particular, this
 // can be combined with [vanguard.JSONCodec] to easily create a gRPC
 // Codec to support the "json" message format.
-func NewGRPCCodec(codec vanguard.Codec) encoding.Codec {
+func NewCodec(codec vanguard.Codec) encoding.Codec {
 	return &grpcCodec{codec: codec}
 }
 

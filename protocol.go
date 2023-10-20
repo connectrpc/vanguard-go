@@ -33,9 +33,9 @@ const envelopeLen = 5
 type Protocol int
 
 const (
-	// NB: The ordinal value of the protocol (other than the zero value) reflects
-	//     the preference order. So Connect is the highest preferred protocol,
-	//     then gRPC, etc.
+	// The ordinal value of the protocol (other than the zero value) reflects
+	// the preference order. So Connect is the highest preferred protocol,
+	// then gRPC, etc.
 
 	// protocolUnknown is not a valid value. Since it is the zero value, this
 	// requires that all Protocol values must be explicitly initialized.

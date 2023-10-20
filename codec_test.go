@@ -429,10 +429,10 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 		}
 	}
 
-	// NB: We intentionally don't have a case with the default EmitUnpopulated option
-	//     because then the expected JSON values for the message cases would be huge
-	//     and hard to maintain. That case shouldn't actually impact the rest of the
-	//     logic so should be fine to omit.
+	// We intentionally don't have a case with the default EmitUnpopulated option
+	// because then the expected JSON values for the message cases would be huge
+	// and hard to maintain. That case shouldn't actually impact the rest of the
+	// logic so should be fine to omit.
 	marshalOpts := []struct {
 		name string
 		opts protojson.MarshalOptions

@@ -131,10 +131,10 @@ func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field prot
 	msgReflect := msg.ProtoReflect()
 	if !msgReflect.Has(field) {
 		if field.HasPresence() {
-			// NB: At this point in a request flow, we should have already used the message
-			//     to populate the URI path and query string, so it should be safe to mutate
-			//     it. In the response flow, nothing looks at the message except the
-			//     marshalling step. So, again, mutation should be okay.
+			// At this point in a request flow, we should have already used the message
+			// to populate the URI path and query string, so it should be safe to mutate
+			// it. In the response flow, nothing looks at the message except the
+			// marshalling step. So, again, mutation should be okay.
 			msgReflect.Set(field, msgReflect.Get(field))
 		} else {
 			// Setting the field (like above) won't help due to implicit presence.
@@ -143,9 +143,9 @@ func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field prot
 		}
 	}
 
-	// NB: We could possibly manually perform the marshaling, but that is
-	//     a decent bit of protojson to reproduce (lot of new code to test
-	//     and to maintain) and risks inadvertently diverging from protojson.
+	// We could possibly manually perform the marshaling, but that is
+	// a decent bit of protojson to reproduce (lot of new code to test
+	// and to maintain) and risks inadvertently diverging from protojson.
 	wholeMessage, err := opts.MarshalAppend(base, msg)
 	if err != nil {
 		return nil, err
@@ -195,9 +195,9 @@ func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoref
 	buf.WriteByte(':')
 	buf.Write(data)
 	buf.WriteByte('}')
-	// NB: We could possibly manually perform the unmarshaling, but that is
-	//     a decent bit of protojson to reproduce (lot of new code to test
-	//     and to maintain) and risks inadvertently diverging from protojson.
+	// We could possibly manually perform the unmarshaling, but that is
+	// a decent bit of protojson to reproduce (lot of new code to test
+	// and to maintain) and risks inadvertently diverging from protojson.
 	return j.Unmarshal(buf.Bytes(), msg)
 }
 
@@ -253,9 +253,9 @@ func (p *ProtoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 }
 
 func jsonStabilize(data []byte) ([]byte, error) {
-	// NB: Because json.Compact only removes whitespace, never elongating data, it is
-	//     safe to use the same backing slice as source and destination. This is safe
-	//     for the same reason that copy is safe even when the two slices overlap.
+	// Because json.Compact only removes whitespace, never elongating data, it is
+	// safe to use the same backing slice as source and destination. This is safe
+	// for the same reason that copy is safe even when the two slices overlap.
 	buf := bytes.NewBuffer(data[:0])
 	if err := json.Compact(buf, data); err != nil {
 		return nil, err

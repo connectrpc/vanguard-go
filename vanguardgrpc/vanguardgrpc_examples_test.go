@@ -37,7 +37,7 @@ func ExampleNewTranscoder_connectToGRPC() {
 	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
 	// Configure gRPC servers to support JSON.
-	encoding.RegisterCodec(vanguardgrpc.NewGRPCCodec(&vanguard.JSONCodec{
+	encoding.RegisterCodec(vanguardgrpc.NewCodec(&vanguard.JSONCodec{
 		MarshalOptions:   protojson.MarshalOptions{EmitUnpopulated: true},
 		UnmarshalOptions: protojson.UnmarshalOptions{DiscardUnknown: true},
 	}))
@@ -55,7 +55,7 @@ func ExampleNewTranscoder_connectToGRPC() {
 	}
 
 	// Create the server.
-	// (NB: This is a httptest.Server, but it could be any http.Server)
+	// (This is a httptest.Server, but it could be any http.Server)
 	server := httptest.NewUnstartedServer(handler)
 	server.EnableHTTP2 = true // HTTP/2 required for gRPC
 	server.StartTLS()

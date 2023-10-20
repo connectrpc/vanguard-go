@@ -19,12 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
-	"strings"
-	"unicode/utf8"
 
 	"buf.build/gen/go/connectrpc/eliza/grpc/go/connectrpc/eliza/v1/elizav1grpc"
 	elizav1 "buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
@@ -54,9 +51,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// NB: We use the h2c package in order to support HTTP/2 without TLS,
-	//     so we can handle gRPC requests, which requires HTTP/2, in
-	//     addition to Connect and gRPC-Web (which work with HTTP 1.1).
+	// We use the h2c package in order to support HTTP/2 without TLS,
+	// so we can handle gRPC requests, which requires HTTP/2, in
+	// addition to Connect and gRPC-Web (which work with HTTP 1.1).
 	err = http.Serve(listener, h2c.NewHandler(handler, &http2.Server{}))
 	if !errors.Is(err, http.ErrServerClosed) {
 		_, _ = fmt.Fprintln(os.Stderr, err)
@@ -68,27 +65,9 @@ type elizaImpl struct {
 	elizav1grpc.UnimplementedElizaServiceServer
 }
 
-func (e elizaImpl) Say(_ context.Context, request *elizav1.SayRequest) (*elizav1.SayResponse, error) {
-	sentence := strings.TrimSpace(strings.ReplaceAll(request.Sentence, "\n", " "))
-	if len(sentence) == 0 {
-		return &elizav1.SayResponse{Sentence: "Can you say that again? I didn't understand."}, nil
-	}
-	switch rand.Intn(4) {
-	case 0:
-		return &elizav1.SayResponse{Sentence: "Fascinating. Tell me more."}, nil
-	case 1:
-		return &elizav1.SayResponse{Sentence: "And how does that make you feel?"}, nil
-	case 2:
-		return &elizav1.SayResponse{Sentence: "Ah, so you say. But what would you say if I told you that you were mistaken?"}, nil
-	}
-	if strings.Contains(sentence, "\"") {
-		return &elizav1.SayResponse{Sentence: "Says who?"}, nil
-	}
-	r, _ := utf8.DecodeLastRuneInString(sentence)
-	if !strings.ContainsRune(".!?", r) {
-		sentence += "."
-	}
-	return &elizav1.SayResponse{Sentence: "You say, \"" + sentence + "\" Are you sure about that?"}, nil
+func (e elizaImpl) Say(_ context.Context, _ *elizav1.SayRequest) (*elizav1.SayResponse, error) {
+	// Our example therapist isn't very sophisticated.
+	return &elizav1.SayResponse{Sentence: "Tell me more about that."}, nil
 }
 
 func (e elizaImpl) Converse(server elizav1grpc.ElizaService_ConverseServer) error {
@@ -105,24 +84,13 @@ func (e elizaImpl) Converse(server elizav1grpc.ElizaService_ConverseServer) erro
 	}
 }
 
-func (e elizaImpl) Introduce(request *elizav1.IntroduceRequest, server elizav1grpc.ElizaService_IntroduceServer) error {
-	name := strings.TrimRight(strings.TrimSpace(strings.ReplaceAll(request.Name, "\n", " ")), ".!?,:")
+func (e elizaImpl) Introduce(_ *elizav1.IntroduceRequest, server elizav1grpc.ElizaService_IntroduceServer) error {
 	if err := server.Send(&elizav1.IntroduceResponse{
-		Sentence: "Hello, " + name + "!",
-	}); err != nil {
-		return err
-	}
-	if err := server.Send(&elizav1.IntroduceResponse{
-		Sentence: "My name is Dr. Eliza.",
-	}); err != nil {
-		return err
-	}
-	if err := server.Send(&elizav1.IntroduceResponse{
-		Sentence: "Please tell me a little about yourself.",
+		Sentence: "Hello",
 	}); err != nil {
 		return err
 	}
 	return server.Send(&elizav1.IntroduceResponse{
-		Sentence: "And then tell me about your day and how you are feeling.",
+		Sentence: "How are you today?",
 	})
 }
