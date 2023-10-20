@@ -49,7 +49,7 @@ type Codec interface {
 // This is used to encode messages that end up in the URL query string,
 // for the Connect protocol when unary methods use the HTTP GET method.
 // If the codec in use does not implement StableCodec then HTTP GET
-// methods will not be used; a Mux will send all unary RPCs that use the
+// methods will not be used; a Transcoder will send all unary RPCs that use the
 // Connect protocol and that codec as POST requests.
 type StableCodec interface {
 	Codec
