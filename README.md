@@ -6,7 +6,7 @@
 [![Report Card](https://goreportcard.com/badge/connectrpc.com/vanguard)](https://goreportcard.com/report/github.com/connectrpc/vanguard-go)
 [![GoDoc](https://pkg.go.dev/badge/connectrpc.com/vanguard.svg)](https://pkg.go.dev/github.com/connectrpc/vanguard-go)
 
-Vanguard is a powerful  library for Go `net/http` servers that enables seamless
+Vanguard is a powerful library for Go `net/http` servers that enables seamless
 transcoding between REST and RPC protocols. Whether you need to bridge the gap
 between gRPC, gRPC-Web, Connect, or REST, Vanguard has got you covered. With support for
 Google's [HTTP transcoding options](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L44),
