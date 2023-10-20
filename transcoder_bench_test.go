@@ -31,6 +31,7 @@ import (
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -41,7 +42,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 	// This benchmark is intended to measure the overhead of the
 	// ServeHTTP method of the server. It does not measure the
 	// overhead of the underlying HTTP server.
-	jsonCodec := DefaultJSONCodec(protoregistry.GlobalTypes)
+	jsonCodec := NewJSONCodec(protoregistry.GlobalTypes)
 
 	compress := func(b []byte) []byte {
 		var buf bytes.Buffer
@@ -125,20 +126,20 @@ func BenchmarkServeHTTP(b *testing.B) {
 		reqGRPCBody := envelopePayload(1, reqMsgProtoComp)
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
-		mux := &Mux{}
-		if err := mux.RegisterServiceByName(
-			benchHandler(b, rspGRPCBody, http.Header{
-				"Grpc-Encoding": []string{"gzip"},
-				"Content-Type":  []string{"application/grpc+proto"},
-				"Trailer":       []string{"Grpc-Status, Grpc-Message"},
-			}, http.Header{
-				"Grpc-Status": []string{"0"},
-			}),
-			testv1connect.LibraryServiceName,
-			WithProtocols(ProtocolGRPC),
-		); err != nil {
-			b.Fatal(err)
-		}
+		handler, err := NewTranscoder(
+			[]*Service{NewService(
+				testv1connect.LibraryServiceName,
+				benchHandler(b, rspGRPCBody, http.Header{
+					"Grpc-Encoding": []string{"gzip"},
+					"Content-Type":  []string{"application/grpc+proto"},
+					"Trailer":       []string{"Grpc-Status, Grpc-Message"},
+				}, http.Header{
+					"Grpc-Status": []string{"0"},
+				}),
+				WithTargetProtocols(ProtocolGRPC),
+			)},
+		)
+		require.NoError(b, err)
 
 		req := httptest.NewRequest(http.MethodPost, testv1connect.LibraryServiceCreateBookProcedure, nil)
 		req.ProtoMajor = 2
@@ -156,7 +157,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
 				rsp := httptest.NewRecorder()
 
-				mux.ServeHTTP(rsp, req)
+				handler.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "0", rsp.Header().Get("Grpc-Status"), "response status")
 				assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
@@ -168,21 +169,22 @@ func BenchmarkServeHTTP(b *testing.B) {
 	b.Run("REST_json/gRPC_proto/Convert", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
-		mux := &Mux{}
-		if err := mux.RegisterServiceByName(
-			benchHandler(b, rspGRPCBody, http.Header{
-				"Content-Type": []string{"application/grpc+proto"},
-				"Trailer":      []string{"Grpc-Status, Grpc-Message"},
-			}, http.Header{
-				"Grpc-Status": []string{"0"},
-			}),
-			testv1connect.LibraryServiceName,
-			WithProtocols(ProtocolGRPC),
-			WithCodecs(CodecProto),
-			WithNoCompression(),
-		); err != nil {
-			b.Fatal(err)
-		}
+		handler, err := NewTranscoder(
+			[]*Service{NewService(
+				testv1connect.LibraryServiceName,
+				benchHandler(b, rspGRPCBody, http.Header{
+					"Content-Type": []string{"application/grpc+proto"},
+					"Trailer":      []string{"Grpc-Status, Grpc-Message"},
+				}, http.Header{
+					"Grpc-Status": []string{"0"},
+				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+				WithNoTargetCompression(),
+			)},
+		)
+		require.NoError(b, err)
+
 		req := httptest.NewRequest(http.MethodPost, reqRestURL, bytes.NewReader(reqMsgBookJSON))
 		req.Header.Set("Accept-Encoding", CompressionIdentity)
 		req.Header.Set("Content-Encoding", CompressionIdentity)
@@ -198,7 +200,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqMsgBookJSON))
 				rsp := httptest.NewRecorder()
 
-				mux.ServeHTTP(rsp, req)
+				handler.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 				data := rsp.Body.Bytes()
@@ -214,18 +216,19 @@ func BenchmarkServeHTTP(b *testing.B) {
 		reqGRPCBody := envelopePayload(0, reqMsgProto)
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
-		mux := &Mux{}
-		if err := mux.RegisterServiceByName(
-			benchHandler(b, rspMsgJSON, http.Header{
-				"Content-Type": []string{"application/json"},
-			}, nil),
-			testv1connect.LibraryServiceName,
-			WithProtocols(ProtocolREST),
-			WithCodecs(CodecJSON),
-			WithNoCompression(),
-		); err != nil {
-			b.Fatal(err)
-		}
+		handler, err := NewTranscoder(
+			[]*Service{NewService(
+				testv1connect.LibraryServiceName,
+				benchHandler(b, rspMsgJSON, http.Header{
+					"Content-Type": []string{"application/json"},
+				}, nil),
+				WithTargetProtocols(ProtocolREST),
+				WithTargetCodecs(CodecJSON),
+				WithNoTargetCompression(),
+			)},
+		)
+		require.NoError(b, err)
+
 		req := httptest.NewRequest(http.MethodPost, testv1connect.LibraryServiceCreateBookProcedure, nil)
 		req.ProtoMajor = 2
 		req.ProtoMinor = 0
@@ -242,7 +245,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqGRPCBody))
 				rsp := httptest.NewRecorder()
 
-				mux.ServeHTTP(rsp, req)
+				handler.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/grpc+proto", rsp.Header().Get("Content-Type"), "response content type")
 				assert.Equal(b, rspGRPCBody, rsp.Body.Bytes(), "response body")
@@ -254,21 +257,22 @@ func BenchmarkServeHTTP(b *testing.B) {
 	b.Run("connect_json/gRPC_proto/Convert", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(0, rspMsgProto)
 
-		mux := &Mux{}
-		if err := mux.RegisterServiceByName(
-			benchHandler(b, rspGRPCBody, http.Header{
-				"Content-Type": []string{"application/grpc+proto"},
-				"Trailer":      []string{"Grpc-Status, Grpc-Message"},
-			}, http.Header{
-				"Grpc-Status": []string{"0"},
-			}),
-			testv1connect.LibraryServiceName,
-			WithProtocols(ProtocolGRPC),
-			WithCodecs(CodecProto),
-			WithNoCompression(),
-		); err != nil {
-			b.Fatal(err)
-		}
+		handler, err := NewTranscoder(
+			[]*Service{NewService(
+				testv1connect.LibraryServiceName,
+				benchHandler(b, rspGRPCBody, http.Header{
+					"Content-Type": []string{"application/grpc+proto"},
+					"Trailer":      []string{"Grpc-Status, Grpc-Message"},
+				}, http.Header{
+					"Grpc-Status": []string{"0"},
+				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+				WithNoTargetCompression(),
+			)},
+		)
+		require.NoError(b, err)
+
 		req := httptest.NewRequest(http.MethodPost, testv1connect.LibraryServiceCreateBookProcedure, nil)
 		req.ProtoMajor = 2
 		req.ProtoMinor = 0
@@ -284,7 +288,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			req.Body = io.NopCloser(bytes.NewReader(reqMsgJSON))
 			rsp := httptest.NewRecorder()
 
-			mux.ServeHTTP(rsp, req)
+			handler.ServeHTTP(rsp, req)
 			assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 			assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 			data := rsp.Body.Bytes()
@@ -298,21 +302,22 @@ func BenchmarkServeHTTP(b *testing.B) {
 	b.Run("connect_proto_gzip/gRPC_proto_gzip/Translate", func(b *testing.B) {
 		rspGRPCBody := envelopePayload(1, rspMsgProtoComp)
 
-		mux := &Mux{}
-		if err := mux.RegisterServiceByName(
-			benchHandler(b, rspGRPCBody, http.Header{
-				"Content-Type":  []string{"application/grpc+proto"},
-				"Trailer":       []string{"Grpc-Status, Grpc-Message"},
-				"Grpc-Encoding": []string{"gzip"},
-			}, http.Header{
-				"Grpc-Status": []string{"0"},
-			}),
-			testv1connect.LibraryServiceName,
-			WithProtocols(ProtocolGRPC),
-			WithCodecs(CodecProto),
-		); err != nil {
-			b.Fatal(err)
-		}
+		handler, err := NewTranscoder(
+			[]*Service{NewService(
+				testv1connect.LibraryServiceName,
+				benchHandler(b, rspGRPCBody, http.Header{
+					"Content-Type":  []string{"application/grpc+proto"},
+					"Trailer":       []string{"Grpc-Status, Grpc-Message"},
+					"Grpc-Encoding": []string{"gzip"},
+				}, http.Header{
+					"Grpc-Status": []string{"0"},
+				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+			)},
+		)
+		require.NoError(b, err)
+
 		req := httptest.NewRequest(http.MethodPost, testv1connect.LibraryServiceCreateBookProcedure, nil)
 		req.ProtoMajor = 2
 		req.ProtoMinor = 0
@@ -331,7 +336,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(reqMsgProtoComp))
 				rsp := httptest.NewRecorder()
 
-				mux.ServeHTTP(rsp, req)
+				handler.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/proto", rsp.Header().Get("Content-Type"), "response content type")
 				assert.Equal(b, rspMsgProtoComp, rsp.Body.Bytes(), "response body")
@@ -345,21 +350,22 @@ func BenchmarkServeHTTP(b *testing.B) {
 		_, _ = rand.Read(largePayload)
 		rspGRPC := envelopePayload(0, marshalProto(&emptypb.Empty{}))
 
-		mux := &Mux{}
-		if err := mux.RegisterServiceByName(
-			benchHandler(b, rspGRPC, http.Header{
-				"Content-Type":  []string{"application/grpc+proto"},
-				"Trailer":       []string{"Grpc-Status, Grpc-Message"},
-				"Grpc-Encoding": []string{"gzip"},
-			}, http.Header{
-				"Grpc-Status": []string{"0"},
-			}),
-			testv1connect.ContentServiceName,
-			WithProtocols(ProtocolGRPC),
-			WithCodecs(CodecProto),
-		); err != nil {
-			b.Fatal(err)
-		}
+		handler, err := NewTranscoder(
+			[]*Service{NewService(
+				testv1connect.ContentServiceName,
+				benchHandler(b, rspGRPC, http.Header{
+					"Content-Type":  []string{"application/grpc+proto"},
+					"Trailer":       []string{"Grpc-Status, Grpc-Message"},
+					"Grpc-Encoding": []string{"gzip"},
+				}, http.Header{
+					"Grpc-Status": []string{"0"},
+				}),
+				WithTargetProtocols(ProtocolGRPC),
+				WithTargetCodecs(CodecProto),
+			)},
+		)
+		require.NoError(b, err)
+
 		req := httptest.NewRequest(http.MethodPost, "/file.bin:upload", nil)
 		req.Header.Set("Content-Type", "application/octet-stream")
 		req.Header.Set("X-Server-Timeout", "1000")
@@ -373,7 +379,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				req.Body = io.NopCloser(bytes.NewReader(largePayload))
 				rsp := httptest.NewRecorder()
 
-				mux.ServeHTTP(rsp, req)
+				handler.ServeHTTP(rsp, req)
 				assert.Equal(b, http.StatusOK, rsp.Code, "response code")
 				assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 				assert.Equal(b, "{}", rsp.Body.String(), "response body")

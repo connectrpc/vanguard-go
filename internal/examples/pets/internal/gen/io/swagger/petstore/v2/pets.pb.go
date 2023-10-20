@@ -39,10 +39,6 @@ const (
 type Status int32
 
 const (
-	// NB: These do not use standard naming practices in order to match
-	//
-	//	the JSON format of the Pet Store Open API schema, which uses
-	//	lower-case names for these constants.
 	Status_unknown   Status = 0
 	Status_available Status = 1
 	Status_pending   Status = 2

@@ -66,7 +66,7 @@ func main() {
 		}
 
 		resp, err := client.Say(context.Background(), connect.NewRequest(&elizav1.SayRequest{Sentence: str}))
-		if err := stream.Err(); err != nil {
+		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

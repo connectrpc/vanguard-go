@@ -15,11 +15,14 @@
 package vanguard
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -38,26 +41,640 @@ const (
 	testCompressedDataString = "nop qrs tuv" // rot13 of above
 )
 
-func TestHandler_Errors(t *testing.T) {
+func TestTranscoder_BufferTooLargeFails(t *testing.T) {
+	t.Parallel()
+
+	// Cases where we buffer:
+	// 1. Using envelopingReader for request (same codec and compression, no body prep) where
+	//    client protocol is not enveloped, request does not include content-length header,
+	//    and server protocol is enveloped. In this case, we must buffer the request to measure
+	//    its size, so we can create an envelope to send to the server.
+	// 2. Similar to above, but reversed roles, using envelopingWriter for response.
+	// 3. Using envelopingWriter for response, but with gRPC-Web or Connect streaming protocols,
+	//    where we must buffer the final special message.
+	// 4. Using transformingReader for request (different codec and/or compression or body prep).
+	//    We must buffer request messages in all cases.
+	// 5. Similar to above, but reversed roles, using transformingWriter for response. This
+	//    includes buffering of final special message for gRPC-Web and Connect streaming protocols.
+	// 6. Using errorWriter for response (failed unary RPC in Connect or REST protocol). The
+	//    entire body must be buffered to construct the RPC error.
+
+	var interceptor testInterceptor
+	serveMux := http.NewServeMux()
+	serveMux.Handle(testv1connect.NewLibraryServiceHandler(
+		testv1connect.UnimplementedLibraryServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	))
+	serveMux.Handle(testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	))
+
+	type testClients struct {
+		contentClient testv1connect.ContentServiceClient
+		libClient     testv1connect.LibraryServiceClient
+	}
+	type testRequest struct {
+		name          string
+		clientOptions []connect.ClientOption
+		svcOpts       []ServiceOption // Does not need to include WithMaxMessageBufferBytes
+		invoke        func(testClients, http.Header, []proto.Message) (http.Header, []proto.Message, http.Header, error)
+		stream        testStream
+	}
+	ctx := context.Background()
+	testCases := []struct {
+		name        string
+		expectation func(*testing.T, http.ResponseWriter, *http.Request)
+		reqs        []testRequest
+	}{
+		{
+			name: "enveloping_reader",
+			expectation: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				_, ok := req.Body.(*envelopingReader)
+				assert.True(t, ok, "request body should be *envelopingReader")
+			},
+			reqs: []testRequest{
+				{
+					// Connect unary request; gRPC server
+					name:    "must_buffer_request",
+					svcOpts: []ServiceOption{WithTargetProtocols(ProtocolGRPC)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{{in: &testMsgIn{
+							msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 1000)},
+							err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+						}}},
+					},
+				},
+			},
+		},
+		{
+			name: "enveloping_writer",
+			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				rw, ok := rsp.(*responseWriter)
+				require.True(t, ok, "response writer should be *responseWriter")
+				_, ok = rw.w.(*envelopingWriter)
+				assert.True(t, ok, "response body should be *envelopingWriter")
+			},
+			reqs: []testRequest{
+				{
+					// gRPC unary request; Connect server
+					name:          "must_buffer_response",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: strings.Repeat("foo/", 1000)},
+							}},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					// gRPC-Web response with trailers too large
+					name:    "buffer_grpcweb_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: "foo/bar"},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					// gRPC-Web response with error too large
+					name:    "buffer_grpcweb_endstream_error",
+					svcOpts: []ServiceOption{WithTargetProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
+							}},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:          "buffer_connect_endstream_trailers",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:          "buffer_connect_endstream_trailers",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
+							}},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+			},
+		},
+		{
+			name: "transforming_reader",
+			expectation: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				_, ok := req.Body.(*transformingReader)
+				assert.True(t, ok, "request body should be *transformingReader")
+			},
+			reqs: []testRequest{
+				{
+					// Proto request transformed to JSON
+					name:    "must_buffer_request_unary",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{{in: &testMsgIn{
+							msg: &testv1.GetBookRequest{Name: strings.Repeat("foo/", 1000)},
+							err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+						}}},
+					},
+				},
+				{
+					name:    "must_buffer_request_stream",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromClientStream(ctx, clients.contentClient.Upload, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceUploadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.UploadRequest{Filename: "foo/bar"},
+							}},
+							{in: &testMsgIn{
+								msg: &testv1.UploadRequest{File: &httpbody.HttpBody{Data: bytes.Repeat([]byte{0, 1, 2, 3}, 1000)}},
+								err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+							}},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "transforming_writer",
+			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				rw, ok := rsp.(*responseWriter)
+				require.True(t, ok, "response writer should be *responseWriter")
+				_, ok = rw.w.(*transformingWriter)
+				assert.True(t, ok, "response body should be *transformingWriter")
+			},
+			reqs: []testRequest{
+				{
+					// Proto response transformed to JSON
+					name:    "must_buffer_response_unary",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: strings.Repeat("foo/", 1000)},
+							}},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					name:    "must_buffer_response_stream",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{Data: []byte{0, 1, 2, 3}}},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{Data: bytes.Repeat([]byte{0, 1, 2, 3}, 1000)}},
+								err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+							}},
+						},
+					},
+				},
+				{
+					// gRPC-Web response with trailers too large
+					name:    "buffer_grpcweb_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.Book{Name: "foo/bar"},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					// gRPC-Web response with error too large
+					name:    "buffer_grpcweb_endstream_error",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolGRPCWeb)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
+							}},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:    "buffer_connect_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+						},
+						rspTrailer: map[string][]string{
+							"Big-Trailer": {strings.Repeat("Blah-", 1000)},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+				{
+					// Connect streaming response with error too large
+					name:    "buffer_connect_endstream_trailers",
+					svcOpts: []ServiceOption{WithTargetCodecs(CodecJSON), WithTargetProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromServerStream(ctx, clients.contentClient.Download, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.ContentServiceDownloadProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.DownloadRequest{Filename: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								msg: &testv1.DownloadResponse{File: &httpbody.HttpBody{ContentType: "foo/bar"}},
+							}},
+							{out: &testMsgOut{
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
+							}},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+			},
+		},
+		{
+			name: "error_writer",
+			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+				t.Helper()
+				rw, ok := rsp.(*responseWriter)
+				require.True(t, ok, "response writer should be *responseWriter")
+				_, ok = rw.w.(*errorWriter)
+				assert.True(t, ok, "response body should be *errorWriter")
+			},
+			reqs: []testRequest{
+				{
+					// gRPC request; Connect unary response with error
+					name:          "must_buffer_error_response",
+					clientOptions: []connect.ClientOption{connect.WithGRPC()},
+					svcOpts:       []ServiceOption{WithTargetProtocols(ProtocolConnect)},
+					invoke: func(clients testClients, hdrs http.Header, msgs []proto.Message) (http.Header, []proto.Message, http.Header, error) {
+						return outputFromUnary(ctx, clients.libClient.GetBook, hdrs, msgs)
+					},
+					stream: testStream{
+						method: testv1connect.LibraryServiceGetBookProcedure,
+						msgs: []testMsg{
+							{in: &testMsgIn{
+								msg: &testv1.GetBookRequest{Name: "foo/bar"},
+							}},
+							{out: &testMsgOut{
+								err: newConnectError(connect.CodeDataLoss, strings.Repeat("foo/", 1000)),
+							}},
+						},
+						err: newConnectError(connect.CodeResourceExhausted, "buffer limit exceeded"),
+					},
+				},
+			},
+		},
+	}
+	muxTestModes := []struct {
+		name          string
+		optsOnService bool
+		makeMux       func(*testRequest, []*Service) (http.Handler, error)
+	}{
+		{
+			name:          "default_svc_opts",
+			optsOnService: false,
+			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
+				opts := append(make([]ServiceOption, 0, len(req.svcOpts)+1), req.svcOpts...)
+				opts = append(opts, WithMaxMessageBufferBytes(1024))
+				return NewTranscoder(svcs, WithDefaultServiceOptions(opts...))
+			},
+		},
+		{
+			name:          "per_svc_options",
+			optsOnService: true,
+			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
+				// svcs already have options defined on them
+				return NewTranscoder(svcs, WithDefaultServiceOptions(WithMaxMessageBufferBytes(1024)))
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			for i := range testCase.reqs {
+				testReq := &testCase.reqs[i]
+				t.Run(testReq.name, func(t *testing.T) {
+					t.Parallel()
+					for _, mode := range muxTestModes {
+						mode := mode
+						t.Run(mode.name, func(t *testing.T) {
+							t.Parallel()
+
+							var expectationChecked atomic.Bool
+							rpcHandler := http.HandlerFunc(func(respWriter http.ResponseWriter, req *http.Request) {
+								serveMux.ServeHTTP(respWriter, req)
+								defer expectationChecked.Store(true)
+								testCase.expectation(t, respWriter, req)
+							})
+
+							var svcOpts []ServiceOption
+							if mode.optsOnService {
+								svcOpts = testReq.svcOpts
+							}
+							handler, err := mode.makeMux(testReq, []*Service{
+								NewService(testv1connect.LibraryServiceName, rpcHandler, svcOpts...),
+								NewService(testv1connect.ContentServiceName, rpcHandler, svcOpts...),
+							})
+							require.NoError(t, err)
+							server := httptest.NewUnstartedServer(handler)
+							server.EnableHTTP2 = true
+							server.StartTLS()
+							disableCompression(server)
+							t.Cleanup(server.Close)
+
+							var clients testClients
+							// remove support for gzip, so we don't have to worry about compression
+							// getting in the way of our too-large test payloads
+							opts := make([]connect.ClientOption, 0, len(testReq.clientOptions)+1)
+							opts = append(opts, testReq.clientOptions...)
+							opts = append(opts, connect.WithAcceptCompression("gzip", nil, nil))
+							clients.libClient = testv1connect.NewLibraryServiceClient(server.Client(), server.URL, opts...)
+							clients.contentClient = testv1connect.NewContentServiceClient(server.Client(), server.URL, opts...)
+
+							runRPCTestCase(t, &interceptor, clients, testReq.invoke, testReq.stream)
+							assert.True(t, expectationChecked.Load())
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
+	t.Parallel()
+
+	var interceptor testInterceptor
+	_, svcHandler := testv1connect.NewLibraryServiceHandler(
+		testv1connect.UnimplementedLibraryServiceHandler{},
+		connect.WithInterceptors(
+			connect.UnaryInterceptorFunc(func(next connect.UnaryFunc) connect.UnaryFunc {
+				return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+					if req.HTTPMethod() != http.MethodPost {
+						return nil, fmt.Errorf("server should only see POST; instead got %s", req.HTTPMethod())
+					}
+					return next(ctx, req)
+				}
+			}),
+			&interceptor,
+		),
+	)
+
+	handlerWithDefaultSvcOpt, err := NewTranscoder([]*Service{NewService(
+		testv1connect.LibraryServiceName,
+		svcHandler,
+		WithMaxGetURLBytes(512),
+		WithNoTargetCompression(),
+	)})
+	require.NoError(t, err)
+	serverWithDefaultSvcOpt := httptest.NewServer(handlerWithDefaultSvcOpt)
+	disableCompression(serverWithDefaultSvcOpt)
+	t.Cleanup(serverWithDefaultSvcOpt.Close)
+
+	handlerWithPerSvcOpt, err := NewTranscoder([]*Service{
+		NewService(
+			testv1connect.LibraryServiceName, svcHandler,
+			WithMaxGetURLBytes(512),
+			WithNoTargetCompression(),
+		),
+	})
+	require.NoError(t, err)
+	serverWithPerSvcOpt := httptest.NewServer(handlerWithPerSvcOpt)
+	disableCompression(serverWithPerSvcOpt)
+	t.Cleanup(serverWithPerSvcOpt.Close)
+
+	testCases := []struct {
+		name   string
+		server *httptest.Server
+	}{
+		{
+			name:   "with_default_svc_option",
+			server: serverWithDefaultSvcOpt,
+		},
+		{
+			name:   "with_per_svc_option",
+			server: serverWithPerSvcOpt,
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			largeRequest := &testv1.GetBookRequest{Name: strings.Repeat("foo/", 300) + "1"}
+			interceptor.set(t, testStream{
+				method: testv1connect.LibraryServiceGetBookProcedure,
+				msgs: []testMsg{
+					{in: &testMsgIn{
+						msg: largeRequest,
+					}},
+					{out: &testMsgOut{
+						msg: &testv1.Book{Name: strings.Repeat("foo/", 300) + "1"},
+					}},
+				},
+			})
+			defer interceptor.del(t)
+
+			ctx, cancel := context.WithTimeout(context.Background(), defaultTestTimeout)
+			defer cancel()
+
+			client := testv1connect.NewLibraryServiceClient(
+				testCase.server.Client(),
+				testCase.server.URL,
+				connect.WithHTTPGet(),
+				connect.WithHTTPGetMaxURLSize(512, false),
+				connect.WithSendGzip(),
+			)
+			req := connect.NewRequest(largeRequest)
+			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
+			_, err := client.GetBook(ctx, req)
+			// No error means it made through above interceptor unscathed
+			// (so server handler got a POST).
+			require.NoError(t, err)
+			// But the client should have sent a GET, and the middleware should
+			// have changed to POST because the request URL was too large.
+			assert.Equal(t, http.MethodGet, req.HTTPMethod())
+
+			// Sanity check that an RPC with a small request fails due to the above interceptor requiring POST
+			// (Just to confirm that the above function is indeed intercepting the request).
+			//
+			// We don't need to reset the stream for the test interceptor to match the small request
+			// because that interceptor won't see it. The other interceptor function should fail the
+			// request before it gets that far.
+			req = connect.NewRequest(&testv1.GetBookRequest{Name: "foo/bar"})
+			req.Header().Set("Test", t.Name()) // must set this for interceptor to work
+			_, err = client.GetBook(ctx, req)
+			require.ErrorContains(t, err, "server should only see POST; instead got GET")
+		})
+	}
+}
+
+func TestTranscoder_Errors(t *testing.T) {
 	t.Parallel()
 	// These tests exercise error-handling in the way the operation is initialized.
 	// These tests should not reach the underlying handler or any particular protocol
 	// handler implementation (other than extracting request metadata).
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "nope", http.StatusTeapot)
 	})
-	grpcMux := &Mux{Protocols: []Protocol{ProtocolGRPC, ProtocolGRPCWeb}}
-	connectMux := &Mux{Protocols: []Protocol{ProtocolConnect}}
-	allMux := &Mux{} // supports all three
-	for _, mux := range []*Mux{grpcMux, connectMux, allMux} {
-		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.LibraryServiceName))
-		require.NoError(t, mux.RegisterServiceByName(handler, testv1connect.ContentServiceName))
+	services := []*Service{
+		NewService(testv1connect.LibraryServiceName, rpcHandler),
+		NewService(testv1connect.ContentServiceName, rpcHandler),
 	}
+	handler, err := NewTranscoder(services)
+	require.NoError(t, err)
+	unknownHandler, err := NewTranscoder(services, WithUnknownHandler(
+		http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusFailedDependency)
+		}),
+	))
+	require.NoError(t, err)
 
 	testCases := []struct {
 		name                    string
-		mux                     *Mux // use allMux if nil
+		handler                 *Transcoder // use handler if nil
 		useHTTP1                bool
 		requestURL              string
 		requestMethod           string
@@ -358,18 +975,14 @@ func TestHandler_Errors(t *testing.T) {
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
 		{
-			name: "unknown handler",
-			mux: &Mux{
-				UnknownHandler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-					writer.WriteHeader(http.StatusTeapot)
-				}),
-			},
+			name:          "unknown handler",
+			handler:       unknownHandler,
 			requestURL:    "/vanguard.test.v1.LibraryService/UnknownMethod",
 			requestMethod: "POST",
 			requestHeaders: map[string][]string{
 				"Content-Type": {"application/connect+proto"},
 			},
-			expectedCode: http.StatusTeapot,
+			expectedCode: http.StatusFailedDependency,
 		},
 	}
 
@@ -378,9 +991,9 @@ func TestHandler_Errors(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			targetMux := allMux
-			if testCase.mux != nil {
-				targetMux = testCase.mux
+			vanguardHandler := handler
+			if testCase.handler != nil {
+				vanguardHandler = testCase.handler
 			}
 			req := httptest.NewRequest(testCase.requestMethod, testCase.requestURL, http.NoBody)
 			if testCase.useHTTP1 {
@@ -396,7 +1009,7 @@ func TestHandler_Errors(t *testing.T) {
 				}
 			}
 			respWriter := httptest.NewRecorder()
-			targetMux.ServeHTTP(respWriter, req)
+			vanguardHandler.ServeHTTP(respWriter, req)
 			resp := respWriter.Result()
 			err := resp.Body.Close()
 			require.NoError(t, err)
@@ -408,7 +1021,7 @@ func TestHandler_Errors(t *testing.T) {
 	}
 }
 
-func TestHandler_PassThrough(t *testing.T) {
+func TestTranscoder_PassThrough(t *testing.T) {
 	t.Parallel()
 	// These cases don't do any transformation and just pass through to the
 	// underlying handler.
@@ -439,15 +1052,15 @@ func TestHandler_PassThrough(t *testing.T) {
 			handler.ServeHTTP(respWriter, request)
 		})
 	}
-	_, contentHandler := testv1connect.NewContentServiceHandler(
+	contentPath, contentHandler := testv1connect.NewContentServiceHandler(
 		testv1connect.UnimplementedContentServiceHandler{},
 		connect.WithInterceptors(&interceptor),
 	)
-	var mux Mux
-	require.NoError(t, mux.RegisterServiceByName(checkPassThrough(contentHandler), testv1connect.ContentServiceName))
+	handler, err := NewTranscoder([]*Service{NewService(contentPath, checkPassThrough(contentHandler))})
+	require.NoError(t, err)
 
 	// Use HTTP/2 so we can test a bidi stream.
-	server := httptest.NewUnstartedServer(&mux)
+	server := httptest.NewUnstartedServer(handler)
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	t.Cleanup(server.Close)

@@ -34,7 +34,6 @@ import (
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -43,7 +42,7 @@ import (
 func TestMux_RESTxRPC(t *testing.T) {
 	t.Parallel()
 
-	services := []protoreflect.FullName{
+	serviceNames := []string{
 		testv1connect.LibraryServiceName,
 		testv1connect.ContentServiceName,
 	}
@@ -73,33 +72,31 @@ func TestMux_RESTxRPC(t *testing.T) {
 	))
 
 	type testMux struct {
-		name string
-		mux  *Mux
+		name    string
+		handler http.Handler
 	}
 	makeMux := func(protocol Protocol, codec, compression string) testMux {
 		opts := []ServiceOption{
-			WithProtocols(protocol),
-			WithCodecs(codec),
+			WithTargetProtocols(protocol),
+			WithTargetCodecs(codec),
 		}
 		if compression != CompressionIdentity {
-			opts = append(opts, WithCompression(compression))
+			opts = append(opts, WithTargetCompression(compression))
 		} else {
-			opts = append(opts, WithNoCompression())
+			opts = append(opts, WithNoTargetCompression())
 		}
-		hdlr := protocolAssertMiddleware(protocol, codec, compression, serveMux)
+		svcHandler := protocolAssertMiddleware(protocol, codec, compression, serveMux)
 		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
 
-		mux := &Mux{}
-		for _, service := range services {
-			if err := mux.RegisterServiceByName(
-				hdlr, service, opts...,
-			); err != nil {
-				t.Fatal(err)
-			}
+		services := make([]*Service, len(serviceNames))
+		for i, svcName := range serviceNames {
+			services[i] = NewService(svcName, svcHandler, opts...)
 		}
-		return testMux{name: name, mux: mux}
+		handler, err := NewTranscoder(services)
+		require.NoError(t, err)
+		return testMux{name: name, handler: handler}
 	}
-	muxes := []testMux{}
+	var muxes []testMux
 	for _, protocol := range protocols {
 		for _, codec := range codecs {
 			for _, compression := range compressions {
@@ -481,7 +478,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			switch compression {
 			case CompressionGzip:
 				comp = newCompressionPool(
-					CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor,
+					CompressionGzip, defaultGzipCompressor, defaultGzipDecompressor,
 				)
 			case CompressionIdentity:
 				// nil
@@ -496,7 +493,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			})
 		}
 	}
-	codec := DefaultJSONCodec(protoregistry.GlobalTypes)
+	codec := NewJSONCodec(protoregistry.GlobalTypes)
 	for _, opts := range testOpts {
 		opts := opts
 		t.Run(opts.name, func(t *testing.T) {
@@ -517,7 +514,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 					t.Log("req:", string(debug))
 
 					rsp := httptest.NewRecorder()
-					opts.mux.mux.ServeHTTP(rsp, req)
+					opts.mux.handler.ServeHTTP(rsp, req)
 
 					result := rsp.Result()
 					defer result.Body.Close()

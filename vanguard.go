@@ -12,19 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package vanguard provides a transcoder that acts like middleware for
+// your RPC handlers, augmenting them to support additional protocols
+// or message formats, including REST+JSON. The transcoder also acts as
+// a router, handling dispatch of configured REST-ful URI paths to the
+// right RPC handlers.
+//
+// Use NewService or NewServiceWithSchema to create Service definitions
+// wrap your existing HTTP and/or RPC handlers. Then pass those services
+// to NewTranscoder.
 package vanguard
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"net/http"
 	"strings"
-	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/api/annotations"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -45,420 +51,231 @@ const (
 	DefaultMaxGetURLBytes        = 8 * 1024
 )
 
-// Mux is a registry of RPC handlers that can handle transforming requests
-// between RPC protocols (such as Connect and gRPC) or even between REST
-// and RPC (using annotations on the service that define its mapping to
-// REST).
+// NewTranscoder creates a new transcoder that handles the given services, with the
+// configuration described by the given options. A non-nil error is returned if
+// there is an issue with this configuration.
 //
-// All services should be registered (via Register* methods) from a single
-// thread during initialization. It is not safe to mutate the Mux once its
-// handler is being used by a server.
-type Mux struct {
-	// The protocols that are supported by the wrapped handler, by default.
-	// This can be overridden on a per-service level via options when calling
-	// RegisterService or RegisterServiceByName.
-	//
-	// If left empty, the default is to assume the handler can handle all
-	// three of ProtocolConnect, ProtocolGRPC, and ProtocolGRPCWeb.
-	//
-	// If the wrapped handler is a Connect handler, it can handle all three.
-	// If the wrapped handler is a gRPC handler, it can only handle ProtocolGRPC.
-	// If the wrapped handler is a reverse proxy, this should be configured based
-	// on what protocols the destination server(s) support.
-	Protocols []Protocol
-	// The codec names that are supported by the wrapped handler, by default.
-	// This can be overridden on a per-service level via options when calling
-	// RegisterService or RegisterServiceByName.
-	//
-	// If this includes any non-default codec names, you must also call AddCodec
-	// to register the codec implementation.
-	//
-	// If left empty, the default is to support both CodecProto and CodecJSON. Both
-	// Connect and gRPC handlers can support custom codecs. Without customization,
-	// Connect handlers support both CodecProto and CodecJSON while gRPC handlers
-	// support only CodecProto.
-	//
-	// If the wrapped handler is a reverse proxy, this should be configured based
-	// on what codecs (aka "sub-formats") that the destination server(s) support.
-	Codecs []string
-	// The names of compression algorithms that are supported by the wrapped handler,
-	// by default. This can be overridden on a per-service level via options when
-	// calling RegisterService or RegisterServiceByName.
-	//
-	// If this includes any non-default compression names, you must also call
-	// AddCompression to register the implementation.
-	//
-	// If left nil, the default is to support CompressionGzip. Both Connect and
-	// gRPC handlers can support custom compression algorithms. Without customization,
-	// both support CompressionGzip.
-	//
-	// If the wrapped handler is a reverse proxy, this should be configured based
-	// on what codecs (aka "sub-formats") that the destination server(s) support.
-	//
-	// If set to an explicit empty but *non-nil* slice, the wrapped handler will
-	// only see uncompressed payloads. If any requests arrive that use a known
-	// compression algorithm, the data will be decompressed.
-	Compressors []string
-	// MaxMessageBufferBytes is the maximum size of a received message when buffering
-	// is necessary. Buffering a message is sometimes necessary when translating
-	// from one protocol to another or one encoding to another. If buffering is
-	// necessary to translate a given request and a message exceeds the configured
-	// buffer size, the RPC will fail with a "resource exhausted" error. This applies
-	// to on-the-wire sizes. The actual memory usage for a buffered memory could be
-	// much higher than this due to decompression and/or decoding.
-	//
-	// If no value is configured, or it is set to a non-positive value, the limit is
-	// 4 GB. This is also a technical limitation of Connect and gRPC, whose envelopes
-	// do not allow payloads whose size in bytes overflows 32 bits. This should
-	// generally be set to a value that is less than or equal to similar limits
-	// configured in the server handler (or remote server, if the server handler will
-	// proxy the request elsewhere).
-	MaxMessageBufferBytes uint32
-	// MaxGetURLBytes is the maximum size of a GET URL that can be used to send an
-	// RPC using the Connect unary protocol with GET as the HTTP method. If a
-	// GET request would exceed this limit, the RPC will be sent using POST as the
-	// HTTP method instead.
-	//
-	// If no value is configured, or it is set to a non-positive value, a default
-	// limit of 8 KB (8192 bytes) will be used.
-	MaxGetURLBytes uint32
-	// TypeResolver is the default TypeResolver. If no TypeResolver is specified
-	// when a service is registered, this one is used. If nil, the default resolver
-	// will be [protoregistry.GlobalTypes].
-	TypeResolver TypeResolver
-	// UnknownHandler is the handler to use when a request is received for a method
-	// that has not been registered. If nil, the default is to return a 404 Not Found
-	// error.
-	UnknownHandler http.Handler
-	// HooksCallback, if non-nil, is called at the beginning of an operation. If the
-	// callback is interested in more details about the operation, it can return Hooks,
-	// whose methods will be called as the operation progresses. If it returns an error,
-	// the operation is immediately failed with the returned error, and the server
-	// handler will never be invoked.
-	//
-	// For invalid requests (where Operation.IsValid returns false), if non-nil Hooks
-	// are returned, they are ignored; no other hooks will be invoked. For valid
-	// operations, the Hooks.OnClientRequestHeaders and Hooks.OnOperationEnd hooks
-	// will always be invoked, even when a hook aborts the operation with an error.
-	//
-	// This callback can be overridden on a per-service level. But the function defined
-	// in this field will always be used for operations that are invalid when the RPC
-	// method has not been determined.
-	//
-	// If the operation is invalid because the method could not be determined and both
-	// the HooksCallback and the UnknownHandler are defined, the HooksCallback will be
-	// invoked first. The UnknownHandler will only be invoked if the callback returns
-	// a nil error.
-	HooksCallback func(context.Context, Operation) (Hooks, error)
-
-	bufferPool  bufferPool
-	codecs      codecMap
-	compressors compressionMap
-	methods     map[string]*methodConfig
-	restRoutes  routeTrie
-}
-
-// RegisterServiceByName registers the given handler for the named service.
-// This queries the given service's schema from [protoregistry.GlobalFiles].
+// The returned handler does the routing and dispatch to the RPC handlers
+// associated with each provided service. Routing supports more than just the
+// service path provided to NewService since HTTP transcoding annotations are
+// used to also support REST-ful URI paths for each method.
 //
-// If no other options are provided, it is assumed the given handler supports
-// all three RPC protocols (Connect, gRPC-Web, gRPC), gzip compression, and proto
-// encoding.
+// The returned handler also acts like a middleware, transparently "upgrading"
+// the RPC handlers to support incoming request protocols they wouldn't otherwise
+// support. This can be used to upgrade Connect handlers to support REST requests
+// (based on HTTP transcoding configuration) or gRPC handlers to support Connect,
+// gRPC-Web, or REST. This can even be used with a reverse proxy handler, to
+// translate all incoming requests to a single protocol that another backend server
+// supports.
 //
-// Any methods that have `google.api.http` annotations will allow incoming
-// requests to use REST+JSON conventions as specified by the annotations.
-func (m *Mux) RegisterServiceByName(handler http.Handler, serviceName protoreflect.FullName, opts ...ServiceOption) error {
-	desc, err := protoregistry.GlobalFiles.FindDescriptorByName(serviceName)
-	if err != nil {
-		return err
-	}
-	serviceDesc, ok := desc.(protoreflect.ServiceDescriptor)
-	if !ok {
-		return fmt.Errorf("descriptor %s is a %T; not a service", serviceName, desc)
-	}
-	return m.RegisterService(handler, serviceDesc, opts...)
-}
-
-// RegisterService registers the given handler for the service schema.
-//
-// If no other options are provided, it is assumed the given handler supports
-// all three RPC protocols (Connect, gRPC-Web, gRPC), gzip compression, and proto
-// encoding.
-//
-// Any methods that have `google.api.http` annotations will allow incoming
-// requests to use REST+JSON conventions as specified by the annotations.
-func (m *Mux) RegisterService(handler http.Handler, serviceDesc protoreflect.ServiceDescriptor, opts ...ServiceOption) error {
-	m.maybeInit()
-	var svcOpts serviceOptions
-	for _, opt := range opts {
-		opt.apply(&svcOpts)
-	}
-
-	svcOpts.protocols = computeSet(svcOpts.protocols, m.Protocols, map[Protocol]struct{}{
-		ProtocolConnect: {},
-		ProtocolGRPC:    {},
-		ProtocolGRPCWeb: {},
-	}, false)
-	for protocol := range svcOpts.protocols {
-		if protocol <= ProtocolUnknown || protocol > protocolMax {
-			return fmt.Errorf("protocol %d is not a valid value", protocol)
-		}
-	}
-	svcOpts.codecNames = computeSet(svcOpts.codecNames, m.Codecs, map[string]struct{}{
-		CodecProto: {},
-		CodecJSON:  {},
-	}, false)
-	for codecName := range svcOpts.codecNames {
-		if _, known := m.codecs[codecName]; !known {
-			return fmt.Errorf("codec %s is not known; use mux.AddCodec to add known codecs first", codecName)
-		}
-	}
-	if svcOpts.preferredCodec == "" {
-		if len(m.Codecs) > 0 {
-			svcOpts.preferredCodec = m.Codecs[0]
-		} else {
-			svcOpts.preferredCodec = CodecProto
-		}
-	}
-	// empty is allowed here: non-nil but empty means do not send compressed data to handler
-	svcOpts.compressorNames = computeSet(svcOpts.compressorNames, m.Compressors, map[string]struct{}{
-		CompressionGzip: {},
-	}, true)
-	for compressorName := range svcOpts.compressorNames {
-		if _, known := m.compressors[compressorName]; !known {
-			return fmt.Errorf("compression algorithm %s is not known; use mux.AddCompression to add known algorithms first", compressorName)
+// If any options given implement ServiceOption, they are treated as default service
+// options and apply to all configured services, unless overridden by a particular
+// service.
+func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, error) {
+	for _, svc := range services {
+		if svc.err != nil {
+			return nil, svc.err
 		}
 	}
 
-	switch {
-	case svcOpts.maxGetURLBytes <= 0 && m.MaxGetURLBytes > 0:
-		svcOpts.maxGetURLBytes = m.MaxGetURLBytes
-	case svcOpts.maxGetURLBytes <= 0:
-		svcOpts.maxGetURLBytes = DefaultMaxGetURLBytes
-	}
-	switch {
-	case svcOpts.maxMsgBufferBytes <= 0 && m.MaxMessageBufferBytes > 0:
-		svcOpts.maxMsgBufferBytes = m.MaxMessageBufferBytes
-	case svcOpts.maxMsgBufferBytes <= 0:
-		svcOpts.maxMsgBufferBytes = DefaultMaxMessageBufferBytes
-	}
-
-	if svcOpts.hooksCallback == nil {
-		svcOpts.hooksCallback = m.HooksCallback
-	}
-
-	if svcOpts.resolver == nil {
-		svcOpts.resolver = m.TypeResolver
-		if svcOpts.resolver == nil {
-			svcOpts.resolver = protoregistry.GlobalTypes
-		}
-	}
-
-	methods := serviceDesc.Methods()
-	for i, length := 0, methods.Len(); i < length; i++ {
-		methodDesc := methods.Get(i)
-		if err := m.registerMethod(handler, methodDesc, svcOpts); err != nil {
-			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
-		}
-	}
-	return nil
-}
-
-// RegisterRules is the set of HTTP rules that apply to RPC methods via selectors.
-// The rules are used in addition to any rules defined in the service's proto
-// file.
-//
-// Services should be registered first. If a given rule doesn't match any
-// already-registered method, an error is returned.
-// See: https://cloud.google.com/service-infrastructure/docs/service-management/reference/rpc/google.api#google.api.DocumentationRule.FIELDS.string.google.api.DocumentationRule.selector
-func (m *Mux) RegisterRules(rules ...*annotations.HttpRule) error {
-	m.maybeInit()
-	if len(rules) == 0 {
-		return nil
-	}
-	methodRules := make(map[*methodConfig][]*annotations.HttpRule)
-	for _, rule := range rules {
-		var applied bool
-		selector := rule.GetSelector()
-		if selector == "" {
-			return fmt.Errorf("rule missing selector")
-		}
-		if i := strings.Index(selector, "*"); i >= 0 {
-			if i != len(selector)-1 {
-				return fmt.Errorf("wildcard selector %q must be at the end", rule.GetSelector())
-			}
-			selector = selector[:len(selector)-1]
-			if len(selector) > 0 && !strings.HasSuffix(selector, ".") {
-				return fmt.Errorf("wildcard selector %q must be whole component", rule.GetSelector())
-			}
-		}
-		for _, methodConf := range m.methods {
-			methodName := string(methodConf.descriptor.FullName())
-			if !strings.HasPrefix(methodName, selector) {
-				continue
-			}
-			methodRules[methodConf] = append(methodRules[methodConf], rule)
-			applied = true
-		}
-		if !applied {
-			return fmt.Errorf("rule %q does not match any methods", rule.GetSelector())
-		}
-	}
-	for methodConf, rules := range methodRules {
-		for _, rule := range rules {
-			if err := m.addRule(rule, methodConf); err != nil {
-				// TODO: use the multi-error type errors.Join()
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// AddCodec adds the given codec implementation.
-//
-// By default, the mux already understands "proto", "json", and "text" codecs. The
-// "json" and "text" codecs use default behavior (per MarshalOptions and UnmarshalOptions
-// types in protojson and prototext packages) except that unmarshalling will ignore
-// unrecognized fields.
-//
-// If this is called with an already-known name, the given codec factory replaces the
-// already configured one. This can be used to override the default three codecs with
-// different configuration.
-func (m *Mux) AddCodec(name string, newCodec func(TypeResolver) Codec) {
-	m.maybeInit()
-	m.codecs[name] = newCodec
-}
-
-// AddCompression adds the given compression algorithm implementation.
-//
-// By default, the mux already understands "gzip" compression and uses the default
-// compression level.
-//
-// If this is called with an already-known name, the given implementation
-// replaces any previously configured one. This can be used to override
-// the default "gzip" compression algorithm with a different implementation
-// or compression level.
-func (m *Mux) AddCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) {
-	m.maybeInit()
-	m.compressors[name] = newCompressionPool(name, newCompressor, newDecompressor)
-}
-
-func (m *Mux) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts serviceOptions) error {
-	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
-	if _, ok := m.methods[methodPath]; ok {
-		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
-	}
-	methodConf := &methodConfig{
-		descriptor:        methodDesc,
-		methodPath:        methodPath,
-		handler:           handler,
-		resolver:          opts.resolver,
-		protocols:         opts.protocols,
-		codecNames:        opts.codecNames,
-		preferredCodec:    opts.preferredCodec,
-		compressorNames:   opts.compressorNames,
-		maxMsgBufferBytes: opts.maxMsgBufferBytes,
-		maxGetURLBytes:    opts.maxGetURLBytes,
-		hooksCallback:     opts.hooksCallback,
-	}
-	if m.methods == nil {
-		m.methods = make(map[string]*methodConfig, 1)
-	}
-	m.methods[methodPath] = methodConf
-
-	switch {
-	case methodDesc.IsStreamingClient() && methodDesc.IsStreamingServer():
-		methodConf.streamType = connect.StreamTypeBidi
-	case methodDesc.IsStreamingClient():
-		methodConf.streamType = connect.StreamTypeClient
-	case methodDesc.IsStreamingServer():
-		methodConf.streamType = connect.StreamTypeServer
-	default:
-		methodConf.streamType = connect.StreamTypeUnary
-	}
-
-	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		if err := m.addRule(httpRule, methodConf); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *Mux) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) error {
-	methodPath := methodConf.methodPath
-	firstTarget, err := m.restRoutes.addRoute(methodConf, httpRule)
-	if err != nil {
-		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
-	}
-	methodConf.httpRule = firstTarget
-	for i, rule := range httpRule.AdditionalBindings {
-		if len(rule.AdditionalBindings) > 0 {
-			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
-		}
-		if _, err := m.restRoutes.addRoute(methodConf, rule); err != nil {
-			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
-		}
-	}
-	return nil
-}
-
-func (m *Mux) maybeInit() {
-	if m.codecs != nil {
-		return // already initialized
-	}
-	// initialize default codecs and compressors
-	m.codecs = map[string]func(res TypeResolver) Codec{
-		CodecProto: DefaultProtoCodec,
-		CodecJSON: func(res TypeResolver) Codec {
-			return DefaultJSONCodec(res)
+	transcoderOpts := transcoderOptions{
+		codecs: codecMap{
+			CodecProto: func(res TypeResolver) Codec {
+				return NewProtoCodec(res)
+			},
+			CodecJSON: func(res TypeResolver) Codec {
+				return NewJSONCodec(res)
+			},
+		},
+		compressors: compressionMap{
+			CompressionGzip: newCompressionPool(CompressionGzip, defaultGzipCompressor, defaultGzipDecompressor),
 		},
 	}
-	m.compressors = map[string]*compressionPool{
-		CompressionGzip: newCompressionPool(CompressionGzip, DefaultGzipCompressor, DefaultGzipDecompressor),
+	for _, opt := range opts {
+		opt.applyToTranscoder(&transcoderOpts)
+	}
+
+	defaultServiceOptions := serviceOptions{
+		maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
+		maxGetURLBytes:    DefaultMaxGetURLBytes,
+		resolver:          protoregistry.GlobalTypes,
+		preferredCodec:    CodecProto,
+		codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
+		compressorNames:   map[string]struct{}{CompressionGzip: {}},
+		protocols:         map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
+	}
+	for _, opt := range transcoderOpts.defaultServiceOptions {
+		opt.applyToService(&defaultServiceOptions)
+	}
+
+	transcoder := &Transcoder{
+		codecs:         transcoderOpts.codecs,
+		compressors:    transcoderOpts.compressors,
+		unknownHandler: transcoderOpts.unknownHandler,
+		methods:        map[string]*methodConfig{},
+	}
+	for _, svc := range services {
+		if err := transcoder.registerService(svc, defaultServiceOptions); err != nil {
+			return nil, err
+		}
+	}
+	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
+		return nil, err
+	}
+	return transcoder, nil
+}
+
+// TranscoderOption is an option used to configure a Transcoder. See NewTranscoder.
+type TranscoderOption interface {
+	applyToTranscoder(*transcoderOptions)
+}
+
+// WithDefaultServiceOptions returns an option that configures the given
+// service options as defaults. They will apply to all services passed to
+// NewTranscoder, except where overridden via an explicit ServiceOption
+// passed to NewService / NewServiceWithSchema.
+//
+// Providing multiple instances of this option will be cumulative: the
+// union of all defaults are used with later options overriding any
+// previous options.
+func WithDefaultServiceOptions(serviceOptions ...ServiceOption) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
+		opts.defaultServiceOptions = append(opts.defaultServiceOptions, serviceOptions...)
+	})
+}
+
+// WithRules returns an option that adds HTTP transcoding configuration to the set of
+// configured services. The given rules must have a selector defined, and the selector
+// must match at least one configured method. Otherwise, NewTranscoder will report a
+// configuration error.
+func WithRules(rules ...*annotations.HttpRule) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
+		opts.rules = append(opts.rules, rules...)
+	})
+}
+
+// WithCodec returns an option that instructs the transcoder to use the given
+// function for instantiating codec implementations. The function is immediately
+// invoked in order to determine the name of the codec. The name reported by codecs
+// created with the function should all return the same name. (Otherwise, behavior
+// is undefined.)
+//
+// By default, "proto" and "json" codecs are supported using default options. This
+// option can be used to support additional codecs or to override the default
+// implementations (such as to change serialization or de-serialization options).
+func WithCodec(newCodec func(TypeResolver) Codec) TranscoderOption {
+	codecName := newCodec(protoregistry.GlobalTypes).Name()
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
+		if opts.codecs == nil {
+			opts.codecs = codecMap{}
+		}
+		opts.codecs[codecName] = newCodec
+	})
+}
+
+// WithCompression returns an option that instructs the transcoder to use the given
+// functions to instantiate compressors and decompressors for the given compression
+// algorithm name.
+//
+// By default, "gzip" compression is supported using default options. This option can be
+// used to support additional compression algorithms or to override the default "gzip"
+// implementation (such as to change the compression level).
+func WithCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
+		if opts.codecs == nil {
+			opts.compressors = compressionMap{}
+		}
+		opts.compressors[name] = newCompressionPool(name, newCompressor, newDecompressor)
+	})
+}
+
+// WithUnknownHandler returns an option that instructs the transcoder to delegate to
+// the given handler when a request arrives for an unknown endpoint. If no such option
+// is used, the transcoder will reply with a simple "404 Not Found" error.
+func WithUnknownHandler(unknownHandler http.Handler) TranscoderOption {
+	return transcoderOptionFunc(func(opts *transcoderOptions) {
+		opts.unknownHandler = unknownHandler
+	})
+}
+
+// Service represents the configuration for a single RPC service.
+type Service struct {
+	err     error
+	schema  protoreflect.ServiceDescriptor
+	handler http.Handler
+	opts    []ServiceOption
+}
+
+// NewService creates a new service definition for the given service path and handler.
+// The service path must be the service's fully-qualified name, with an optional leading
+// and trailing slash. This means you can provide generated constants for service names
+// or you can provide the path returned by a New*Handler function generated by the
+// [Protobuf plugin for Connect]. In fact, if you do not need to specify any
+// service-specific options, you can directly wrap the call to the generated
+// constructor with NewService:
+//
+//	vanguard.NewService(elizav1connect.NewElizaServiceHandler(elizaImpl))
+//
+// If the given service path does not correspond to a known service (one whose
+// schema is registered with the Protobuf runtime, usually from generated
+// code), NewTranscoder will return an error. For these cases, where the
+// corresponding service schema may be dynamically retrieved, use
+// NewServiceWithSchema instead.
+//
+// [Protobuf plugin for Connect Go]: https://pkg.go.dev/connectrpc.com/connect/cmd/protoc-gen-connect-go
+func NewService(servicePath string, handler http.Handler, opts ...ServiceOption) *Service {
+	serviceName := strings.TrimSuffix(strings.TrimPrefix(servicePath, "/"), "/")
+	desc, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(serviceName))
+	if err != nil {
+		return &Service{err: fmt.Errorf("could not resolve schema for service at path %q: %w", servicePath, err)}
+	}
+	svcDesc, ok := desc.(protoreflect.ServiceDescriptor)
+	if !ok {
+		return &Service{
+			err: fmt.Errorf("could not resolve schema for service at path %q: resolved descriptor is %s, not a service", servicePath, descKind(desc)),
+		}
+	}
+	return NewServiceWithSchema(svcDesc, handler, opts...)
+}
+
+// NewServiceWithSchema creates a new service using the given schema and handler.
+func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) *Service {
+	return &Service{
+		schema:  schema,
+		handler: handler,
+		opts:    opts,
 	}
 }
 
-// ServiceOption is an option for configuring how the middleware will handle
-// requests to a particular RPC service. See Mux.RegisterService.
+// A ServiceOption configures how a Transcoder handles requests to a particular
+// RPC service. ServiceOptions can be passed to [NewService] and
+// [NewServiceWithSchema]. Default ServiceOptions, that apply to all services,
+// can be defined by passing a WithDefaultServiceOptions option to NewTranscoder.
+// This is useful when all or many services use the same options.
 type ServiceOption interface {
-	apply(*serviceOptions)
+	applyToService(*serviceOptions)
 }
 
-// WithProtocols returns a service option indicating that the service handler
-// supports protocols. By default, the handler is assumed to support all but the
-// REST protocol, which is true if the handler is a Connect handler (created
-// using generated code from the protoc-gen-connect-go plugin or an explicit
-// call to one of the New*Handler functions in the "connectrpc.com/connect"
-// package).
-//
-// If called with an empty set of protocols, the supported protocols are set
-// back to defaults. (The call is a no-op if no protocols have otherwise been
-// set.)
-func WithProtocols(protocols ...Protocol) ServiceOption {
+// WithTargetProtocols returns a service option indicating that the service handler
+// supports the listed protocols. By default, the handler is assumed to support
+// all but the REST protocol, which is true if the handler is a Connect handler
+// (created using generated code from the protoc-gen-connect-go plugin or an
+// explicit call to [connect.NewUnaryHandler] or its streaming equivalents).
+func WithTargetProtocols(protocols ...Protocol) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
-		if opts.protocols == nil {
-			opts.protocols = map[Protocol]struct{}{}
-		}
+		opts.protocols = make(map[Protocol]struct{}, len(protocols))
 		for _, p := range protocols {
 			opts.protocols[p] = struct{}{}
 		}
 	})
 }
 
-// WithCodecs returns a service option indicating that the service handler supports
+// WithTargetCodecs returns a service option indicating that the service handler supports
 // the given codecs. By default, the handler is assumed only to support the "proto"
 // codec.
-//
-// If called with an empty set of codec names, the supported codecs are set
-// back to the default. (The call is a no-op if no codecs have otherwise been
-// set.)
-func WithCodecs(names ...string) ServiceOption {
+func WithTargetCodecs(names ...string) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
-		if opts.codecNames == nil {
-			opts.codecNames = map[string]struct{}{}
-		}
+		opts.codecNames = make(map[string]struct{}, len(names))
 		for _, n := range names {
 			opts.codecNames[n] = struct{}{}
 		}
@@ -470,41 +287,30 @@ func WithCodecs(names ...string) ServiceOption {
 	})
 }
 
-// WithCompression returns a service option indicating that the service handler supports
+// WithTargetCompression returns a service option indicating that the service handler supports
 // the given compression algorithms. By default, the handler is assumed only to support
 // the "gzip" compression algorithm.
 //
-// If called with an empty set of names, the supported codecs are set back to the
-// default. (The call is a no-op if no compression algorithms have otherwise been set.)
-// In order to disable all compression support, see WithNoCompression.
-func WithCompression(names ...string) ServiceOption {
+// To configure the handler to not use any compression, one could use this option and supply
+// no names. However, to make this scenario more readable, prefer WithNoTargetCompression instead.
+func WithTargetCompression(names ...string) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
-		if len(names) == 0 {
-			// nil signals to use defaults
-			opts.compressorNames = nil
-			return
-		}
-		if opts.compressorNames == nil {
-			opts.compressorNames = map[string]struct{}{}
-		}
+		opts.compressorNames = make(map[string]struct{}, len(names))
 		for _, n := range names {
 			opts.compressorNames[n] = struct{}{}
 		}
 	})
 }
 
-// WithNoCompression returns a service option indicating that the server handler does
+// WithNoTargetCompression returns a service option indicating that the server handler does
 // not support compression.
-func WithNoCompression() ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		// a non-nil but empty set signals no compression
-		opts.compressorNames = map[string]struct{}{}
-	})
+func WithNoTargetCompression() ServiceOption {
+	return WithTargetCompression()
 }
 
 // WithTypeResolver returns a service option to use the given resolver when serializing
-// and de-serializing messages. If not specified, this defaults to Mux.TypeResolver
-// (which defaults to [protoregistry.GlobalTypes] if unset).
+// and de-serializing messages. If not specified, this defaults to
+// [protoregistry.GlobalTypes].
 func WithTypeResolver(resolver TypeResolver) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
 		opts.resolver = resolver
@@ -534,159 +340,12 @@ func WithMaxGetURLBytes(limit uint32) ServiceOption {
 	})
 }
 
-// WithHooksCallback sets the given callback for hooking into the RPC flow.
-// This overrides any callback defined on the Mux.
-//
-// See Mux.HooksCallback for more information.
-func WithHooksCallback(callback func(context.Context, Operation) (Hooks, error)) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.hooksCallback = callback
-	})
-}
-
-// Operation represents an in-progress RPC operation. This is supplied to
-// hook callback methods.
-//
-// Operation is not thread-safe. These methods should only be invoked from
-// the goroutine that runs the Hooks callback method.
-type Operation interface {
-	// IsValid returns true if the operation is valid. If it returns
-	// false, then there was an error in the incoming request that
-	// prevents some of hte operation details from being ascertained.
-	//
-	// When this returns false, Method may return nil and ClientInfo
-	// and HandlerInfo may report invalid attributes (like unknown
-	// protocol or blank codec name).
-	IsValid() bool
-
-	// HTTPRequestLine provides access to properties of the client's
-	// HTTP request line. These are available, even if IsValid returns
-	// false.
-	HTTPRequestLine() (method, path, queryString, httpVersion string)
-
-	// Method returns the descriptor of the RPC method being invoked.
-	Method() protoreflect.MethodDescriptor
-	// Deadline returns the time at which this operation must complete,
-	// per a deadline sent by the client. It returns a zero time and false
-	// when the client did not include a deadline.
-	Deadline() (time.Time, bool)
-	// ClientInfo returns information about the client side of the operation.
-	// This includes the incoming protocol, codec, and compression.
-	ClientInfo() PeerInfo
-	// HandlerInfo returns information about the server handler side of the
-	// operation. These properties will vary from those returned by ClientInfo
-	// when the middleware is transcoding the protocol, re-encoding messages,
-	// or using a different compression algorithm.
-	HandlerInfo() PeerInfo
-
-	doNotImplement() // allows us to add methods to this interface in the future
-}
-
-// PeerInfo describes operation attributes for one of peers. Every operation has
-// two peers: the client that initiated the request, and the server handler that
-// will act on the request.
-//
-// PeerInfo is not thread-safe. These methods should only be invoked from the
-// goroutine that runs the Hooks callback method.
-type PeerInfo interface {
-	// Protocol indicates the protocol this peer uses.
-	Protocol() Protocol
-	// Codec indicates the name of the codec that this peer uses.
-	Codec() string
-	// RequestCompression indicates the name of the compression algorithm that
-	// this peer uses. If no compression is used, this returns the empty string.
-	RequestCompression() string
-	// ResponseCompression will not be known until after response headers have
-	// been received. If this method is invoked before then, it will return
-	// the empty string, even if compression ultimately is used in the response.
-	ResponseCompression() string
-
-	doNotImplement() // allows us to add methods to this interface in the future
-}
-
-// Hooks represents a set of observability/validation hooks that are invoked
-// as an RPC operation is executed.
-//
-// When any of them is non-nil, that function will be invoked when the relevant
-// occurs when processing an RPC.
-type Hooks struct {
-	// OnClientRequestHeaders is invoked immediately at the start of an
-	// operation, providing access to the request headers. If it returns
-	// an error, the operation is immediately aborted, and the server
-	// handler is never invoked.
-	//
-	// The headers can vary from the actual headers sent by the client as
-	// protocol-specific headers (like those indicating the protocol, the
-	// message encoding format, compression algorithm, and timeout) will
-	// have already been removed. The relevant information is instead
-	// available via attributes of the Operation.
-	OnClientRequestHeaders func(context.Context, Operation, http.Header) error
-	// OnClientRequestMessage is invoked for each request message received
-	// from the client. For unary RPCs, this will always be exactly one per
-	// operation. For client and bidirectional streaming RPCs, this can be
-	// called zero or more times.
-	//
-	// If an error is returned, the operation is immediately aborted, and
-	// the message is not sent to the server. The client will observe the
-	// returned error (as translated to an RPC error), but the server will
-	// observe a cancelled error.
-	//
-	// The provided compressed flag and wireSize are the details of the
-	// message sent by the client. The wire size of the data sent to the
-	// server handler may differ if the middleware is transcoding the
-	// protocol, re-encoding messages to a different format, or applying
-	// a different compression algorithm.
-	//
-	// The reported wireSize is based on the data read from the request
-	// body. If the request was constructed from components of the URL
-	// path or the query string, those bytes are not reported, and the
-	// size could be reported as zero even if the request is not empty.
-	// If the client protocol uses envelopes to delimit messages, the
-	// envelope size is NOT included in the reported wireSize.
-	OnClientRequestMessage func(ctx context.Context, op Operation, req proto.Message, compressed bool, wireSize int) error
-	// OnServerResponseHeaders is invoked when response headers are received
-	// from the server.  If it returns an error, the operation is immediately
-	// aborted. The client will observe the returned error (as translated to
-	// an RPC error), but the server will observe a cancelled error.
-	OnServerResponseHeaders func(ctx context.Context, op Operation, statusCode int, headers http.Header) error
-	// OnServerResponseMessage is invoked for each response message received
-	// from the server. For unary RPCs, this will always be either zero (on
-	// failure) or one (on success) per operation. For server and
-	// bidirectional streaming RPCs, this can be called zero or more times.
-	//
-	// If an error is returned, the operation is immediately aborted, and the
-	// message is not sent to the client. The client and server will both
-	// observe the returned error (as translated to an RPC error for the
-	// client). The server will receive the error from the corresponding call
-	// to [http.ResponseWriter.Write]. Subsequent attempts to write to the
-	// response will observe a cancelled error.
-	//
-	// The provided compressed flag and wireSize are the details of the
-	// message sent by the server. The wire size of the data sent to the
-	// client may differ if the middleware is transcoding the protocol,
-	// re-encoding messages to a different format, or applying a different
-	// compression algorithm.
-	OnServerResponseMessage func(ctx context.Context, op Operation, rsp proto.Message, compressed bool, wireSize int) error
-	// OnOperationFinish is called if and when the operation completes
-	// successfully. If the operation does not complete successfully, then
-	// OnOperationFail will be called instead.
-	//
-	// This is the only callback that does not return an error. At this point
-	// the RPC has completed successfully, so it is too late to inject an error.
-	OnOperationFinish func(ctx context.Context, op Operation, trailers http.Header)
-	// OnOperationFail is called when the operation completes unsuccessfully.
-	// If a non-nil error is returned, it will replace the given err when the
-	// error is sent to the client.
-	OnOperationFail func(ctx context.Context, op Operation, trailers http.Header, err error) error
-}
-
-func (h Hooks) isEmpty() bool {
-	return h.OnClientRequestHeaders == nil &&
-		h.OnClientRequestMessage == nil &&
-		h.OnServerResponseHeaders == nil &&
-		h.OnServerResponseMessage == nil &&
-		h.OnOperationFinish == nil &&
-		h.OnOperationFail == nil
+type transcoderOptions struct {
+	defaultServiceOptions []ServiceOption
+	rules                 []*annotations.HttpRule
+	unknownHandler        http.Handler
+	codecs                codecMap
+	compressors           compressionMap
 }
 
 // TypeResolver can resolve message and extension types and is used to instantiate
@@ -700,9 +359,15 @@ type TypeResolver interface {
 	protoregistry.ExtensionTypeResolver
 }
 
+type transcoderOptionFunc func(*transcoderOptions)
+
+func (f transcoderOptionFunc) applyToTranscoder(opts *transcoderOptions) {
+	f(opts)
+}
+
 type serviceOptionFunc func(*serviceOptions)
 
-func (f serviceOptionFunc) apply(opts *serviceOptions) {
+func (f serviceOptionFunc) applyToService(opts *serviceOptions) {
 	f(opts)
 }
 
@@ -713,46 +378,39 @@ type serviceOptions struct {
 	preferredCodec              string
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
-	hooksCallback               func(context.Context, Operation) (Hooks, error)
 }
 
 type methodConfig struct {
-	descriptor                  protoreflect.MethodDescriptor
-	methodPath                  string
-	streamType                  connect.StreamType
-	handler                     http.Handler
-	resolver                    TypeResolver
-	protocols                   map[Protocol]struct{}
-	codecNames, compressorNames map[string]struct{}
-	preferredCodec              string
-	httpRule                    *routeTarget // First HTTP rule, if any.
-	maxMsgBufferBytes           uint32
-	maxGetURLBytes              uint32
-	hooksCallback               func(context.Context, Operation) (Hooks, error)
+	*serviceOptions
+	descriptor protoreflect.MethodDescriptor
+	methodPath string
+	streamType connect.StreamType
+	handler    http.Handler
+	httpRule   *routeTarget // First HTTP rule, if any.
 }
 
-// computeSet returns a resolved set of values of type T, preferring the given values if
-// valid, then the given defaults if valid, and finally the given backupDefaults.
-//
-// An empty or nil set is invalid (so empty or nil values means fallback to defaults;
-// similarly, an empty or nil defaults means fallback to backupDefaults), unless
-// allowEmpty is true, in which case an empty set is okay but nil is invalid.
-func computeSet[T comparable](values map[T]struct{}, defaults []T, backupDefaults map[T]struct{}, allowEmpty bool) map[T]struct{} {
-	if len(values) > 0 {
-		// non-empty is always okay
-		return values
+func descKind(desc protoreflect.Descriptor) string {
+	switch desc := desc.(type) {
+	case protoreflect.FileDescriptor:
+		return "a file"
+	case protoreflect.MessageDescriptor:
+		return "a message"
+	case protoreflect.FieldDescriptor:
+		if desc.IsExtension() {
+			return "an extension"
+		}
+		return "a field"
+	case protoreflect.OneofDescriptor:
+		return "a oneof"
+	case protoreflect.EnumDescriptor:
+		return "an enum"
+	case protoreflect.EnumValueDescriptor:
+		return "an enum value"
+	case protoreflect.ServiceDescriptor:
+		return "a service"
+	case protoreflect.MethodDescriptor:
+		return "a method"
+	default:
+		return fmt.Sprintf("%T", desc)
 	}
-	if allowEmpty && values != nil {
-		// empty but nil is okay
-		return values
-	}
-	if (allowEmpty && defaults == nil) || (!allowEmpty && len(defaults) == 0) {
-		// defaults is not valid either
-		return backupDefaults
-	}
-	result := make(map[T]struct{}, len(defaults))
-	for _, t := range defaults {
-		result[t] = struct{}{}
-	}
-	return result
 }

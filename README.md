@@ -6,8 +6,8 @@
 [![Report Card](https://goreportcard.com/badge/connectrpc.com/vanguard)](https://goreportcard.com/report/github.com/connectrpc/vanguard-go)
 [![GoDoc](https://pkg.go.dev/badge/connectrpc.com/vanguard.svg)](https://pkg.go.dev/github.com/connectrpc/vanguard-go)
 
-Vanguard is a powerful middleware library for Go `net/http` servers that enables seamless
-translation between REST and RPC protocols. Whether you need to bridge the gap 
+Vanguard is a powerful library for Go `net/http` servers that enables seamless
+transcoding between REST and RPC protocols. Whether you need to bridge the gap
 between gRPC, gRPC-Web, Connect, or REST, Vanguard has got you covered. With support for
 Google's [HTTP transcoding options](https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L44),
 it can effortlessly translate protocols using strongly typed Protobuf definitions.
@@ -48,144 +48,194 @@ overhaul your server handler logic before migrating clients to Connect.
 
 ## Usage
 
-The middleware is simple to configure and is used to wrap other HTTP handlers. The
-kinds of HTTP handlers you'll typically be wrapping are:
+Vanguard is straight-forward to configure and is used to wrap other HTTP handlers. In
+that regard, a Vanguard transcoder acts kind of like HTTP middleware. The kinds of HTTP
+handlers you'll typically be wrapping are:
 1. gRPC handlers: After configuring a `*grpc.Server`, instead of calling its `Start`
    method, it can be mounted as a handler of an `http.Server` or `http.ServeMux`.
-   This allows you to decorate the gRPC handler with HTTP middleware.
+   This allows you to decorate the gRPC handler with the Vanguard middleware.
 2. Connect handlers: With Connect, handlers already implement `http.Handler` and are
-   thus trivial to wrap with the HTTP middleware.
+   thus trivial to wrap with Vanguard.
 3. Proxy handlers: In some cases, your Go service may act as a proxy and forward
    requests to a different backend server. To support legacy REST API servers, the
-   Go server can proxy requests to those legacy backends, and the HTTP middleware can
-   translate incoming RPC requests to a form that the legacy backends can understand.
+   Go server can proxy requests to those legacy backends, and Vanguard can transcode
+   incoming RPC requests to a form that the legacy backends can understand.
 
-### Configuring the middleware
+### Defining Services
 
-The middleware takes the form of a `Mux`. All handlers to be decorated with the
-middleware are registered with the `Mux`. When the `Mux` is instantiated, you can
-provide configuration by setting exported fields on the `Mux`. These fields control
-how requests are received by the wrapped handler. The `Mux` itself can receive
-requests in a wide variety of flavors (Connect, gRPC, gRPC-Web, REST), and it then
-transforms the requests to be compatible with the handler.
+A `Service` in Vanguard is the configuration for a single Protobuf RPC service. This
+configuration includes a schema for the service, which empowers the format translations
+and is also the typical source HTTP annotations, for mapping an RPC to REST-ful
+conventions. It also includes a handler, which is an `http.Handler` that implements the
+service. Finally, it can include options that configure the protocols and formats that
+the handler can accept.
+
+You create one by calling `vanguard.NewService`, supplying the service's fully-qualified
+name (or URI path, which is the fully-qualified name with a leading and trailing slash)
+and the corresponding handler.
+
+If you supply no other options, a service's default configuration supports a Connect
+handler. So if you use the `protoc-gen-connect-go` Protobuf plugin and use the
+generated factory function for creating a handler, it will work perfectly with
+Vanguard.
 ```go
-vanguardMux := &vanguard.Mux{
-	// The wrapped handler expects the gRPC protocol.
-	Protocols: []vanguard.Protocol{vanguard.ProtocolGRPC},
-	// The wrapped handler supports Protobuf binary encoding.
-	Codecs: []string{vanguard.CodecProto},
-	// The wrapped handler supports gzip compression for content encoding.
-	Compressors: []string{vanguard.CompressionGzip},
-	// When buffering is required for protocol translation, do not buffer
-	// more than 8 megabytes.
-	MaxMessageBufferSize: 8*1024*1024,
-}
-```
-The above example can be used to wrap a gRPC handler, so that the handler can
-now also support Connect, gRPC-Web, and REST clients.
-
-The above options can also be configured on a _per service_ basis. So the options
-defined on the `vanguard.Mux` will serve as defaults, which can be overridden when
-registering a particular service.
-
-If no options are provided, the resulting middleware is useful for wrapping a
-Connect handler: it assumes the server handler can support Connect, gRPC, and gRPC-Web
-protocols; that it supports both Protobuf and JSON encoding; and that it supports
-Gzip compression. There is no message buffer limit by default, so with no options the
-middleware can translate any request, regardless of how much data it may require
-buffering. (But configuring a limit is highly recommended to reduce chances of abuse
-and high resource utilization caused by pathological requests or misbehaving clients.)
-
-### Registering services
-
-In order to apply the middleware to a handler, it is necessary to indicate
-which Protobuf service(s) the handler implements. When wrapping Connect handlers,
-this can be easily accomplished by referencing the generated service name constants:
-
-```go
-// Here's an example using a Connect handler.
-_, svcHandler := myservicev1connect.NewMyServiceHandler(&myServiceImpl{})
-err := vanguardMux.RegisterServiceByName(
-	svcHandler,
-	myservicev1.MyServiceName,
-	// Overrides for configuration can be supplied here
-	vanguard.WithMaxMessageBufferSize(16*1024*1024),
+// A Connect handler factory function returns the service path and the HTTP
+// handler. So you can pass the result directly to NewService:
+myService := vanguard.NewService(
+    myservicev1connect.NewMyServiceHandler(&myServiceImpl{}),
 )
-if err != nil {
-	panic(err)
-}
-```
-If not using Connect code generation, these constants may not be available and
-the service names may instead need to be hard-coded.
-```go
-// And here's an example using a gRPC handler.
-svr := grpc.NewServer()
-myservicev1.RegisterMyServiceServer(svr, &myServiceImpl{})
-err := vanguardMux.RegisterServiceByName(
-	svr,
-	"foo.bar.myservice.v1.MyService",
-	// Overrides for configuration can be supplied here
-	vanguard.WithMaxMessageBufferSize(16*1024*1024),
+
+// If not using a Connect handler, you can still use this function and
+// directly refer to the service's name.
+myService = vanguard.NewService(
+    myservicev1connect.MyServiceName,
+	someOtherHTTPHandler,
 )
-if err != nil {
-	panic(err)
-}
-
-// As an alternative to above: If all services registered with the
-// gRPC server use the same configuration, you can use a loop to
-// register all of them without needing hard-coded service names:
-for name := range svr.GetServiceInfo() {
-	err := vanguardMux.RegisterServiceByName(
-		svr,
-		name,
-		vanguard.WithMaxMessageBufferSize(16*1024*1024),
-	)
-	if err != nil {
-		panic(err)
-	}
-}
 ```
 
-If a single handler supports multiple services, you can register it repeatedly
-with the vanguard Mux, specifying a different service name each time.
+With the `vanguard.NewService` function, the service must be known to the program. That
+means that Go code has been generated for the Protobuf file that defines the RPC service,
+using the `protoc-gen-go` plugin, and then imported into the program. That generated Go
+code registers the service's schema in a global registry named
+[`protoregistry.GlobalFiles`](https://pkg.go.dev/google.golang.org/protobuf/reflect/protoregistry#Files).
 
-When specifying a service name, the actual schema for the service is loaded from
-the Protobuf runtime library. The runtime library contains the schemas for all
-Protobuf services for which generated code has been linked into your program.
+If you are using Connect or gRPC handlers, there is nothing to worry about: the use of
+generated Go code for Connect and gRPC stubs and handler interfaces ensures that the
+services are known.
 
-For more dynamic use cases, you can instead use the `RegisterService` method and
-supply a `protoreflect.ServiceDescriptor`, which is a full description of the
-service's schema. (Such a descriptor could be loaded from a configuration file
-or downloaded from a remote server or registry.)
+#### Dynamic Schemas
+
+If you want to handle a service whose schema is _not_ known to the program at compile-time,
+then you can use `vanguard.NewServiceWithSchema` and supply a
+[`protoreflect.ServiceDescriptor`](https://pkg.go.dev/google.golang.org/protobuf/reflect/protoreflect#ServiceDescriptor)
+that defines the RPC schema. This descriptor could have been loaded from a configuration file
+or [file descriptor set](https://pkg.go.dev/google.golang.org/protobuf/reflect/protodesc#NewFiles),
+downloaded from a server, such as a [Buf Schema Registry](https://github.com/bufbuild/reflect-proto),
+or even [compiled from Protobuf sources](https://github.com/bufbuild/protocompile#readme).
+
+#### Service Options
+
+Both `vanguard.NewService` and `vanguard.NewServiceWithSchema` functions accept options
+for configuring how a transcoder will process requests for that service. In particular,
+you can configure the protocols, the codecs/message formats, and compression formats
+that the service handler accepts.
+
+As mentioned previously, the default configuration -- with no options -- is designed to
+work out-of-the-box with Connect handlers: it assumes the handler can process Connect,
+gRPC, and gRPC-Web protocols; that it can process "proto" and "json" message formats; and
+that it can handle "gzip" compression.
+
+You can change this, including adding more message formats or compression algorithms,
+by supplying options:
+
+```go
+// In this example, we'll assume that proxyHandler functions as a reverse proxy
+// to a gRPC backend that only supports the gRPC protocol and the "proto" message
+// format.
+otherService := vanguard.NewService(
+	"some.other.Service",
+	proxyHandler,
+	WithTargetProtocols(vanguard.ProtocolGRPC),
+	WithTargetCodecs(vanguard.CodecProto)
+)
+```
+
+### Building the Transcoder
+
+The thing that does all of the work in Vanguard is a `*vanguard.Transcoder`. When the
+transcoder is instantiated, you provide the set of services. The transcoder implements
+`http.Handler` and handles dispatching requests to the various configured service
+handlers, and it also handles translating requests into a form that the handler
+understands. It then also translates responses into the form that the client is
+expecting.
+
+```go
+transcoder := vanguard.NewTranscoder([]*vanguard.Service{
+    myService,
+    otherService,
+})
+```
+
+#### Transcoder Options
+
+When creating a transcoder, you can supply options to customize it:
+* You can provide a custom handler for unknown endpoints. Without this, requests
+  for unrecognized URI paths will result in a simple "404 Not Found" response.
+* You can provide separate HTTP annotations. This is to provide REST-ful mappings
+  for RPC services that do not define the mapping in their Protobuf sources. It
+  also allows you to _add_ mappings to a service that does already have annotations.
+* You can add support for extra codecs, beyond "proto" and "json", and compression
+  algorithms, beyond "gzip".
+* You can supply a set of default service options that will apply to every service
+  (unless overridden via other options in a call to `NewService`).
+
+```go
+transcoder = vanguard.NewTranscoder(
+	[]*vanguard.Service{
+        myService,
+        otherService,
+    },
+	WithUnkownHandler(custom404handler),
+	WithCodec(myCustomMessageFormat{}),
+)
+```
+
+The use of `WithCodec` and `WithCompression` can also be used to replace the default
+implementations of the "proto" and "json" codec or the "gzip" compression algorithm.
+Note that when replacing the "json" codec, you should use `*vanguard.JSONCodec` as the
+implementation if you want to also support the REST protocol. REST-ful mappings can
+require message formatting features that are implemented by `*vanguard.JSONCodec` but
+not in the base `vanguard.Codec` interface.
+
+#### gRPC Handlers
+
+You can also wrap gRPC handlers with a `Transcoder`. This works a little differently
+than wrapping Connect handlers. The generated Go code for gRPC does not include a handler
+factory like Connect uses. It's generated functions instead register handler information
+with a `*grpc.Server`.
+
+So you would register the various service implementations with a `*grpc.Server`, which
+implements `http.Handler` and can then be wrapped with a transcoder. But you can also
+use the `vanguardgrpc` package to do everything in a single function call:
+
+```go
+transcoder = vanguardgrpc.NewTranscoder(grpcServer)
+```
+When you use `vanguardgrpc.NewTranscoder`, it automatically creates a `*vanguard.Service`
+for each service registered with the gRPC service, and supplies service options
+that tell it to transcode to the gRPC protocol and the "proto" codec. If you also
+install a "json" codec for gRPC, it will configure the transcoder to also allow
+sending the "json" codec to the gRPC server, which makes handling of JSON Connect
+requests much more efficient.
 
 ### Wiring up to a server
 
-Finally, you can register the middleware handler with an `http.Server` or
+Finally, you can register the transcoder with an `http.Server` or
 `http.ServeMux`.
 
 ```go
 // The Mux can be used as the sole handler for an HTTP server.
-err := http.Serve(listener, vanguardMux)
+err := http.Serve(listener, transcoder)
 
 // Or it can be used alongside other handlers, all registered with
 // the same http.ServeMux.
 mux := http.NewServeMux()
-mux.Handle("/", vanguardMux)
+mux.Handle("/", transcoder)
 err := http.Serve(listener, mux)
 ```
-The above example registers the handler for the root path. This is useful
+The above example registers the transcoder for the root path. This is useful
 to support REST requests for the service, which could have very different
 path URLs from those used for Connect and gRPC. Using a pattern this broad
-means the vanguard Mux can handle all paths that might correspond to a method,
-without having to explicitly configure it for the various paths named in HTTP
-transcoding annotations.
+means the transcoder can handle all paths that might correspond to a method,
+without having to explicitly configure the `ServeMux` for the various paths
+named in HTTP transcoding annotations.
 
-For the same reason, it is best to use a single vanguard Mux, even if your
-service supports many exposed RPC services, so that the Mux can handle
+For the same reason, it is best to use a single vanguard transcoder, even if
+your service supports many exposed RPC services, so that the transcoder can
 dispatch to the correct service based on the request. You can register many
-services with the same vanguard Mux. And if any need different configuration,
+services with the same transcoder. And if any need different configuration,
 that can be handled by providing override options when the service is
-registered.
+created.
 
 
 ## Status: Alpha

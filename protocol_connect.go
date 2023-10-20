@@ -246,7 +246,7 @@ func (c connectUnaryPostClientProtocol) String() string {
 // sending unary RPCs to the server handler.
 type connectUnaryServerProtocol struct{}
 
-// NB: the latter two interfaces must be implemented to handle GET requests.
+// the latter two interfaces must be implemented to handle GET requests.
 var _ serverProtocolHandler = connectUnaryServerProtocol{}
 var _ requestLineBuilder = connectUnaryServerProtocol{}
 var _ serverBodyPreparer = connectUnaryServerProtocol{}
@@ -330,10 +330,10 @@ func (c connectUnaryServerProtocol) useGet(op *operation) bool {
 }
 
 func (c connectUnaryServerProtocol) prepareMarshalledRequest(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
-	// NB: This would be called when requestNeedsPrep returns true, for GET requests.
-	//     In that case, there is no request body, so we can return a nil result.
-	//     The request data will actually be put into the URL in that case.
-	//     See the requestLine method below.
+	// This would be called when requestNeedsPrep returns true, for GET requests.
+	// In that case, there is no request body, so we can return a nil result.
+	// The request data will actually be put into the URL in that case.
+	// See the requestLine method below.
 	return nil, nil
 }
 
