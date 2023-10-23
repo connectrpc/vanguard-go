@@ -1171,7 +1171,6 @@ func (w *responseWriter) reportError(err error) {
 	if errors.As(err, &end.err) {
 		end.httpCode = httpStatusCodeFromRPC(end.err.Code())
 	} else {
-		// Unknown error; treat as internal error.
 		end.err = connect.NewError(connect.CodeUnknown, err)
 		end.httpCode = http.StatusBadGateway
 	}
