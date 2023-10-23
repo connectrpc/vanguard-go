@@ -103,18 +103,23 @@ func NewJSONCodec(res TypeResolver) *JSONCodec {
 	}
 }
 
+// Name returns "json". Implements [Codec].
 func (j JSONCodec) Name() string {
 	return CodecJSON
 }
 
+// IsBinary returns false, indicating that JSON is a text format. Implements
+// [StableCodec].
 func (j JSONCodec) IsBinary() bool {
 	return false
 }
 
+// MarshalAppend implements [Codec].
 func (j JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return j.MarshalOptions.MarshalAppend(base, msg)
 }
 
+// MarshalAppendStable implements [StableCodec].
 func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	data, err := j.MarshalOptions.MarshalAppend(base, msg)
 	if err != nil {
@@ -123,6 +128,7 @@ func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, 
 	return jsonStabilize(data)
 }
 
+// MarshalAppendField implements [RESTCodec].
 func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
@@ -181,6 +187,7 @@ func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field prot
 	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
+// UnmarshalField implements [RESTCodec].
 func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
@@ -201,6 +208,7 @@ func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoref
 	return j.Unmarshal(buf.Bytes(), msg)
 }
 
+// Unmarshal implements [Codec].
 func (j JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return j.UnmarshalOptions.Unmarshal(bytes, msg)
 }
@@ -232,22 +240,28 @@ func NewProtoCodec(res TypeResolver) *ProtoCodec {
 	}
 }
 
+// Name returns "proto". Implements [Codec].
 func (p *ProtoCodec) Name() string {
 	return CodecProto
 }
 
+// IsBinary returns true, indicating that Protobuf is a binary format. Implements
+// [StableCodec].
 func (p *ProtoCodec) IsBinary() bool {
 	return true
 }
 
+// MarshalAppend implements [Codec].
 func (p *ProtoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{}.MarshalAppend(base, msg)
 }
 
+// MarshalAppendStable implements [StableCodec].
 func (p *ProtoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
 	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(base, msg)
 }
 
+// Unmarshal implements [Codec].
 func (p *ProtoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
 	return p.unmarshal.Unmarshal(bytes, msg)
 }
