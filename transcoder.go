@@ -224,6 +224,20 @@ func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodC
 	return nil
 }
 
+func (t *Transcoder) usesREST() bool {
+	if len(t.restRoutes.children) > 0 || len(t.restRoutes.verbs) > 0 {
+		// Configuration allows transcoding *from* REST
+		return true
+	}
+	for _, method := range t.methods {
+		if _, targetsREST := method.protocols[ProtocolREST]; targetsREST {
+			// Configuration allows transcoding *to* REST
+			return true
+		}
+	}
+	return false
+}
+
 func (t *Transcoder) newOperation(writer http.ResponseWriter, request *http.Request) *operation {
 	ctx, cancel := context.WithCancel(request.Context())
 	request = request.WithContext(ctx)

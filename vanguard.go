@@ -135,6 +135,19 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
 		return nil, err
 	}
+
+	if transcoder.usesREST() {
+		newCodec := transcoder.codecs[CodecJSON]
+		if newCodec == nil {
+			return nil, fmt.Errorf("codec for %q format is nil", CodecJSON)
+		}
+		codec := newCodec(protoregistry.GlobalTypes)
+		if _, supportsREST := codec.(restCodec); !supportsREST {
+			return nil, fmt.Errorf(
+				"configuration uses REST protocol but codec for %q format is does not support REST-specific operations: %T",
+				CodecJSON, codec)
+		}
+	}
 	return transcoder, nil
 }
 
@@ -176,6 +189,22 @@ func WithRules(rules ...*annotations.HttpRule) TranscoderOption {
 // By default, "proto" and "json" codecs are supported using default options. This
 // option can be used to support additional codecs or to override the default
 // implementations (such as to change serialization or de-serialization options).
+//
+// Note that if using this option to override/replace the "json" codec and you are
+// using the REST protocol, it is highly recommended to either use an instance of
+// *vanguard.JSONCodec or to embed an instance of *vanguard.JSONCodec into your
+// implementation. This is because it provides additional operations that the REST
+// protocol requires. If you do not leverage the *vanguard.JSONCodec implementation,
+// then you must provide your own implementation of these two additional methods,
+// which support marshalling and unmarshalling individual fields of a message:
+//
+//	MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
+//	UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
+//
+// If you provide an implementation for the "json" codec that does not include these
+// methods and your configuration uses the REST protocol (either via HTTP transcoding
+// annotations in the services or via any service with a target protocol configured as
+// REST), then NewTranscoder will return an error.
 func WithCodec(newCodec func(TypeResolver) Codec) TranscoderOption {
 	codecName := newCodec(protoregistry.GlobalTypes).Name()
 	return transcoderOptionFunc(func(opts *transcoderOptions) {

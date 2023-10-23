@@ -65,11 +65,11 @@ type StableCodec interface {
 	IsBinary() bool
 }
 
-// RESTCodec is a Codec with additional methods for marshalling and unmarshalling
+// restCodec is a Codec with additional methods for marshalling and unmarshalling
 // individual fields of a message. This is necessary to support query string
 // variables and request and response bodies whose value is a specific field, not
 // an entire message. The extra methods are only used by the REST protocol.
-type RESTCodec interface {
+type restCodec interface {
 	Codec
 
 	// MarshalAppendField marshals just the given field of the given message to
@@ -80,15 +80,16 @@ type RESTCodec interface {
 	UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
 }
 
-// JSONCodec implements [Codec], [StableCodec], and [RESTCodec] for the JSON
-// format. It uses the [protojson] package for its implementation.
+// JSONCodec implements [Codec] and [StableCodec] for the JSON format.
+// It also provides additional operations to support the REST protocol.
+// It uses the [protojson] package for its implementation.
 type JSONCodec struct {
 	MarshalOptions   protojson.MarshalOptions
 	UnmarshalOptions protojson.UnmarshalOptions
 }
 
 var _ StableCodec = JSONCodec{}
-var _ RESTCodec = JSONCodec{}
+var _ restCodec = JSONCodec{}
 
 // NewJSONCodec is the default codec factory used for the codec named
 // "json". The given resolver is used to unmarshal extensions and also to
@@ -128,7 +129,8 @@ func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, 
 	return jsonStabilize(data)
 }
 
-// MarshalAppendField implements [RESTCodec].
+// MarshalAppendField marshals just the given field of the given message to
+// bytes, and appends it to the given base byte slice.
 func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
@@ -187,7 +189,8 @@ func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field prot
 	return nil, fmt.Errorf("JSON does not contain key %s", fieldName)
 }
 
-// UnmarshalField implements [RESTCodec].
+// UnmarshalField unmarshals the given data into the given field of the given
+// message.
 func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
 		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
