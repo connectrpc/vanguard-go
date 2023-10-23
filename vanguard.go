@@ -36,14 +36,19 @@ import (
 )
 
 const (
-	CompressionGzip     = "gzip"
+	// CompressionGzip is the name of the gzip compression algorithm.
+	CompressionGzip = "gzip"
+	// CompressionIdentity is the name of the "identity" compression algorithm,
+	// which is the default and indicates no compression.
 	CompressionIdentity = "identity"
 	// TODO: Connect protocol spec also references "br" (Brotli) and "zstd". And gRPC
 	//       protocol spec references "deflate" and "snappy". Should we also support
 	//       those out of the box?
 
+	// CodecProto is the name of the protobuf codec.
 	CodecProto = "proto"
-	CodecJSON  = "json"
+	// CodecJSON is the name of the JSON codec.
+	CodecJSON = "json"
 	// TODO: Some grpc impls support "text" out of the box (but not JSON, ironically).
 	//       such as the JS impl. Should we also support it out of the box?
 
