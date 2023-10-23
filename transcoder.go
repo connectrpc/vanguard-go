@@ -38,6 +38,8 @@ import (
 // service handlers support. It can do simple routing based on RPC method name, for simple
 // protocols like Connect, gRPC, and gRPC-Web; but it can also route based on REST-ful URI
 // paths configured with HTTP transcoding annotations.
+//
+// See the package-level examples for sample usage.
 type Transcoder struct {
 	bufferPool     bufferPool
 	codecs         codecMap
