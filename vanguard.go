@@ -47,8 +47,16 @@ const (
 	// TODO: Some grpc impls support "text" out of the box (but not JSON, ironically).
 	//       such as the JS impl. Should we also support it out of the box?
 
+	// DefaultMaxMessageBufferBytes is the default value for the maximum number
+	// of bytes that can be buffered for a request or response payload. If a
+	// payload exceeds this limit, the RPC will fail with a "resource exhausted"
+	// error.
 	DefaultMaxMessageBufferBytes = math.MaxUint32
-	DefaultMaxGetURLBytes        = 8 * 1024
+	// DefaultMaxGetURLBytes is the default value for the maximum number of bytes
+	// that can be used for a URL with the Connect unary protocol using the GET
+	// HTTP method. If a URL's length would exceed this limit, the POST HTTP method
+	// will be used instead (and the request contents moved from the URL to the body).
+	DefaultMaxGetURLBytes = 8 * 1024
 )
 
 // NewTranscoder creates a new transcoder that handles the given services, with the
