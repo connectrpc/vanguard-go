@@ -66,11 +66,6 @@ const (
 	// This protocol only supports unary and server-stream endpoints.
 	ProtocolREST
 
-	// protocolMin is the minimum valid value for a Protocol.
-	protocolMin = ProtocolConnect
-	// protocolMax is the maximum valid value for a Protocol.
-	protocolMax = ProtocolREST
-
 	protocolNameConnect = "Connect"
 	protocolNameGRPC    = "gRPC"
 	protocolNameGRPCWeb = "gRPC-Web"
