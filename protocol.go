@@ -37,9 +37,6 @@ const (
 	// the preference order. So Connect is the highest preferred protocol,
 	// then gRPC, etc.
 
-	// protocolUnknown is not a valid value. Since it is the zero value, this
-	// requires that all Protocol values must be explicitly initialized.
-	protocolUnknown = Protocol(0)
 	// ProtocolConnect indicates the Connect protocol. This protocol supports
 	// unary and streaming endpoints. However, bidirectional streams are only
 	// supported when combined with HTTP/2.
