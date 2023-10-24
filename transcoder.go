@@ -86,9 +86,13 @@ func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error
 		return fmt.Errorf("service %s was configured with no target protocols", svc.schema.FullName())
 	}
 	for protocol := range svcOpts.protocols {
-		switch protocol {
-		case ProtocolConnect, ProtocolGRPC, ProtocolGRPCWeb, ProtocolREST:
-		default:
+		isKnown := false
+		for _, knownProtocol := range allProtocols {
+			if isKnown = protocol == knownProtocol; isKnown {
+				break
+			}
+		}
+		if !isKnown {
 			return fmt.Errorf("protocol %d is not a valid value", protocol)
 		}
 	}
