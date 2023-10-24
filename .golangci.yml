@@ -86,4 +86,4 @@ issues:
         - goconst # allow string literals for WKT names
     - path: protocol.go
       linters:
-        - gochecknoglobals
+        - gochecknoglobals # allow Protocol global helpers

@@ -16,10 +16,10 @@ package vanguard
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"net/http"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,37 +58,31 @@ const (
 	//
 	// This protocol only supports unary and server-stream endpoints.
 	ProtocolREST
-
-	protocolNameConnect = "Connect"
-	protocolNameGRPC    = "gRPC"
-	protocolNameGRPCWeb = "gRPC-Web"
-	protocolNameREST    = "REST"
 )
 
 var (
-	// protocolPreferred is the preferred order of protocols. This is used
-	// when a client does not specify a protocol preference.
-	protocolPreferred = [...]Protocol{
+	// allProtocols are all support protocols in descending order of
+	// preference. The first protocol is the default protocol.
+	allProtocols = [...]Protocol{
 		ProtocolConnect,
 		ProtocolGRPC,
 		ProtocolGRPCWeb,
 		ProtocolREST,
 	}
+	protocolToString = map[Protocol]string{
+		ProtocolConnect: "Connect",
+		ProtocolGRPC:    "gRPC",
+		ProtocolGRPCWeb: "gRPC-Web",
+		ProtocolREST:    "REST",
+	}
 )
 
 func (p Protocol) String() string {
-	switch p {
-	case ProtocolConnect:
-		return protocolNameConnect
-	case ProtocolGRPC:
-		return protocolNameGRPC
-	case ProtocolGRPCWeb:
-		return protocolNameGRPCWeb
-	case ProtocolREST:
-		return protocolNameREST
-	default:
-		return fmt.Sprintf("unknown protocol (%d)", p)
+	s, ok := protocolToString[p]
+	if !ok {
+		return strconv.Itoa(int(p))
 	}
+	return s
 }
 
 func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
