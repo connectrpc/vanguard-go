@@ -61,7 +61,7 @@ const (
 )
 
 var (
-	// allProtocols are all support protocols in descending order of
+	// allProtocols are all supported protocols in descending order of
 	// preference. The first protocol is the default protocol.
 	allProtocols = [...]Protocol{
 		ProtocolConnect,
