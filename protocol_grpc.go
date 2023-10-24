@@ -334,8 +334,8 @@ func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 			respMeta.end = &responseEnd{}
 		}
 		if respMeta.end.err == nil {
-			// TODO: map HTTP status code to an RPC error (opposite of httpStatusCodeFromRPC)
-			respMeta.end.err = connect.NewError(connect.CodeInternal, fmt.Errorf("unexpected HTTP error: %d %s", statusCode, http.StatusText(statusCode)))
+			code := httpStatusCodeToRPC(statusCode)
+			respMeta.end.err = connect.NewError(code, fmt.Errorf("unexpected HTTP error: %d %s", statusCode, http.StatusText(statusCode)))
 		}
 	}
 	return respMeta
