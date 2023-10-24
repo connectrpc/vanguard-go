@@ -87,3 +87,4 @@ issues:
     - path: protocol.go
       linters:
         - gochecknoglobals # allow Protocol global helpers
+      text: "(allProtocols|protocolToString) is a global variable"
