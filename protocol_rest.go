@@ -244,7 +244,7 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 }
 
 func (r restClientProtocol) String() string {
-	return protocolNameREST
+	return r.protocol().String()
 }
 
 // restServerProtocol implements the REST protocol for
@@ -392,7 +392,7 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 }
 
 func (r restServerProtocol) String() string {
-	return protocolNameREST
+	return r.protocol().String()
 }
 
 // Decode timeout as a float in seconds from X-Server-Timeout header.

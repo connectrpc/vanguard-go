@@ -37,11 +37,6 @@ import (
 )
 
 const (
-	protocolNameConnectUnary     = protocolNameConnect + " unary"
-	protocolNameConnectUnaryGet  = protocolNameConnectUnary + " (GET)"
-	protocolNameConnectUnaryPost = protocolNameConnectUnary + " (POST)"
-	protocolNameConnectStream    = protocolNameConnect + " stream"
-
 	// TODO: Extract more constants for header names and values.
 	contentTypeJSON = "application/json"
 )
@@ -154,7 +149,7 @@ func (c connectUnaryGetClientProtocol) prepareMarshalledResponse(_ *operation, _
 }
 
 func (c connectUnaryGetClientProtocol) String() string {
-	return protocolNameConnectUnaryGet
+	return c.protocol().String() + " unary (GET)"
 }
 
 // connectUnaryPostClientProtocol implements the Connect protocol for
@@ -239,7 +234,7 @@ func (c connectUnaryPostClientProtocol) encodeEnd(op *operation, end *responseEn
 }
 
 func (c connectUnaryPostClientProtocol) String() string {
-	return protocolNameConnectUnaryPost
+	return c.protocol().String() + " unary (POST)"
 }
 
 // connectUnaryServerProtocol implements the Connect protocol for
@@ -402,7 +397,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 }
 
 func (c connectUnaryServerProtocol) String() string {
-	return protocolNameConnectUnary
+	return c.protocol().String() + " unary"
 }
 
 // connectStreamClientProtocol implements the Connect protocol for
@@ -488,7 +483,7 @@ func (c connectStreamClientProtocol) encodeEnvelope(env envelope) envelopeBytes 
 }
 
 func (c connectStreamClientProtocol) String() string {
-	return protocolNameConnectStream
+	return c.protocol().String() + " stream"
 }
 
 // connectStreamServerProtocol implements the Connect protocol for
@@ -585,7 +580,7 @@ func (c connectStreamServerProtocol) decodeEndFromMessage(_ *operation, buffer *
 }
 
 func (c connectStreamServerProtocol) String() string {
-	return protocolNameConnectStream
+	return c.protocol().String() + " stream"
 }
 
 func connectExtractUnaryTrailers(headers http.Header) http.Header {

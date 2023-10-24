@@ -84,3 +84,7 @@ issues:
     - path: params.go
       linters:
         - goconst # allow string literals for WKT names
+    - path: protocol.go
+      linters:
+        - gochecknoglobals # allow Protocol global helpers
+      text: "(allProtocols|protocolToString) is a global variable"

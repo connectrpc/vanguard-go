@@ -93,7 +93,7 @@ func (g grpcClientProtocol) encodeEnvelope(env envelope) envelopeBytes {
 }
 
 func (g grpcClientProtocol) String() string {
-	return protocolNameGRPC
+	return g.protocol().String()
 }
 
 // grpcServerProtocol implements the gRPC protocol for
@@ -148,7 +148,7 @@ func (g grpcServerProtocol) decodeEndFromMessage(_ *operation, _ *bytes.Buffer) 
 }
 
 func (g grpcServerProtocol) String() string {
-	return protocolNameGRPC
+	return g.protocol().String()
 }
 
 // grpcClientProtocol implements the gRPC protocol for
@@ -209,7 +209,7 @@ func (g grpcWebClientProtocol) encodeEnvelope(env envelope) envelopeBytes {
 }
 
 func (g grpcWebClientProtocol) String() string {
-	return protocolNameGRPCWeb
+	return g.protocol().String()
 }
 
 // grpcServerProtocol implements the gRPC-Web protocol for
@@ -275,7 +275,7 @@ func (g grpcWebServerProtocol) decodeEndFromMessage(_ *operation, buffer *bytes.
 }
 
 func (g grpcWebServerProtocol) String() string {
-	return protocolNameGRPCWeb
+	return g.protocol().String()
 }
 
 func grpcExtractRequestMeta(contentTypeShort, contentTypePrefix string, headers http.Header) (requestMeta, error) {

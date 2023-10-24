@@ -16,10 +16,10 @@ package vanguard
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"net/http"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,13 +33,6 @@ const envelopeLen = 5
 type Protocol int
 
 const (
-	// The ordinal value of the protocol (other than the zero value) reflects
-	// the preference order. So Connect is the highest preferred protocol,
-	// then gRPC, etc.
-
-	// protocolUnknown is not a valid value. Since it is the zero value, this
-	// requires that all Protocol values must be explicitly initialized.
-	protocolUnknown = Protocol(0)
 	// ProtocolConnect indicates the Connect protocol. This protocol supports
 	// unary and streaming endpoints. However, bidirectional streams are only
 	// supported when combined with HTTP/2.
@@ -65,31 +58,31 @@ const (
 	//
 	// This protocol only supports unary and server-stream endpoints.
 	ProtocolREST
+)
 
-	// protocolMin is the minimum valid value for a Protocol.
-	protocolMin = ProtocolConnect
-	// protocolMax is the maximum valid value for a Protocol.
-	protocolMax = ProtocolREST
-
-	protocolNameConnect = "Connect"
-	protocolNameGRPC    = "gRPC"
-	protocolNameGRPCWeb = "gRPC-Web"
-	protocolNameREST    = "REST"
+var (
+	// allProtocols are all supported protocols in descending order of
+	// preference. The first protocol is the default protocol.
+	allProtocols = [...]Protocol{
+		ProtocolConnect,
+		ProtocolGRPC,
+		ProtocolGRPCWeb,
+		ProtocolREST,
+	}
+	protocolToString = map[Protocol]string{
+		ProtocolConnect: "Connect",
+		ProtocolGRPC:    "gRPC",
+		ProtocolGRPCWeb: "gRPC-Web",
+		ProtocolREST:    "REST",
+	}
 )
 
 func (p Protocol) String() string {
-	switch p {
-	case ProtocolConnect:
-		return protocolNameConnect
-	case ProtocolGRPC:
-		return protocolNameGRPC
-	case ProtocolGRPCWeb:
-		return protocolNameGRPCWeb
-	case ProtocolREST:
-		return protocolNameREST
-	default:
-		return fmt.Sprintf("unknown protocol (%d)", p)
+	s, ok := protocolToString[p]
+	if !ok {
+		return strconv.Itoa(int(p))
 	}
+	return s
 }
 
 func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
