@@ -84,3 +84,6 @@ issues:
     - path: params.go
       linters:
         - goconst # allow string literals for WKT names
+    - path: protocol.go
+      linters:
+        - gochecknoglobals

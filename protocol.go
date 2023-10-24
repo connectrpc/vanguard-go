@@ -33,10 +33,6 @@ const envelopeLen = 5
 type Protocol int
 
 const (
-	// The ordinal value of the protocol (other than the zero value) reflects
-	// the preference order. So Connect is the highest preferred protocol,
-	// then gRPC, etc.
-
 	// ProtocolConnect indicates the Connect protocol. This protocol supports
 	// unary and streaming endpoints. However, bidirectional streams are only
 	// supported when combined with HTTP/2.
@@ -67,6 +63,17 @@ const (
 	protocolNameGRPC    = "gRPC"
 	protocolNameGRPCWeb = "gRPC-Web"
 	protocolNameREST    = "REST"
+)
+
+var (
+	// protocolPreferred is the preferred order of protocols. This is used
+	// when a client does not specify a protocol preference.
+	protocolPreferred = [...]Protocol{
+		ProtocolConnect,
+		ProtocolGRPC,
+		ProtocolGRPCWeb,
+		ProtocolREST,
+	}
 )
 
 func (p Protocol) String() string {

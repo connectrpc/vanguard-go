@@ -424,12 +424,7 @@ func (o *operation) validate(transcoder *Transcoder) error {
 	if _, supportsProtocol := o.methodConf.protocols[clientProtoHandler.protocol()]; supportsProtocol {
 		o.server.protocol = clientProtoHandler.protocol().serverHandler(o)
 	} else {
-		for _, protocol := range [...]Protocol{
-			ProtocolConnect,
-			ProtocolGRPC,
-			ProtocolGRPCWeb,
-			ProtocolREST,
-		} {
+		for _, protocol := range protocolPreferred {
 			if _, supportsProtocol := o.methodConf.protocols[protocol]; supportsProtocol {
 				o.server.protocol = protocol.serverHandler(o)
 				break
