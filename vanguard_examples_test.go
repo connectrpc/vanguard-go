@@ -56,7 +56,7 @@ func Example_restClientToRpcServer() {
 	services := []*vanguard.Service{vanguard.NewService(rpcRoute, rpcHandler)}
 	transcoder, err := vanguard.NewTranscoder(services)
 	if err != nil {
-		log.Println(err)
+		logger.Println(err)
 		return
 	}
 
@@ -77,7 +77,7 @@ func Example_restClientToRpcServer() {
 	}
 	body, err := protojson.Marshal(book)
 	if err != nil {
-		log.Println(err)
+		logger.Println(err)
 		return
 	}
 
@@ -87,7 +87,7 @@ func Example_restClientToRpcServer() {
 		bytes.NewReader(body),
 	)
 	if err != nil {
-		log.Println(err)
+		logger.Println(err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -95,7 +95,7 @@ func Example_restClientToRpcServer() {
 
 	rsp, err := client.Do(req)
 	if err != nil {
-		log.Println(err)
+		logger.Println(err)
 		return
 	}
 	defer rsp.Body.Close()
@@ -104,11 +104,11 @@ func Example_restClientToRpcServer() {
 
 	body, err = io.ReadAll(rsp.Body)
 	if err != nil {
-		log.Println(err)
+		logger.Println(err)
 		return
 	}
 	if err := protojson.Unmarshal(body, book); err != nil {
-		log.Println(err)
+		logger.Println(err)
 		return
 	}
 	logger.Println(book.Author)
