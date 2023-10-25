@@ -1,10 +1,9 @@
 # ⚔️ Vanguard
 
-[![License](https://img.shields.io/github/license/connectrpc/vanguard-go?color=blue)][badges_license]
-[![Slack](https://img.shields.io/badge/slack-buf-%23e01563)][badges_slack]
 [![Build](https://github.com/connectrpc/vanguard-go/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/connectrpc/vanguard-go/actions/workflows/ci.yaml)
 [![Report Card](https://goreportcard.com/badge/connectrpc.com/vanguard)](https://goreportcard.com/report/github.com/connectrpc/vanguard-go)
 [![GoDoc](https://pkg.go.dev/badge/connectrpc.com/vanguard.svg)](https://pkg.go.dev/github.com/connectrpc/vanguard-go)
+[![Slack](https://img.shields.io/badge/slack-buf-%23e01563)][badges_slack]
 
 Vanguard is a powerful library for Go `net/http` servers that enables seamless
 transcoding between REST and RPC protocols. Whether you need to bridge the gap
