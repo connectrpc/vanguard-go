@@ -38,26 +38,35 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func ExampleNewTranscoder_restToConnect() {
-	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
+func Example_restClientToRpcServer() {
+	// This example shows Vanguard adding REST support to an RPC server built
+	// with Connect. (To add REST, gRPC-Web, and Connect support to servers built
+	// with grpc-go, use the connectrpc.com/vanguard/vanguardgrpc sub-package.)
+	logger := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
-	// RPC service implementing testv1connect.LibraryService annotations.
+	// libraryRPC is an implementation of the testv1connect.LibraryService RPC
+	// server. It's a pure RPC server, without any hand-written translation to or
+	// from RESTful semantics.
 	svc := &libraryRPC{}
+	rpcRoute, rpcHandler := testv1connect.NewLibraryServiceHandler(svc)
 
-	handler, err := vanguard.NewTranscoder([]*vanguard.Service{
-		vanguard.NewService(testv1connect.NewLibraryServiceHandler(svc)),
-	})
+	// Using Vanguard, the server can also accept RESTful requests. The Vanguard
+	// Transcoder handles both REST and RPC traffic, so there's no need to mount
+	// the RPC-only handler.
+	services := []*vanguard.Service{vanguard.NewService(rpcRoute, rpcHandler)}
+	transcoder, err := vanguard.NewTranscoder(services)
 	if err != nil {
-		log.Println("error:", err)
+		logger.Println(err)
 		return
 	}
 
-	// Create the server.
-	// (This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewServer(handler)
+	// We can use any server that works with http.Handlers. Since this is a
+	// testable example, we're using httptest.
+	server := httptest.NewServer(transcoder)
 	defer server.Close()
-	client := server.Client()
 
+	// With the server running, we can make a RESTful call.
+	client := server.Client()
 	book := &testv1.Book{
 		Title:       "2001: A Space Odyssey",
 		Author:      "Arthur C. Clarke",
@@ -66,61 +75,79 @@ func ExampleNewTranscoder_restToConnect() {
 			"genre": "science fiction",
 		},
 	}
-	body, _ := protojson.Marshal(book)
+	body, err := protojson.Marshal(book)
+	if err != nil {
+		logger.Println(err)
+		return
+	}
 
-	// Create the POST request.
-	req, _ := http.NewRequestWithContext(
+	req, err := http.NewRequestWithContext(
 		context.Background(), http.MethodPost,
 		server.URL+"/v1/shelves/top/books",
 		bytes.NewReader(body),
 	)
+	if err != nil {
+		logger.Println(err)
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.RawQuery = "book_id=2&request_id=123"
 
 	rsp, err := client.Do(req)
 	if err != nil {
-		log.Println("error:", err)
+		logger.Println(err)
 		return
 	}
 	defer rsp.Body.Close()
-	log.Println(rsp.Status)
-	log.Println(rsp.Header.Get("Content-Type"))
+	logger.Println(rsp.Status)
+	logger.Println(rsp.Header.Get("Content-Type"))
 
-	// Decode the response.
-	body, _ = io.ReadAll(rsp.Body)
-
-	_ = protojson.Unmarshal(body, book)
-	log.Println(book.Author)
+	body, err = io.ReadAll(rsp.Body)
+	if err != nil {
+		logger.Println(err)
+		return
+	}
+	if err := protojson.Unmarshal(body, book); err != nil {
+		logger.Println(err)
+		return
+	}
+	logger.Println(book.Author)
 	// Output: 200 OK
 	// application/json
 	// Arthur C. Clarke
 }
 
-func ExampleNewTranscoder_connectToREST() {
-	log := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
+func Example_rpcClientToRestServer() {
+	// This example shows Vanguard adding RPC support to an REST server. This
+	// lets organizations use RPC clients in new codebases without rewriting
+	// existing REST services.
+	logger := log.New(os.Stdout, "" /* prefix */, 0 /* flags */)
 
-	// REST service implementing testv1connect.LibraryService annotations.
-	svc := &libraryREST{}
+	// libraryREST is an http.Handler that implements a RESTful server. The
+	// implementation doesn't use Protobuf or RPC directly.
+	restHandler := &libraryREST{}
 
-	handler, err := vanguard.NewTranscoder(
-		[]*vanguard.Service{vanguard.NewService(
-			testv1connect.LibraryServiceName,
-			svc,
-			// This tells vanguard that it must transform requests to REST.
-			vanguard.WithTargetProtocols(vanguard.ProtocolREST),
-		)},
-	)
+	// Using Vanguard, the server can also accept RPC traffic. The Vanguard
+	// Transcoder handles both REST and RPC traffic, so there's no need to mount
+	// the REST-only handler.
+	services := []*vanguard.Service{vanguard.NewService(
+		testv1connect.LibraryServiceName,
+		restHandler,
+		// This tells vanguard that the service implementation only supports REST.
+		vanguard.WithTargetProtocols(vanguard.ProtocolREST),
+	)}
+	transcoder, err := vanguard.NewTranscoder(services)
 	if err != nil {
-		log.Println("error:", err)
+		logger.Println(err)
 		return
 	}
 
-	// Create the server.
-	// (This is a httptest.Server, but it could be any http.Server)
-	server := httptest.NewServer(handler)
+	// We can serve RPC and REST traffic using any server that works with
+	// http.Handlers. Since this is a testable example, we're using httptest.
+	server := httptest.NewServer(transcoder)
 	defer server.Close()
 
-	// Create a connect client and call the service.
+	// With the server running, we can make an RPC call using a generated client.
 	client := testv1connect.NewLibraryServiceClient(server.Client(), server.URL)
 	rsp, err := client.GetBook(
 		context.Background(),
@@ -129,10 +156,10 @@ func ExampleNewTranscoder_connectToREST() {
 		}),
 	)
 	if err != nil {
-		log.Println("error:", err)
+		logger.Println(err)
 		return
 	}
-	log.Println(rsp.Msg.Description)
+	logger.Println(rsp.Msg.Description)
 	// Output: Have you seen Blade Runner?
 }
 
