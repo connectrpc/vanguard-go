@@ -174,7 +174,7 @@ transcoder = vanguard.NewTranscoder(
         myService,
         otherService,
     },
-	WithUnkownHandler(custom404handler),
+	WithUnknownHandler(custom404handler),
 	WithCodec(myCustomMessageFormat{}),
 )
 ```
