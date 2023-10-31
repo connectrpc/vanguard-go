@@ -134,8 +134,8 @@ by supplying options:
 otherService := vanguard.NewService(
 	"some.other.Service",
 	proxyHandler,
-	WithTargetProtocols(vanguard.ProtocolGRPC),
-	WithTargetCodecs(vanguard.CodecProto)
+	vanguard.WithTargetProtocols(vanguard.ProtocolGRPC),
+	vanguard.WithTargetCodecs(vanguard.CodecProto)
 )
 ```
 
@@ -174,8 +174,8 @@ transcoder = vanguard.NewTranscoder(
         myService,
         otherService,
     },
-	WithUnknownHandler(custom404handler),
-	WithCodec(myCustomMessageFormat{}),
+	vanguard.WithUnknownHandler(custom404handler),
+	vanguard.WithCodec(myCustomMessageFormat{}),
 )
 ```
 
