@@ -71,11 +71,17 @@ func TestMux_RESTxRPC(t *testing.T) {
 		connect.WithInterceptors(&interceptor),
 	))
 
+	svr := httptest.NewServer(serveMux)
+	t.Cleanup(svr.Close)
+	svrURL, err := url.Parse(svr.URL)
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(svrURL)
+
 	type testMux struct {
 		name    string
 		handler http.Handler
 	}
-	makeMux := func(protocol Protocol, codec, compression string) testMux {
+	wrapHandler := func(protocol Protocol, codec, compression string, handler http.Handler) http.Handler {
 		opts := []ServiceOption{
 			WithTargetProtocols(protocol),
 			WithTargetCodecs(codec),
@@ -85,8 +91,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		} else {
 			opts = append(opts, WithNoTargetCompression())
 		}
-		svcHandler := protocolAssertMiddleware(protocol, codec, compression, serveMux)
-		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
+		svcHandler := protocolAssertMiddleware(protocol, codec, compression, handler)
 
 		services := make([]*Service, len(serviceNames))
 		for i, svcName := range serviceNames {
@@ -94,13 +99,20 @@ func TestMux_RESTxRPC(t *testing.T) {
 		}
 		handler, err := NewTranscoder(services)
 		require.NoError(t, err)
-		return testMux{name: name, handler: handler}
+		return handler
 	}
 	var muxes []testMux
 	for _, protocol := range protocols {
 		for _, codec := range codecs {
 			for _, compression := range compressions {
-				muxes = append(muxes, makeMux(protocol, codec, compression))
+				muxes = append(muxes, testMux{
+					name:    fmt.Sprintf("%s_%s_%s", protocol, codec, compression),
+					handler: wrapHandler(protocol, codec, compression, serveMux),
+				})
+				muxes = append(muxes, testMux{
+					name:    fmt.Sprintf("proxy_%s_%s_%s", protocol, codec, compression),
+					handler: wrapHandler(protocol, codec, compression, proxy),
+				})
 			}
 		}
 	}
@@ -365,6 +377,28 @@ func TestMux_RESTxRPC(t *testing.T) {
 					]
 				}
 			]`,
+		},
+	}, {
+		// Checks errors on decoding the request body.
+		name: "GetCheckout-Error",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v2/checkouts/nan", // invalid ID
+			body:   nil,
+			meta: http.Header{
+				"Message": []string{"hello"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs:   []testMsg{},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "invalid parameter \"id\" invalid character 'a' in literal null (expecting 'u')",
+			},
 		},
 	}, {
 		name: "Index",
