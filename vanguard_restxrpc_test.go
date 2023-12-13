@@ -16,6 +16,7 @@ package vanguard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,7 +111,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 					handler: wrapHandler(protocol, codec, compression, serveMux),
 				})
 				muxes = append(muxes, testMux{
-					name:    fmt.Sprintf("proxy_%s_%s_%s", protocol, codec, compression),
+					name:    fmt.Sprintf("proxy/%s_%s_%s", protocol, codec, compression),
 					handler: wrapHandler(protocol, codec, compression, proxy),
 				})
 			}
@@ -167,6 +168,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 			query[key] = values
 		}
 		req.URL.RawQuery = query.Encode()
+		// Inject http.Server into the request context for httputil.ReverseProxy.
+		svr := &http.Server{} //nolint:gosec // dummy server for testing
+		req = req.WithContext(context.WithValue(req.Context(), http.ServerContextKey, svr))
 		return req
 	}
 	type output struct {

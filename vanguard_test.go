@@ -327,7 +327,8 @@ func (i *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		}
 		diff := cmp.Diff(msg, inn.msg, protocmp.Transform())
 		if diff != "" {
-			return nil, fmt.Errorf("message didn't match: %s", diff)
+			stream.Error(diff)
+			return nil, fmt.Errorf("unexpected message diff")
 		}
 
 		if out.err != nil {

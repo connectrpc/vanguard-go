@@ -471,6 +471,18 @@ func (o *operation) queryValues() url.Values {
 }
 
 func (o *operation) handle() {
+	// Deferred function to capture http.ErrAbortHandler panics.
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if err, ok := recovered.(error); ok {
+				if errors.Is(err, http.ErrAbortHandler) {
+					return
+				}
+			}
+			panic(recovered) //nolint:forbidigo // re-throw the panic if unknown
+		}
+	}()
+
 	o.clientEnveloper, _ = o.client.protocol.(envelopedProtocolHandler)
 	o.clientPreparer, _ = o.client.protocol.(clientBodyPreparer)
 	if o.clientPreparer != nil {
@@ -944,7 +956,8 @@ func (r *transformingReader) Read(data []byte) (n int, err error) {
 		}
 		if err := r.prepareMessage(); err != nil {
 			r.err = err
-			return 0, err
+			r.rw.reportError(err)
+			return 0, io.EOF
 		}
 	}
 }
@@ -1010,7 +1023,7 @@ func (w *responseWriter) Header() http.Header {
 	return w.delegate.Header()
 }
 
-func (w *responseWriter) Write(data []byte) (int, error) {
+func (w *responseWriter) Write(data []byte) (n int, err error) {
 	if !w.headersWritten {
 		w.WriteHeader(http.StatusOK)
 	}
@@ -1531,7 +1544,7 @@ type transformingWriter struct {
 	latestEnvelope  envelope
 }
 
-func (w *transformingWriter) Write(data []byte) (int, error) {
+func (w *transformingWriter) Write(data []byte) (n int, err error) {
 	if w.err != nil {
 		return 0, w.err
 	}
