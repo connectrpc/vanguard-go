@@ -1249,6 +1249,7 @@ func (w *responseWriter) close() {
 		w.WriteHeader(http.StatusOK)
 	}
 	if w.w != nil {
+		_, _ = w.w.Write(nil) // trigger any final writes
 		_ = w.w.Close()
 	}
 	if w.endWritten {
