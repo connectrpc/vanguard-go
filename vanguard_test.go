@@ -893,12 +893,10 @@ func runRPCTestCase[Client any](
 	}
 	var expectedErr *connect.Error
 	expectServerDone := true
-	var expectServerCancel bool
 	for _, streamMsg := range stream.msgs {
 		if streamMsg.in != nil && streamMsg.in.err != nil {
 			expectedErr = streamMsg.in.err
 			expectServerDone = false
-			expectServerCancel = true
 			break
 		}
 		if streamMsg.out != nil && streamMsg.out.err != nil {
@@ -919,10 +917,13 @@ func runRPCTestCase[Client any](
 		assert.Equal(t, receivedErr.Code(), connect.CodeOf(err))
 	}
 	// Also check the error observed by the server.
-	switch {
-	case expectedErr == nil:
+	if expectedErr == nil {
 		assert.NoError(t, serverErr)
-	case expectServerCancel:
+	} else {
+		if serverErr == nil {
+			serverErr = err
+		}
+		assert.Error(t, serverErr)
 		if serverInvoked && serverErr != nil {
 			// We expect the server to either have seen the same error or it later
 			// observed a cancel error (since the middleware cancels the request
@@ -931,9 +932,6 @@ func runRPCTestCase[Client any](
 				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(serverErr))
 			}
 		}
-	default:
-		assert.Error(t, serverErr)
-		assert.Equal(t, expectedErr.Code(), connect.CodeOf(serverErr))
 	}
 	assert.Subset(t, headers, stream.rspHeader)
 	if stream.err == nil {
