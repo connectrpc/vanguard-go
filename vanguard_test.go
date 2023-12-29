@@ -919,18 +919,13 @@ func runRPCTestCase[Client any](
 	// Also check the error observed by the server.
 	if expectedErr == nil {
 		assert.NoError(t, serverErr)
-	} else {
-		if serverErr == nil {
-			serverErr = err
-		}
+	} else if serverInvoked {
 		assert.Error(t, serverErr)
-		if serverInvoked && serverErr != nil {
-			// We expect the server to either have seen the same error or it later
-			// observed a cancel error (since the middleware cancels the request
-			// after it aborts the operation).
-			if connect.CodeOf(serverErr) != connect.CodeOf(expectedErr) && !errors.Is(serverErr, context.Canceled) {
-				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(serverErr))
-			}
+		// We expect the server to either have seen the same error or it later
+		// observed a cancel error (since the middleware cancels the request
+		// after it aborts the operation).
+		if connect.CodeOf(serverErr) != connect.CodeOf(expectedErr) && !errors.Is(serverErr, context.Canceled) {
+			assert.Equal(t, connect.CodeCanceled, connect.CodeOf(serverErr))
 		}
 	}
 	assert.Subset(t, headers, stream.rspHeader)
