@@ -838,7 +838,7 @@ func protocolAssertMiddleware(
 					"Content-Type":             {fmt.Sprintf("application/connect+%s", codec)},
 					"Connect-Content-Encoding": allowedCompression,
 				}
-			} else {
+			} else if req.Method == http.MethodPost {
 				wantHdr = map[string][]string{
 					"Content-Type":     {fmt.Sprintf("application/%s", codec)},
 					"Content-Encoding": allowedCompression,
