@@ -33,7 +33,7 @@ import (
 // generated with a version of connect newer than the one compiled into your binary. You can fix the
 // problem by either regenerating this code with an older version of connect or updating the connect
 // version compiled into your binary.
-const _ = connect.IsAtLeastVersion1_7_0
+const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// LibraryServiceName is the fully-qualified name of the LibraryService service.
@@ -85,6 +85,23 @@ const (
 	LibraryServiceListCheckoutsProcedure = "/vanguard.test.v1.LibraryService/ListCheckouts"
 )
 
+// These variables are the protoreflect.Descriptor objects for the RPCs defined in this package.
+var (
+	libraryServiceServiceDescriptor             = v1.File_vanguard_test_v1_library_proto.Services().ByName("LibraryService")
+	libraryServiceGetBookMethodDescriptor       = libraryServiceServiceDescriptor.Methods().ByName("GetBook")
+	libraryServiceCreateBookMethodDescriptor    = libraryServiceServiceDescriptor.Methods().ByName("CreateBook")
+	libraryServiceListBooksMethodDescriptor     = libraryServiceServiceDescriptor.Methods().ByName("ListBooks")
+	libraryServiceCreateShelfMethodDescriptor   = libraryServiceServiceDescriptor.Methods().ByName("CreateShelf")
+	libraryServiceUpdateBookMethodDescriptor    = libraryServiceServiceDescriptor.Methods().ByName("UpdateBook")
+	libraryServiceDeleteBookMethodDescriptor    = libraryServiceServiceDescriptor.Methods().ByName("DeleteBook")
+	libraryServiceSearchBooksMethodDescriptor   = libraryServiceServiceDescriptor.Methods().ByName("SearchBooks")
+	libraryServiceMoveBooksMethodDescriptor     = libraryServiceServiceDescriptor.Methods().ByName("MoveBooks")
+	libraryServiceCheckoutBooksMethodDescriptor = libraryServiceServiceDescriptor.Methods().ByName("CheckoutBooks")
+	libraryServiceReturnBooksMethodDescriptor   = libraryServiceServiceDescriptor.Methods().ByName("ReturnBooks")
+	libraryServiceGetCheckoutMethodDescriptor   = libraryServiceServiceDescriptor.Methods().ByName("GetCheckout")
+	libraryServiceListCheckoutsMethodDescriptor = libraryServiceServiceDescriptor.Methods().ByName("ListCheckouts")
+)
+
 // LibraryServiceClient is a client for the vanguard.test.v1.LibraryService service.
 type LibraryServiceClient interface {
 	// Gets a book.
@@ -121,64 +138,76 @@ func NewLibraryServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 		getBook: connect.NewClient[v1.GetBookRequest, v1.Book](
 			httpClient,
 			baseURL+LibraryServiceGetBookProcedure,
+			connect.WithSchema(libraryServiceGetBookMethodDescriptor),
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
 		createBook: connect.NewClient[v1.CreateBookRequest, v1.Book](
 			httpClient,
 			baseURL+LibraryServiceCreateBookProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceCreateBookMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		listBooks: connect.NewClient[v1.ListBooksRequest, v1.ListBooksResponse](
 			httpClient,
 			baseURL+LibraryServiceListBooksProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceListBooksMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		createShelf: connect.NewClient[v1.CreateShelfRequest, v1.Shelf](
 			httpClient,
 			baseURL+LibraryServiceCreateShelfProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceCreateShelfMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		updateBook: connect.NewClient[v1.UpdateBookRequest, v1.Book](
 			httpClient,
 			baseURL+LibraryServiceUpdateBookProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceUpdateBookMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		deleteBook: connect.NewClient[v1.DeleteBookRequest, emptypb.Empty](
 			httpClient,
 			baseURL+LibraryServiceDeleteBookProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceDeleteBookMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		searchBooks: connect.NewClient[v1.SearchBooksRequest, v1.SearchBooksResponse](
 			httpClient,
 			baseURL+LibraryServiceSearchBooksProcedure,
+			connect.WithSchema(libraryServiceSearchBooksMethodDescriptor),
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
 		moveBooks: connect.NewClient[v1.MoveBooksRequest, v1.MoveBooksResponse](
 			httpClient,
 			baseURL+LibraryServiceMoveBooksProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceMoveBooksMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		checkoutBooks: connect.NewClient[v1.CheckoutBooksRequest, v1.Checkout](
 			httpClient,
 			baseURL+LibraryServiceCheckoutBooksProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceCheckoutBooksMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		returnBooks: connect.NewClient[v1.ReturnBooksRequest, emptypb.Empty](
 			httpClient,
 			baseURL+LibraryServiceReturnBooksProcedure,
-			opts...,
+			connect.WithSchema(libraryServiceReturnBooksMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		getCheckout: connect.NewClient[v1.GetCheckoutRequest, v1.Checkout](
 			httpClient,
 			baseURL+LibraryServiceGetCheckoutProcedure,
+			connect.WithSchema(libraryServiceGetCheckoutMethodDescriptor),
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
 		listCheckouts: connect.NewClient[v1.ListCheckoutsRequest, v1.ListCheckoutsResponse](
 			httpClient,
 			baseURL+LibraryServiceListCheckoutsProcedure,
+			connect.WithSchema(libraryServiceListCheckoutsMethodDescriptor),
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
@@ -293,64 +322,76 @@ func NewLibraryServiceHandler(svc LibraryServiceHandler, opts ...connect.Handler
 	libraryServiceGetBookHandler := connect.NewUnaryHandler(
 		LibraryServiceGetBookProcedure,
 		svc.GetBook,
+		connect.WithSchema(libraryServiceGetBookMethodDescriptor),
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceCreateBookHandler := connect.NewUnaryHandler(
 		LibraryServiceCreateBookProcedure,
 		svc.CreateBook,
-		opts...,
+		connect.WithSchema(libraryServiceCreateBookMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceListBooksHandler := connect.NewUnaryHandler(
 		LibraryServiceListBooksProcedure,
 		svc.ListBooks,
-		opts...,
+		connect.WithSchema(libraryServiceListBooksMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceCreateShelfHandler := connect.NewUnaryHandler(
 		LibraryServiceCreateShelfProcedure,
 		svc.CreateShelf,
-		opts...,
+		connect.WithSchema(libraryServiceCreateShelfMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceUpdateBookHandler := connect.NewUnaryHandler(
 		LibraryServiceUpdateBookProcedure,
 		svc.UpdateBook,
-		opts...,
+		connect.WithSchema(libraryServiceUpdateBookMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceDeleteBookHandler := connect.NewUnaryHandler(
 		LibraryServiceDeleteBookProcedure,
 		svc.DeleteBook,
-		opts...,
+		connect.WithSchema(libraryServiceDeleteBookMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceSearchBooksHandler := connect.NewUnaryHandler(
 		LibraryServiceSearchBooksProcedure,
 		svc.SearchBooks,
+		connect.WithSchema(libraryServiceSearchBooksMethodDescriptor),
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceMoveBooksHandler := connect.NewUnaryHandler(
 		LibraryServiceMoveBooksProcedure,
 		svc.MoveBooks,
-		opts...,
+		connect.WithSchema(libraryServiceMoveBooksMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceCheckoutBooksHandler := connect.NewUnaryHandler(
 		LibraryServiceCheckoutBooksProcedure,
 		svc.CheckoutBooks,
-		opts...,
+		connect.WithSchema(libraryServiceCheckoutBooksMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceReturnBooksHandler := connect.NewUnaryHandler(
 		LibraryServiceReturnBooksProcedure,
 		svc.ReturnBooks,
-		opts...,
+		connect.WithSchema(libraryServiceReturnBooksMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceGetCheckoutHandler := connect.NewUnaryHandler(
 		LibraryServiceGetCheckoutProcedure,
 		svc.GetCheckout,
+		connect.WithSchema(libraryServiceGetCheckoutMethodDescriptor),
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceListCheckoutsHandler := connect.NewUnaryHandler(
 		LibraryServiceListCheckoutsProcedure,
 		svc.ListCheckouts,
+		connect.WithSchema(libraryServiceListCheckoutsMethodDescriptor),
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)

@@ -6,10 +6,10 @@ managed:
     except:
       - buf.build/googleapis/googleapis
 plugins:
-  - plugin: buf.build/protocolbuffers/go:v1.31.0
+  - plugin: buf.build/protocolbuffers/go:v1.32.0
     out: internal/gen
     opt: paths=source_relative
-  - plugin: buf.build/connectrpc/go:v1.11.0
+  - plugin: buf.build/connectrpc/go:v1.14.0
     out: internal/gen
     opt: paths=source_relative
   # gRPC generated code is used by vanguardgrpc examples

@@ -6,7 +6,7 @@ require (
 	buf.build/gen/go/connectrpc/eliza/connectrpc/go v1.11.1-20230822171018-8b8b971d6fde.1
 	buf.build/gen/go/connectrpc/eliza/grpc/go v1.3.0-20230822171018-8b8b971d6fde.1
 	buf.build/gen/go/connectrpc/eliza/protocolbuffers/go v1.31.0-20230822171018-8b8b971d6fde.1
-	connectrpc.com/connect v1.11.1
+	connectrpc.com/connect v1.14.0
 	connectrpc.com/grpcreflect v1.2.0
 	github.com/google/go-cmp v0.5.9
 	github.com/stretchr/testify v1.8.4
@@ -15,7 +15,7 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20230803162519-f966b187b2e5
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20230807174057-1744710a1577
 	google.golang.org/grpc v1.58.3
-	google.golang.org/protobuf v1.31.0
+	google.golang.org/protobuf v1.32.0
 )
 
 require (
