@@ -838,7 +838,7 @@ func protocolAssertMiddleware(
 					"Content-Type":             {fmt.Sprintf("application/connect+%s", codec)},
 					"Connect-Content-Encoding": allowedCompression,
 				}
-			} else {
+			} else if req.Method == http.MethodPost {
 				wantHdr = map[string][]string{
 					"Content-Type":     {fmt.Sprintf("application/%s", codec)},
 					"Content-Encoding": allowedCompression,
@@ -904,6 +904,7 @@ func runRPCTestCase[Client any](
 		if streamMsg.out != nil && streamMsg.out.err != nil {
 			expectedErr = streamMsg.out.err
 			expectServerDone = streamMsg.out.msg == nil
+			expectServerCancel = true
 			break
 		}
 	}
@@ -919,21 +920,18 @@ func runRPCTestCase[Client any](
 		assert.Equal(t, receivedErr.Code(), connect.CodeOf(err))
 	}
 	// Also check the error observed by the server.
-	switch {
-	case expectedErr == nil:
+	if expectedErr == nil {
 		assert.NoError(t, serverErr)
-	case expectServerCancel:
-		if serverInvoked && serverErr != nil {
+	} else if serverInvoked {
+		assert.Error(t, serverErr)
+		if expectServerCancel && connect.CodeOf(serverErr) != connect.CodeOf(expectedErr) {
 			// We expect the server to either have seen the same error or it later
 			// observed a cancel error (since the middleware cancels the request
 			// after it aborts the operation).
-			if connect.CodeOf(serverErr) != connect.CodeOf(expectedErr) && !errors.Is(serverErr, context.Canceled) {
-				assert.Equal(t, connect.CodeCanceled, connect.CodeOf(serverErr))
-			}
+			assert.Equal(t, connect.CodeCanceled, connect.CodeOf(serverErr))
+		} else {
+			assert.Equal(t, expectedErr.Code(), connect.CodeOf(serverErr))
 		}
-	default:
-		assert.Error(t, serverErr)
-		assert.Equal(t, expectedErr.Code(), connect.CodeOf(serverErr))
 	}
 	assert.Subset(t, headers, stream.rspHeader)
 	if stream.err == nil {

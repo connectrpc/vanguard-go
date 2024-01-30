@@ -34,7 +34,7 @@ import (
 // generated with a version of connect newer than the one compiled into your binary. You can fix the
 // problem by either regenerating this code with an older version of connect or updating the connect
 // version compiled into your binary.
-const _ = connect.IsAtLeastVersion0_1_0
+const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// ContentServiceName is the fully-qualified name of the ContentService service.
@@ -58,6 +58,15 @@ const (
 	// ContentServiceSubscribeProcedure is the fully-qualified name of the ContentService's Subscribe
 	// RPC.
 	ContentServiceSubscribeProcedure = "/vanguard.test.v1.ContentService/Subscribe"
+)
+
+// These variables are the protoreflect.Descriptor objects for the RPCs defined in this package.
+var (
+	contentServiceServiceDescriptor         = v1.File_vanguard_test_v1_content_proto.Services().ByName("ContentService")
+	contentServiceIndexMethodDescriptor     = contentServiceServiceDescriptor.Methods().ByName("Index")
+	contentServiceUploadMethodDescriptor    = contentServiceServiceDescriptor.Methods().ByName("Upload")
+	contentServiceDownloadMethodDescriptor  = contentServiceServiceDescriptor.Methods().ByName("Download")
+	contentServiceSubscribeMethodDescriptor = contentServiceServiceDescriptor.Methods().ByName("Subscribe")
 )
 
 // ContentServiceClient is a client for the vanguard.test.v1.ContentService service.
@@ -85,22 +94,26 @@ func NewContentServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 		index: connect.NewClient[v1.IndexRequest, httpbody.HttpBody](
 			httpClient,
 			baseURL+ContentServiceIndexProcedure,
-			opts...,
+			connect.WithSchema(contentServiceIndexMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		upload: connect.NewClient[v1.UploadRequest, emptypb.Empty](
 			httpClient,
 			baseURL+ContentServiceUploadProcedure,
-			opts...,
+			connect.WithSchema(contentServiceUploadMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		download: connect.NewClient[v1.DownloadRequest, v1.DownloadResponse](
 			httpClient,
 			baseURL+ContentServiceDownloadProcedure,
-			opts...,
+			connect.WithSchema(contentServiceDownloadMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 		subscribe: connect.NewClient[v1.SubscribeRequest, v1.SubscribeResponse](
 			httpClient,
 			baseURL+ContentServiceSubscribeProcedure,
-			opts...,
+			connect.WithSchema(contentServiceSubscribeMethodDescriptor),
+			connect.WithClientOptions(opts...),
 		),
 	}
 }
@@ -154,22 +167,26 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 	contentServiceIndexHandler := connect.NewUnaryHandler(
 		ContentServiceIndexProcedure,
 		svc.Index,
-		opts...,
+		connect.WithSchema(contentServiceIndexMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	contentServiceUploadHandler := connect.NewClientStreamHandler(
 		ContentServiceUploadProcedure,
 		svc.Upload,
-		opts...,
+		connect.WithSchema(contentServiceUploadMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	contentServiceDownloadHandler := connect.NewServerStreamHandler(
 		ContentServiceDownloadProcedure,
 		svc.Download,
-		opts...,
+		connect.WithSchema(contentServiceDownloadMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	contentServiceSubscribeHandler := connect.NewBidiStreamHandler(
 		ContentServiceSubscribeProcedure,
 		svc.Subscribe,
-		opts...,
+		connect.WithSchema(contentServiceSubscribeMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
 	)
 	return "/vanguard.test.v1.ContentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
