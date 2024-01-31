@@ -127,14 +127,40 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		unknownHandler: transcoderOpts.unknownHandler,
 		methods:        map[string]*methodConfig{},
 	}
+
+	var restOnlyServices []protoreflect.ServiceDescriptor
 	for _, svc := range services {
-		if err := transcoder.registerService(svc, defaultServiceOptions); err != nil {
+		resolvedOpts, err := transcoder.registerService(svc, defaultServiceOptions)
+		if err != nil {
 			return nil, err
+		}
+		if len(resolvedOpts.protocols) == 1 {
+			_, ok := resolvedOpts.protocols[ProtocolREST]
+			if ok {
+				restOnlyServices = append(restOnlyServices, svc.schema)
+			}
 		}
 	}
 	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
 		return nil, err
 	}
+
+	// Finally, check that any services with only REST as target protocol
+	// actually have at least one method with REST mappings.
+	for _, svcDesc := range restOnlyServices {
+		methods := svcDesc.Methods()
+		var numSupportedMethods int
+		for i, length := 0, methods.Len(); i < length; i++ {
+			methodDesc := methods.Get(i)
+			if transcoder.methods[methodPath(methodDesc)].httpRule != nil {
+				numSupportedMethods++
+			}
+		}
+		if numSupportedMethods == 0 {
+			return nil, fmt.Errorf("service %s only supports REST target protocol but has no methods with HTTP rules", svcDesc.FullName())
+		}
+	}
+
 	return transcoder, nil
 }
 
@@ -448,4 +474,8 @@ func withDefaultResolver(service protoreflect.ServiceDescriptor) ServiceOption {
 			return fallbackResolver{res, protoregistry.GlobalTypes}, nil
 		}
 	})
+}
+
+func methodPath(methodDesc protoreflect.MethodDescriptor) string {
+	return "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
 }
