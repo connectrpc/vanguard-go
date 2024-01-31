@@ -270,7 +270,7 @@ func NewService(servicePath string, handler http.Handler, opts ...ServiceOption)
 // [anypb.Any]: https://pkg.go.dev/google.golang.org/protobuf/types/known/anypb#Any
 func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) *Service {
 	if !canUseGlobalTypes(schema) {
-		opts = append([]ServiceOption{withDefaultResolver(schema.ParentFile())}, opts...)
+		opts = append([]ServiceOption{withDefaultResolver(schema)}, opts...)
 	}
 	return &Service{
 		schema:  schema,
@@ -438,12 +438,12 @@ func descKind(desc protoreflect.Descriptor) string {
 	}
 }
 
-func withDefaultResolver(file protoreflect.FileDescriptor) ServiceOption {
+func withDefaultResolver(service protoreflect.ServiceDescriptor) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
 		opts.defaultResolverFunc = func() (TypeResolver, error) {
-			res, err := resolverForFile(file)
+			res, err := resolverForService(service)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("failed to create default resolver: %w", err)
 			}
 			return fallbackResolver{res, protoregistry.GlobalTypes}, nil
 		}

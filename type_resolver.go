@@ -15,8 +15,6 @@
 package vanguard
 
 import (
-	"fmt"
-
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -95,10 +93,41 @@ func (f fallbackResolver) FindExtensionByNumber(message protoreflect.FullName, f
 	return nil, lastErr
 }
 
+func resolverForService(svcDesc protoreflect.ServiceDescriptor) (TypeResolver, error) {
+	file := svcDesc.ParentFile()
+	if file != nil {
+		return resolverForFile(file)
+	}
+
+	// Unexpected that file is nil, but technically possible since ParentFile() is
+	// specified as an optional operation that may return nil. So we'll create a
+	// type registry of just the request and response types in the service.
+	var reg protoregistry.Types
+	methods := svcDesc.Methods()
+	for i, length := 0, methods.Len(); i < length; i++ {
+		methodDesc := methods.Get(i)
+		_, err := reg.FindMessageByName(methodDesc.Input().FullName())
+		if err != nil {
+			// not present so add it
+			if err := reg.RegisterMessage(dynamicpb.NewMessageType(methodDesc.Input())); err != nil {
+				return nil, err
+			}
+		}
+		_, err = reg.FindMessageByName(methodDesc.Output().FullName())
+		if err != nil {
+			// not present so add it
+			if err := reg.RegisterMessage(dynamicpb.NewMessageType(methodDesc.Output())); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return &reg, nil
+}
+
 func resolverForFile(file protoreflect.FileDescriptor) (TypeResolver, error) {
 	var files protoregistry.Files
 	if err := addFileRecursive(file, &files); err != nil {
-		return nil, fmt.Errorf("failed to create default resolver: %w", err)
+		return nil, err
 	}
 	return dynamicpb.NewTypes(&files), nil
 }
