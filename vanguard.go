@@ -109,13 +109,13 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 	}
 
 	defaultServiceOptions := serviceOptions{
-		maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
-		maxGetURLBytes:    DefaultMaxGetURLBytes,
-		resolver:          protoregistry.GlobalTypes,
-		preferredCodec:    CodecProto,
-		codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
-		compressorNames:   map[string]struct{}{CompressionGzip: {}},
-		protocols:         map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
+		maxMsgBufferBytes:   DefaultMaxMessageBufferBytes,
+		maxGetURLBytes:      DefaultMaxGetURLBytes,
+		preferredCodec:      CodecProto,
+		codecNames:          map[string]struct{}{CodecProto: {}, CodecJSON: {}},
+		compressorNames:     map[string]struct{}{CompressionGzip: {}},
+		protocols:           map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
+		defaultResolverFunc: func() (TypeResolver, error) { return protoregistry.GlobalTypes, nil },
 	}
 	for _, opt := range transcoderOpts.defaultServiceOptions {
 		opt.applyToService(&defaultServiceOptions)
@@ -248,11 +248,30 @@ func NewService(servicePath string, handler http.Handler, opts ...ServiceOption)
 			err: fmt.Errorf("could not resolve schema for service at path %q: resolved descriptor is %s, not a service", servicePath, descKind(desc)),
 		}
 	}
-	return NewServiceWithSchema(svcDesc, handler, opts...)
+	return &Service{
+		schema:  svcDesc,
+		handler: handler,
+		opts:    opts,
+	}
 }
 
 // NewServiceWithSchema creates a new service using the given schema and handler.
+// This option is appropriate for use with dynamic schemas.
+//
+// The default type resolver for the service will use [protoregistry.GlobalTypes]
+// if the given service matches a descriptor of the same name registered in
+// [protoregistry.GlobalFiles]. Otherwise, the default resolver will use
+// [dynamic messages] for the given service's request and response types. In
+// either case, the default resolver will fall back to [protoregistry.GlobalTypes]
+// for resolving extensions and message types for messages inside [anypb.Any]
+// values.
+//
+// [dynamic messages]: https://pkg.go.dev/google.golang.org/protobuf/types/dynamicpb#Message
+// [anypb.Any]: https://pkg.go.dev/google.golang.org/protobuf/types/known/anypb#Any
 func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) *Service {
+	if !canUseGlobalTypes(schema) {
+		opts = append([]ServiceOption{withDefaultResolver(schema.ParentFile())}, opts...)
+	}
 	return &Service{
 		schema:  schema,
 		handler: handler,
@@ -361,17 +380,6 @@ type transcoderOptions struct {
 	compressors           compressionMap
 }
 
-// TypeResolver can resolve message and extension types and is used to instantiate
-// messages as needed for the middleware to serialize/de-serialize request and
-// response payloads.
-//
-// Implementations of this interface should be comparable, so they can be used as
-// map keys. Typical implementations are pointers to structs, which are suitable.
-type TypeResolver interface {
-	protoregistry.MessageTypeResolver
-	protoregistry.ExtensionTypeResolver
-}
-
 type transcoderOptionFunc func(*transcoderOptions)
 
 func (f transcoderOptionFunc) applyToTranscoder(opts *transcoderOptions) {
@@ -391,15 +399,17 @@ type serviceOptions struct {
 	preferredCodec              string
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
+	defaultResolverFunc         func() (TypeResolver, error)
 }
 
 type methodConfig struct {
 	*serviceOptions
-	descriptor protoreflect.MethodDescriptor
-	methodPath string
-	streamType connect.StreamType
-	handler    http.Handler
-	httpRule   *routeTarget // First HTTP rule, if any.
+	descriptor        protoreflect.MethodDescriptor
+	request, response protoreflect.MessageType
+	methodPath        string
+	streamType        connect.StreamType
+	handler           http.Handler
+	httpRule          *routeTarget // First HTTP rule, if any.
 }
 
 func descKind(desc protoreflect.Descriptor) string {
@@ -426,4 +436,16 @@ func descKind(desc protoreflect.Descriptor) string {
 	default:
 		return fmt.Sprintf("%T", desc)
 	}
+}
+
+func withDefaultResolver(file protoreflect.FileDescriptor) ServiceOption {
+	return serviceOptionFunc(func(opts *serviceOptions) {
+		opts.defaultResolverFunc = func() (TypeResolver, error) {
+			res, err := resolverForFile(file)
+			if err != nil {
+				return nil, err
+			}
+			return fallbackResolver{res, protoregistry.GlobalTypes}, nil
+		}
+	})
 }

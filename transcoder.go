@@ -118,7 +118,11 @@ func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error
 	}
 
 	if svcOpts.resolver == nil {
-		return fmt.Errorf("service %s is configured with a nil type resolver", svc.schema.FullName())
+		res, err := svcOpts.defaultResolverFunc()
+		if err != nil {
+			return err
+		}
+		svcOpts.resolver = res
 	}
 
 	methods := svc.schema.Methods()
@@ -179,9 +183,22 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 	if _, ok := t.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
+	request, err := opts.resolver.FindMessageByName(methodDesc.Input().FullName())
+	if err != nil {
+		return fmt.Errorf("resolver configured for service %s cannot resolve request type %s",
+			methodDesc.Parent().FullName(), methodDesc.Input().FullName())
+	}
+	response, err := opts.resolver.FindMessageByName(methodDesc.Output().FullName())
+	if err != nil {
+		return fmt.Errorf("resolver configured for service %s cannot resolve response type %s",
+			methodDesc.Parent().FullName(), methodDesc.Output().FullName())
+	}
+
 	methodConf := &methodConfig{
 		serviceOptions: opts,
 		descriptor:     methodDesc,
+		request:        request,
+		response:       response,
 		methodPath:     methodPath,
 		handler:        handler,
 	}
@@ -432,6 +449,10 @@ func (o *operation) validate(transcoder *Transcoder) error {
 			}
 		}
 	}
+	if o.server.protocol.protocol() == ProtocolREST && o.restTarget == nil {
+		// This method cannot be implemented this way. So serve a 404 for this method's URI path.
+		return errNotFound
+	}
 
 	// Now that we've ruled out the use of bidi streaming above, it's safe to simulate HTTP/2
 	// for the benefit of gRPC handlers, which require HTTP/2.
@@ -502,12 +523,7 @@ func (o *operation) handle() {
 
 	if mustDecodeRequest {
 		// Need the message type to decode
-		messageType, err := o.methodConf.resolver.FindMessageByName(o.methodConf.descriptor.Input().FullName())
-		if err != nil {
-			o.reportError(err)
-			return
-		}
-		reqMsg.msg = messageType.New().Interface()
+		reqMsg.msg = o.methodConf.request.New().Interface()
 	}
 
 	if requireMessageForRequestLine {
@@ -1113,12 +1129,7 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 
 	if mustDecodeResponse {
 		// We will have to decode and re-encode, so we need the message type.
-		messageType, err := w.op.methodConf.resolver.FindMessageByName(w.op.methodConf.descriptor.Output().FullName())
-		if err != nil {
-			w.reportError(err)
-			return
-		}
-		respMsg.msg = messageType.New().Interface()
+		respMsg.msg = w.op.methodConf.response.New().Interface()
 	}
 
 	var endMustBeInHeaders bool
