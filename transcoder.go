@@ -31,6 +31,7 @@ import (
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 // Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
@@ -79,60 +80,60 @@ func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request
 	op.handle()
 }
 
-func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) (*serviceOptions, error) {
-	for _, opt := range svc.opts {
-		opt.applyToService(&svcOpts)
-	}
-
+func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error {
 	if len(svcOpts.protocols) == 0 {
-		return nil, fmt.Errorf("service %s was configured with no target protocols", svc.schema.FullName())
+		return fmt.Errorf("service %s was configured with no target protocols", svc.schema.FullName())
 	}
 	for protocol := range svcOpts.protocols {
 		_, isKnown := protocolToString[protocol]
 		if !isKnown {
-			return nil, fmt.Errorf("protocol %d is not a valid value", protocol)
+			return fmt.Errorf("protocol %d is not a valid value", protocol)
 		}
 	}
 
 	if len(svcOpts.codecNames) == 0 {
-		return nil, fmt.Errorf("service %s was configured with no target codecs", svc.schema.FullName())
+		return fmt.Errorf("service %s was configured with no target codecs", svc.schema.FullName())
 	}
 	for codecName := range svcOpts.codecNames {
 		if _, known := t.codecs[codecName]; !known {
-			return nil, fmt.Errorf("codec %s is not known; use WithCodec to configure known codecs", codecName)
+			return fmt.Errorf("codec %s is not known; use WithCodec to configure known codecs", codecName)
 		}
 	}
 
 	// empty svcOpts.compressorNames is okay
 	for compressorName := range svcOpts.compressorNames {
 		if _, known := t.compressors[compressorName]; !known {
-			return nil, fmt.Errorf("compression algorithm %s is not known; use WithCompression to configure known algorithms", compressorName)
+			return fmt.Errorf("compression algorithm %s is not known; use WithCompression to configure known algorithms", compressorName)
 		}
 	}
 
 	if svcOpts.maxMsgBufferBytes <= 0 {
-		return nil, fmt.Errorf("service %s is configured with an invalid max message buffer size: %d bytes", svc.schema.FullName(), svcOpts.maxMsgBufferBytes)
+		return fmt.Errorf("service %s is configured with an invalid max message buffer size: %d bytes", svc.schema.FullName(), svcOpts.maxMsgBufferBytes)
 	}
 	if svcOpts.maxGetURLBytes <= 0 {
-		return nil, fmt.Errorf("service %s is configured with an invalid max GET URL length: %d bytes", svc.schema.FullName(), svcOpts.maxGetURLBytes)
+		return fmt.Errorf("service %s is configured with an invalid max GET URL length: %d bytes", svc.schema.FullName(), svcOpts.maxGetURLBytes)
 	}
 
 	if svcOpts.resolver == nil {
-		res, err := svcOpts.defaultResolverFunc()
-		if err != nil {
-			return nil, err
+		if canUseGlobalTypes(svc.schema) {
+			svcOpts.resolver = protoregistry.GlobalTypes
+		} else {
+			res, err := resolverForService(svc.schema)
+			if err != nil {
+				return fmt.Errorf("failed to create default resolver: %w", err)
+			}
+			svcOpts.resolver = fallbackResolver{res, protoregistry.GlobalTypes}
 		}
-		svcOpts.resolver = res
 	}
 
 	methods := svc.schema.Methods()
 	for i, length := 0, methods.Len(); i < length; i++ {
 		methodDesc := methods.Get(i)
 		if err := t.registerMethod(svc.handler, methodDesc, &svcOpts); err != nil {
-			return nil, fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
+			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
 		}
 	}
-	return &svcOpts, nil
+	return nil
 }
 
 func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {

@@ -107,7 +107,7 @@ func TestServiceWithSchema(t *testing.T) {
 			WithTypeResolver(protoregistry.GlobalTypes),
 		)
 
-		_, err = NewTranscoder([]*Service{svc})
+		_, err := NewTranscoder([]*Service{svc})
 		require.ErrorContains(t, err, "resolver configured for service foo.bar.baz.v1.BlahService cannot resolve")
 	})
 	t.Run("fails for rest only but no http rules", func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestServiceWithSchema(t *testing.T) {
 			WithTargetProtocols(ProtocolREST),
 		)
 
-		_, err = NewTranscoder([]*Service{svc})
+		_, err := NewTranscoder([]*Service{svc})
 		require.ErrorContains(t, err, "service foo.bar.baz.v1.BlahService only supports REST target protocol but has no methods with HTTP rules")
 	})
 }

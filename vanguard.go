@@ -109,13 +109,12 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 	}
 
 	defaultServiceOptions := serviceOptions{
-		maxMsgBufferBytes:   DefaultMaxMessageBufferBytes,
-		maxGetURLBytes:      DefaultMaxGetURLBytes,
-		preferredCodec:      CodecProto,
-		codecNames:          map[string]struct{}{CodecProto: {}, CodecJSON: {}},
-		compressorNames:     map[string]struct{}{CompressionGzip: {}},
-		protocols:           map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
-		defaultResolverFunc: func() (TypeResolver, error) { return protoregistry.GlobalTypes, nil },
+		maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
+		maxGetURLBytes:    DefaultMaxGetURLBytes,
+		preferredCodec:    CodecProto,
+		codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
+		compressorNames:   map[string]struct{}{CompressionGzip: {}},
+		protocols:         map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
 	}
 	for _, opt := range transcoderOpts.defaultServiceOptions {
 		opt.applyToService(&defaultServiceOptions)
@@ -130,8 +129,11 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 
 	var restOnlyServices []protoreflect.ServiceDescriptor
 	for _, svc := range services {
-		resolvedOpts, err := transcoder.registerService(svc, defaultServiceOptions)
-		if err != nil {
+		resolvedOpts := defaultServiceOptions
+		for _, opt := range svc.opts {
+			opt.applyToService(&resolvedOpts)
+		}
+		if err := transcoder.registerService(svc, resolvedOpts); err != nil {
 			return nil, err
 		}
 		if len(resolvedOpts.protocols) == 1 {
@@ -274,11 +276,7 @@ func NewService(servicePath string, handler http.Handler, opts ...ServiceOption)
 			err: fmt.Errorf("could not resolve schema for service at path %q: resolved descriptor is %s, not a service", servicePath, descKind(desc)),
 		}
 	}
-	return &Service{
-		schema:  svcDesc,
-		handler: handler,
-		opts:    opts,
-	}
+	return NewServiceWithSchema(svcDesc, handler, opts...)
 }
 
 // NewServiceWithSchema creates a new service using the given schema and handler.
@@ -295,9 +293,6 @@ func NewService(servicePath string, handler http.Handler, opts ...ServiceOption)
 // [dynamic messages]: https://pkg.go.dev/google.golang.org/protobuf/types/dynamicpb#Message
 // [anypb.Any]: https://pkg.go.dev/google.golang.org/protobuf/types/known/anypb#Any
 func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) *Service {
-	if !canUseGlobalTypes(schema) {
-		opts = append([]ServiceOption{withDefaultResolver(schema)}, opts...)
-	}
 	return &Service{
 		schema:  schema,
 		handler: handler,
@@ -425,7 +420,6 @@ type serviceOptions struct {
 	preferredCodec              string
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
-	defaultResolverFunc         func() (TypeResolver, error)
 }
 
 type methodConfig struct {
@@ -462,18 +456,6 @@ func descKind(desc protoreflect.Descriptor) string {
 	default:
 		return fmt.Sprintf("%T", desc)
 	}
-}
-
-func withDefaultResolver(service protoreflect.ServiceDescriptor) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.defaultResolverFunc = func() (TypeResolver, error) {
-			res, err := resolverForService(service)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create default resolver: %w", err)
-			}
-			return fallbackResolver{res, protoregistry.GlobalTypes}, nil
-		}
-	})
 }
 
 func methodPath(methodDesc protoreflect.MethodDescriptor) string {
