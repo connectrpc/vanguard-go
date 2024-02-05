@@ -93,43 +93,27 @@ func (f fallbackResolver) FindExtensionByNumber(message protoreflect.FullName, f
 	return nil, lastErr
 }
 
-func resolverForService(svcDesc protoreflect.ServiceDescriptor) (TypeResolver, error) {
-	file := svcDesc.ParentFile()
-	if file != nil {
-		return resolverForFile(file)
+func resolverForService(service protoreflect.ServiceDescriptor) TypeResolver {
+	if canUseGlobalTypes(service) {
+		return protoregistry.GlobalTypes
 	}
-
-	// Unexpected that file is nil, but technically possible since ParentFile() is
-	// specified as an optional operation that may return nil. So we'll create a
-	// type registry of just the request and response types in the service.
-	var reg protoregistry.Types
-	methods := svcDesc.Methods()
-	for i, length := 0, methods.Len(); i < length; i++ {
-		methodDesc := methods.Get(i)
-		_, err := reg.FindMessageByName(methodDesc.Input().FullName())
-		if err != nil {
-			// not present so add it
-			if err := reg.RegisterMessage(dynamicpb.NewMessageType(methodDesc.Input())); err != nil {
-				return nil, err
-			}
-		}
-		_, err = reg.FindMessageByName(methodDesc.Output().FullName())
-		if err != nil {
-			// not present so add it
-			if err := reg.RegisterMessage(dynamicpb.NewMessageType(methodDesc.Output())); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return &reg, nil
+	return resolverForFile(service.ParentFile())
 }
 
-func resolverForFile(file protoreflect.FileDescriptor) (TypeResolver, error) {
+func resolverForFile(file protoreflect.FileDescriptor) TypeResolver {
+	if file == nil {
+		// Can't create a bespoke resolver for this file.
+		return protoregistry.GlobalTypes
+	}
 	var files protoregistry.Files
 	if err := addFileRecursive(file, &files); err != nil {
-		return nil, err
+		// Failed to create a bespoke resolver for this file.
+		return protoregistry.GlobalTypes
 	}
-	return dynamicpb.NewTypes(&files), nil
+	// Even with a bespoke resolver, we'll still fall back to global
+	// types to help satisfy extensions and message types inside of
+	// google.protobuf.Any messages (such as error details).
+	return fallbackResolver{dynamicpb.NewTypes(&files), protoregistry.GlobalTypes}
 }
 
 func addFileRecursive(file protoreflect.FileDescriptor, files *protoregistry.Files) error {

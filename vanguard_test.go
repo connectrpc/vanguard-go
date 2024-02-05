@@ -57,7 +57,7 @@ func TestServiceWithSchema(t *testing.T) {
 	svcDesc := file.Services().ByName("BlahService")
 	require.NotNil(t, svcDesc)
 
-	t.Run("success", func(t *testing.T) {
+	t.Run("default bespoke resolver", func(t *testing.T) {
 		t.Parallel()
 		svc := NewServiceWithSchema(svcDesc, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
@@ -77,17 +77,17 @@ func TestServiceWithSchema(t *testing.T) {
 		_, ok := timestampType.New().Interface().(*dynamicpb.Message)
 		assert.True(t, ok)
 	})
-	t.Run("service has no parent file", func(t *testing.T) {
+	t.Run("default bespoke resolver, service has no parent file", func(t *testing.T) {
 		t.Parallel()
 		svcDescNoParent := &serviceWithNoParentFile{ServiceDescriptor: svcDesc}
 		svc := NewServiceWithSchema(svcDescNoParent, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
-		// Still works.
+		// Still works. But now we just use dynamic message types using the
+		// method descriptors.
 		transcoder, err := NewTranscoder([]*Service{svc})
 		require.NoError(t, err)
 
 		res := transcoder.methods["/"+string(svcDesc.FullName())+"/Do"].resolver
-		// But the resolve can only resolve the request and response types.
 		// It cannot resolve other types that were in the same file.
 		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
 		require.ErrorIs(t, err, protoregistry.NotFound)
@@ -98,19 +98,32 @@ func TestServiceWithSchema(t *testing.T) {
 		_, ok := timestampType.New().Interface().(*timestamppb.Timestamp)
 		assert.True(t, ok)
 	})
-	t.Run("fails with bad resolver", func(t *testing.T) {
+	t.Run("uses dynamic message type with bad resolver", func(t *testing.T) {
 		t.Parallel()
 		svc := NewServiceWithSchema(
 			svcDesc,
 			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-			// Global registry doesn't know about these dynamic types.
+			// Global registry doesn't know about these types.
 			WithTypeResolver(protoregistry.GlobalTypes),
 		)
 
-		_, err := NewTranscoder([]*Service{svc})
-		require.ErrorContains(t, err, "resolver configured for service foo.bar.baz.v1.BlahService cannot resolve")
+		// Still works. But now we just use dynamic message types using the
+		// method descriptors.
+		transcoder, err := NewTranscoder([]*Service{svc})
+		require.NoError(t, err)
+
+		res := transcoder.methods["/"+string(svcDesc.FullName())+"/Do"].resolver
+		// It cannot resolve other types that were in the same file.
+		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
+		require.ErrorIs(t, err, protoregistry.NotFound)
+		// This type can be resolved, because the default resolver will fallback to global types.
+		timestampType, err := res.FindMessageByName("google.protobuf.Timestamp")
+		require.NoError(t, err)
+		// But since it is from global types, it is NOT a dynamic message type.
+		_, ok := timestampType.New().Interface().(*timestamppb.Timestamp)
+		assert.True(t, ok)
 	})
-	t.Run("fails for rest only but no http rules", func(t *testing.T) {
+	t.Run("fails for rest only because no http rules", func(t *testing.T) {
 		t.Parallel()
 		svc := NewServiceWithSchema(
 			svcDesc,

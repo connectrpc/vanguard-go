@@ -31,7 +31,7 @@ import (
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
@@ -115,15 +115,7 @@ func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error
 	}
 
 	if svcOpts.resolver == nil {
-		if canUseGlobalTypes(svc.schema) {
-			svcOpts.resolver = protoregistry.GlobalTypes
-		} else {
-			res, err := resolverForService(svc.schema)
-			if err != nil {
-				return fmt.Errorf("failed to create default resolver: %w", err)
-			}
-			svcOpts.resolver = fallbackResolver{res, protoregistry.GlobalTypes}
-		}
+		svcOpts.resolver = resolverForService(svc.schema)
 	}
 
 	methods := svc.schema.Methods()
@@ -186,13 +178,11 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 	}
 	request, err := opts.resolver.FindMessageByName(methodDesc.Input().FullName())
 	if err != nil {
-		return fmt.Errorf("resolver configured for service %s cannot resolve request type %s",
-			methodDesc.Parent().FullName(), methodDesc.Input().FullName())
+		request = dynamicpb.NewMessageType(methodDesc.Input())
 	}
 	response, err := opts.resolver.FindMessageByName(methodDesc.Output().FullName())
 	if err != nil {
-		return fmt.Errorf("resolver configured for service %s cannot resolve response type %s",
-			methodDesc.Parent().FullName(), methodDesc.Output().FullName())
+		response = dynamicpb.NewMessageType(methodDesc.Output())
 	}
 
 	methodConf := &methodConfig{
