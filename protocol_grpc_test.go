@@ -15,6 +15,7 @@
 package vanguard
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http/httptest"
@@ -115,14 +116,14 @@ func TestGRPCDecodeTimeout(t *testing.T) {
 	require.ErrorIs(t, err, errNoTimeout)
 
 	_, err = grpcDecodeTimeout("foo")
-	require.NoError(t, err)
+	assert.Error(t, err) //nolint:testifylint
 	_, err = grpcDecodeTimeout("12xS")
-	require.NoError(t, err)
-	_, err = grpcDecodeTimeout("999999999n") // 9 digits
-	require.NoError(t, err)
-	require.ErrorIs(t, err, errNoTimeout)
-	_, err = grpcDecodeTimeout("99999999H") // 8 digits but overflows time.Duration
-	require.ErrorIs(t, err, errNoTimeout)
+	assert.Error(t, err)                          //nolint:testifylint
+	_, err = grpcDecodeTimeout("999999999n")      // 9 digits
+	assert.Error(t, err)                          //nolint:testifylint
+	assert.False(t, errors.Is(err, errNoTimeout)) //nolint:testifylint
+	_, err = grpcDecodeTimeout("99999999H")       // 8 digits but overflows time.Duration
+	assert.ErrorIs(t, err, errNoTimeout)          //nolint:testifylint
 
 	duration, err := grpcDecodeTimeout("45S")
 	require.NoError(t, err)
