@@ -15,6 +15,7 @@
 package vanguard
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -41,7 +42,7 @@ type routeTrie struct {
 // invoke this method for each rule.
 func (t *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (*routeTarget, error) {
 	var method, template string
-	switch pattern := rule.Pattern.(type) {
+	switch pattern := rule.GetPattern().(type) {
 	case *annotations.HttpRule_Get:
 		method, template = http.MethodGet, pattern.Get
 	case *annotations.HttpRule_Put:
@@ -58,16 +59,16 @@ func (t *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (
 		return nil, fmt.Errorf("invalid type of pattern for HTTP rule: %T", pattern)
 	}
 	if method == "" {
-		return nil, fmt.Errorf("invalid HTTP rule: method is blank")
+		return nil, errors.New("invalid HTTP rule: method is blank")
 	}
 	if template == "" {
-		return nil, fmt.Errorf("invalid HTTP rule: path template is blank")
+		return nil, errors.New("invalid HTTP rule: path template is blank")
 	}
 	segments, variables, err := parsePathTemplate(template)
 	if err != nil {
 		return nil, err
 	}
-	target, err := makeTarget(config, method, rule.Body, rule.ResponseBody, segments, variables)
+	target, err := makeTarget(config, method, rule.GetBody(), rule.GetResponseBody(), segments, variables)
 	if err != nil {
 		return nil, err
 	}

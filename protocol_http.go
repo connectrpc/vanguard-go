@@ -33,6 +33,10 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+const (
+	contentApplicationPrefix = "application/"
+)
+
 func httpStatusCodeFromRPC(code connect.Code) int {
 	var codes = [...]int{
 		http.StatusOK,                  // 0 OK
@@ -120,10 +124,10 @@ func httpErrorFromResponse(statusCode int, contentType string, src *bytes.Buffer
 	}
 
 	connectErr := connect.NewWireError(
-		connect.Code(stat.Code),
-		errors.New(stat.Message),
+		connect.Code(stat.GetCode()),
+		errors.New(stat.GetMessage()),
 	)
-	for _, msg := range stat.Details {
+	for _, msg := range stat.GetDetails() {
 		errDetail, _ := connect.NewErrorDetail(msg)
 		connectErr.AddDetail(errDetail)
 	}

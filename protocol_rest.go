@@ -97,7 +97,7 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 	// Only JSON is supported for now unless using google.api.HttpBody
 	// payloads which override the content-type.
 	if headers["Content-Type"] == nil {
-		headers["Content-Type"] = []string{"application/" + meta.codec}
+		headers["Content-Type"] = []string{contentApplicationPrefix + meta.codec}
 	}
 	if !isErr && meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
@@ -261,7 +261,7 @@ func (r restServerProtocol) protocol() Protocol {
 
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	// TODO: don't set content-type on no body requests.
-	headers["Content-Type"] = []string{"application/" + meta.codec}
+	headers["Content-Type"] = []string{contentApplicationPrefix + meta.codec}
 	if meta.compression != "" {
 		headers["Content-Encoding"] = []string{meta.compression}
 	}
