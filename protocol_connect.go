@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	contentTypeJSON      = "application/json"
-	contentConnectPrefix = "application/connect+"
+	contentTypeJSON            = "application/json"
+	contentConnectStreamPrefix = "application/connect+"
+	contentConnectUnaryPrefix  = "application/"
 )
 
 // connectUnaryGetClientProtocol implements the Connect protocol for
@@ -177,7 +178,7 @@ func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operati
 	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
-	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), contentApplicationPrefix)
+	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), contentConnectUnaryPrefix)
 	if reqMeta.codec == CodecJSON+"; charset=utf-8" {
 		// TODO: should we support other text formats that may need charset check?
 		reqMeta.codec = CodecJSON
@@ -198,7 +199,7 @@ func (c connectUnaryPostClientProtocol) addProtocolResponseHeaders(meta response
 		headers.Set("Content-Type", contentTypeJSON) // error bodies are always in JSON
 		// TODO: Content-Encoding to compress error?
 	} else {
-		headers.Set("Content-Type", contentApplicationPrefix+meta.codec)
+		headers.Set("Content-Type", contentConnectUnaryPrefix+meta.codec)
 		if meta.compression != "" {
 			headers.Set("Content-Encoding", meta.compression)
 		}
@@ -251,7 +252,7 @@ func (c connectUnaryServerProtocol) protocol() Protocol {
 }
 
 func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	headers.Set("Content-Type", contentApplicationPrefix+meta.codec)
+	headers.Set("Content-Type", contentConnectUnaryPrefix+meta.codec)
 	if meta.compression != "" {
 		headers.Set("Content-Encoding", meta.compression)
 	}
@@ -271,8 +272,8 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 	var respMeta responseMeta
 	contentType := headers.Get("Content-Type")
 	switch {
-	case strings.HasPrefix(contentType, contentApplicationPrefix):
-		respMeta.codec = strings.TrimPrefix(contentType, contentApplicationPrefix)
+	case strings.HasPrefix(contentType, contentConnectUnaryPrefix):
+		respMeta.codec = strings.TrimPrefix(contentType, contentConnectUnaryPrefix)
 	default:
 		respMeta.codec = contentType + "?"
 	}
@@ -420,7 +421,7 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
-	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), contentConnectPrefix)
+	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), contentConnectStreamPrefix)
 	headers.Del("Content-Type")
 	reqMeta.compression = headers.Get("Connect-Content-Encoding")
 	headers.Del("Connect-Content-Encoding")
@@ -430,7 +431,7 @@ func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation,
 }
 
 func (c connectStreamClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
-	headers.Set("Content-Type", contentConnectPrefix+meta.codec)
+	headers.Set("Content-Type", contentConnectStreamPrefix+meta.codec)
 	if meta.compression != "" {
 		headers.Set("Connect-Content-Encoding", meta.compression)
 	}
@@ -498,7 +499,7 @@ func (c connectStreamServerProtocol) protocol() Protocol {
 }
 
 func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
-	headers.Set("Content-Type", contentConnectPrefix+meta.codec)
+	headers.Set("Content-Type", contentConnectStreamPrefix+meta.codec)
 	if meta.compression != "" {
 		headers.Set("Connect-Content-Encoding", meta.compression)
 	}
@@ -514,8 +515,8 @@ func (c connectStreamServerProtocol) extractProtocolResponseHeaders(statusCode i
 	var respMeta responseMeta
 	contentType := headers.Get("Content-Type")
 	switch {
-	case strings.HasPrefix(contentType, contentConnectPrefix):
-		respMeta.codec = strings.TrimPrefix(contentType, contentConnectPrefix)
+	case strings.HasPrefix(contentType, contentConnectStreamPrefix):
+		respMeta.codec = strings.TrimPrefix(contentType, contentConnectStreamPrefix)
 	default:
 		respMeta.codec = contentType + "?"
 	}

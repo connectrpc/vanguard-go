@@ -33,10 +33,6 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
-const (
-	contentApplicationPrefix = "application/"
-)
-
 func httpStatusCodeFromRPC(code connect.Code) int {
 	var codes = [...]int{
 		http.StatusOK,                  // 0 OK
