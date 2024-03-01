@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -101,6 +103,18 @@ func TestMux_RPCxREST(t *testing.T) {
 	servers := []testServer{}
 	for _, compression := range compressions {
 		servers = append(servers, makeServer(compression))
+	}
+	for _, server := range servers {
+		serverURL, err := url.Parse(server.server.URL)
+		require.NoError(t, err)
+		proxy := httputil.NewSingleHostReverseProxy(serverURL)
+		proxy.Transport = server.server.Client().Transport
+		proxyServer := httptest.NewUnstartedServer(proxy)
+		proxyServer.EnableHTTP2 = true
+		proxyServer.StartTLS()
+		disableCompression(proxyServer)
+		t.Cleanup(proxyServer.Close)
+		servers = append(servers, testServer{name: server.name + "/proxy", server: proxyServer})
 	}
 
 	type testOpt struct {

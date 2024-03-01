@@ -73,11 +73,12 @@ func TestMux_RESTxRPC(t *testing.T) {
 		connect.WithInterceptors(&interceptor),
 	))
 
-	svr := httptest.NewServer(serveMux)
-	t.Cleanup(svr.Close)
-	svrURL, err := url.Parse(svr.URL)
+	server := httptest.NewServer(serveMux)
+	t.Cleanup(server.Close)
+	serverURL, err := url.Parse(server.URL)
 	require.NoError(t, err)
-	proxy := httputil.NewSingleHostReverseProxy(svrURL)
+	proxy := httputil.NewSingleHostReverseProxy(serverURL)
+	proxy.Transport = server.Client().Transport
 
 	type testMux struct {
 		name    string
