@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -168,9 +169,6 @@ func TestMux_RESTxRPC(t *testing.T) {
 			query[key] = values
 		}
 		req.URL.RawQuery = query.Encode()
-		// Inject http.Server into the request context for httputil.ReverseProxy.
-		svr := &http.Server{} //nolint:gosec // dummy server for testing
-		req = req.WithContext(context.WithValue(req.Context(), http.ServerContextKey, svr))
 		return req
 	}
 	type output struct {
@@ -552,7 +550,25 @@ func TestMux_RESTxRPC(t *testing.T) {
 					t.Log("req:", string(debug))
 
 					rsp := httptest.NewRecorder()
-					opts.mux.handler.ServeHTTP(rsp, req)
+
+					func() {
+						// Capture http.ErrAbortHanlder panics.
+						defer func() {
+							if recovered := recover(); recovered != nil {
+								if err, ok := recovered.(error); ok {
+									if errors.Is(err, http.ErrAbortHandler) {
+										return
+									}
+								}
+								t.Error("unexpected panic:", recovered)
+							}
+						}()
+						// Inject http.Server into the request context to convince
+						// httputil.ReverseProxy we are in a server context.
+						svr := &http.Server{} //nolint:gosec // dummy server for testing
+						req = req.WithContext(context.WithValue(req.Context(), http.ServerContextKey, svr))
+						opts.mux.handler.ServeHTTP(rsp, req)
+					}()
 
 					result := rsp.Result()
 					defer result.Body.Close()

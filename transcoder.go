@@ -471,18 +471,6 @@ func (o *operation) queryValues() url.Values {
 }
 
 func (o *operation) handle() {
-	// Deferred function to capture http.ErrAbortHandler panics.
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if err, ok := recovered.(error); ok {
-				if errors.Is(err, http.ErrAbortHandler) {
-					return
-				}
-			}
-			panic(recovered) //nolint:forbidigo // re-throw the panic if unknown
-		}
-	}()
-
 	o.clientEnveloper, _ = o.client.protocol.(envelopedProtocolHandler)
 	o.clientPreparer, _ = o.client.protocol.(clientBodyPreparer)
 	if o.clientPreparer != nil {
