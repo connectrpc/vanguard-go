@@ -19,6 +19,8 @@ require (
 )
 
 require (
+	buf.build/gen/go/connectrpc/conformance/connectrpc/go v1.15.0-20240220214903-0a04373b9ee9.1 // indirect
+	buf.build/gen/go/connectrpc/conformance/protocolbuffers/go v1.32.0-20240220214903-0a04373b9ee9.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/sys v0.29.0 // indirect
