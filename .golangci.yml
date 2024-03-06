@@ -45,6 +45,7 @@ linters:
     - golint            # deprecated by Go team
     - gomnd             # some unnamed constants are okay
     - ifshort           # deprecated by author
+    - inamedparam       # convention is not followed
     - interfacer        # deprecated by author
     - ireturn           # "accept interfaces, return structs" isn't ironclad
     - lll               # don't want hard limits for line length

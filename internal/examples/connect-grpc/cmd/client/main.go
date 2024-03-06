@@ -47,7 +47,7 @@ func main() {
 		os.Exit(1)
 	}
 	for stream.Receive() {
-		fmt.Println("eliza: ", stream.Msg().Sentence)
+		fmt.Println("eliza: ", stream.Msg().GetSentence())
 	}
 	if err := stream.Err(); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
@@ -70,7 +70,7 @@ func main() {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		fmt.Println("eliza: ", resp.Msg.Sentence)
+		fmt.Println("eliza: ", resp.Msg.GetSentence())
 		fmt.Println()
 	}
 }

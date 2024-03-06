@@ -75,7 +75,7 @@ func ExampleNewTranscoder_connectToGRPC() {
 		log.Println("error:", err)
 		return
 	}
-	log.Println(rsp.Msg.Title)
+	log.Println(rsp.Msg.GetTitle())
 	// Output: Do Androids Dream of Electric Sheep?
 }
 
@@ -85,8 +85,8 @@ type libraryRPC struct {
 
 func (s *libraryRPC) GetBook(_ context.Context, req *testv1.GetBookRequest) (*testv1.Book, error) {
 	return &testv1.Book{
-		Name:        req.Name,
-		Parent:      strings.Join(strings.Split(req.Name, "/")[:2], "/"),
+		Name:        req.GetName(),
+		Parent:      strings.Join(strings.Split(req.GetName(), "/")[:2], "/"),
 		CreateTime:  timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
 		Title:       "Do Androids Dream of Electric Sheep?",
 		Author:      "Philip K. Dick",
@@ -98,10 +98,10 @@ func (s *libraryRPC) GetBook(_ context.Context, req *testv1.GetBookRequest) (*te
 }
 
 func (s *libraryRPC) CreateBook(_ context.Context, req *testv1.CreateBookRequest) (*testv1.Book, error) {
-	book := req.Book
+	book := req.GetBook()
 	return &testv1.Book{
-		Name:        strings.Join([]string{req.Parent, "books", req.BookId}, "/"),
-		Parent:      req.Parent,
+		Name:        strings.Join([]string{req.GetParent(), "books", req.GetBookId()}, "/"),
+		Parent:      req.GetParent(),
 		CreateTime:  timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
 		Title:       book.GetTitle(),
 		Author:      book.GetAuthor(),

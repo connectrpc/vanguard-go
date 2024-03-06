@@ -256,7 +256,7 @@ func TestPath_SafeLiterals(t *testing.T) {
 		}
 	}
 	unescaped, err := url.PathUnescape(literalvalues)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	escaped := url.PathEscape(unescaped)
 	assert.Equal(t, literalvalues, escaped)
 }
@@ -300,7 +300,7 @@ func TestPath_Escaping(t *testing.T) {
 				assert.EqualError(t, err, testCase.wantErr)
 				return
 			}
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, testCase.want, dec)
 			enc := pathEscape(dec, testCase.mode)
 			if testCase.wantEscaped != "" {
