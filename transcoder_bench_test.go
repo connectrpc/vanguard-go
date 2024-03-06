@@ -62,14 +62,14 @@ func BenchmarkServeHTTP(b *testing.B) {
 	}
 	marshalJSON := func(msg proto.Message) []byte {
 		data, err := jsonCodec.MarshalAppend(nil, msg)
-		assert.NoError(b, err)
+		require.NoError(b, err)
 		var buf bytes.Buffer
-		assert.NoError(b, json.Compact(&buf, data))
+		require.NoError(b, json.Compact(&buf, data))
 		return buf.Bytes()
 	}
 	marshalProto := func(msg proto.Message) []byte {
 		data, err := proto.Marshal(msg)
-		assert.NoError(b, err)
+		require.NoError(b, err)
 		return data
 	}
 
@@ -88,16 +88,16 @@ func BenchmarkServeHTTP(b *testing.B) {
 	reqMsgProto := marshalProto(reqMsg)
 	reqMsgProtoComp := compress(reqMsgProto)
 	reqMsgJSON := marshalJSON(reqMsg)
-	reqMsgBookJSON := marshalJSON(reqMsg.Book)
+	reqMsgBookJSON := marshalJSON(reqMsg.GetBook())
 
 	rspMsg := &testv1.Book{
 		Name:        "books/123",
 		Parent:      "shelves/456",
-		CreateTime:  reqMsg.Book.CreateTime,
+		CreateTime:  reqMsg.GetBook().GetCreateTime(),
 		UpdateTime:  timestamppb.New(time.Date(2023, 9, 1, 0, 0, 0, 0, time.UTC)),
-		Title:       reqMsg.Book.Title,
-		Author:      reqMsg.Book.Author,
-		Description: reqMsg.Book.Description,
+		Title:       reqMsg.GetBook().GetTitle(),
+		Author:      reqMsg.GetBook().GetAuthor(),
+		Description: reqMsg.GetBook().GetDescription(),
 		Labels: map[string]string{
 			"genre": "science fiction",
 		},
@@ -205,7 +205,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 				data := rsp.Body.Bytes()
 				rsp.Body.Reset()
-				assert.NoError(b, json.Compact(rsp.Body, data))
+				require.NoError(b, json.Compact(rsp.Body, data))
 				assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
 			}
 		})
@@ -293,7 +293,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			assert.Equal(b, "application/json", rsp.Header().Get("Content-Type"), "response content type")
 			data := rsp.Body.Bytes()
 			rsp.Body.Reset()
-			assert.NoError(b, json.Compact(rsp.Body, data))
+			require.NoError(b, json.Compact(rsp.Body, data))
 			assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
 		}
 		b.StopTimer()

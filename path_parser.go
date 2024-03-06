@@ -97,10 +97,10 @@ func (p *pathParser) errSyntax(msg string) error {
 	return fmt.Errorf("syntax error at column %v: %s", p.scan.pos, msg)
 }
 func (p *pathParser) errUnexpected() error {
-	return p.errSyntax(fmt.Sprintf("unexpected %s", p.currentChar()))
+	return p.errSyntax("unexpected " + p.currentChar())
 }
 func (p *pathParser) errExpected(expected rune) error {
-	return p.errSyntax(fmt.Sprintf("expected %q, got %s", expected, p.currentChar()))
+	return p.errSyntax("expected " + strconv.QuoteRune(expected) + ", got " + p.currentChar())
 }
 
 func (p *pathParser) parseTemplate() error {

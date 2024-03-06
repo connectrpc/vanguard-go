@@ -140,7 +140,7 @@ func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {
 		var applied bool
 		selector := rule.GetSelector()
 		if selector == "" {
-			return fmt.Errorf("rule missing selector")
+			return errors.New("rule missing selector")
 		}
 		if i := strings.Index(selector, "*"); i >= 0 {
 			if i != len(selector)-1 {
@@ -216,8 +216,8 @@ func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodC
 		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
 	}
 	methodConf.httpRule = firstTarget
-	for i, rule := range httpRule.AdditionalBindings {
-		if len(rule.AdditionalBindings) > 0 {
+	for i, rule := range httpRule.GetAdditionalBindings() {
+		if len(rule.GetAdditionalBindings()) > 0 {
 			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
 		}
 		if _, err := t.restRoutes.addRoute(methodConf, rule); err != nil {
@@ -729,7 +729,7 @@ func (o *operation) processRequestEnvelope(envBuf envelopeBytes) (msgLen int, co
 		return 0, false, malformedRequestError(err)
 	}
 	if env.trailer {
-		return 0, false, malformedRequestError(fmt.Errorf("client stream cannot include status/trailer message"))
+		return 0, false, malformedRequestError(errors.New("client stream cannot include status/trailer message"))
 	}
 	if limit := o.methodConf.maxMsgBufferBytes; env.length > limit {
 		return 0, false, bufferLimitError(int64(limit))

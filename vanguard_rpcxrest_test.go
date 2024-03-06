@@ -446,7 +446,7 @@ func TestMux_RPCxREST(t *testing.T) {
 					if req.output.wantErr != nil {
 						assert.Equal(t, req.output.wantErr.Code(), connect.CodeOf(err))
 					} else {
-						assert.NoError(t, err)
+						require.NoError(t, err)
 					}
 					assert.Subset(t, header, req.output.header)
 					assert.Subset(t, trailer, req.output.trailer)

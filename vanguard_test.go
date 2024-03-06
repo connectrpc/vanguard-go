@@ -60,7 +60,7 @@ func TestRuleSelector(t *testing.T) {
 			Get: "/healthz",
 		},
 	}))
-	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.Check\" does not match any methods")
+	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.Check\" does not match any methods") //nolint:testifylint
 
 	_, err = NewTranscoder([]*Service{svc}, WithRules(&annotations.HttpRule{
 		Selector: "invalid.*.Get",
@@ -68,7 +68,7 @@ func TestRuleSelector(t *testing.T) {
 			Get: "/v1/*",
 		},
 	}))
-	assert.ErrorContains(t, err, "wildcard selector \"invalid.*.Get\" must be at the end")
+	assert.ErrorContains(t, err, "wildcard selector \"invalid.*.Get\" must be at the end") //nolint:testifylint
 
 	_, err = NewTranscoder([]*Service{svc}, WithRules(&annotations.HttpRule{
 		Selector: "grpc.health.v1.Health.*",
@@ -76,14 +76,14 @@ func TestRuleSelector(t *testing.T) {
 			Get: "/healthz",
 		},
 	}))
-	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.*\" does not match any methods")
+	assert.ErrorContains(t, err, "rule \"grpc.health.v1.Health.*\" does not match any methods") //nolint:testifylint
 
 	_, err = NewTranscoder([]*Service{svc}, WithRules(&annotations.HttpRule{
 		Pattern: &annotations.HttpRule_Get{
 			Get: "/v1/*",
 		},
 	}))
-	assert.ErrorContains(t, err, "rule missing selector")
+	assert.ErrorContains(t, err, "rule missing selector") //nolint:testifylint
 
 	handler, err := NewTranscoder(
 		[]*Service{svc},
@@ -158,14 +158,14 @@ type testMsg struct {
 
 func (o *testMsg) getIn() (*testMsgIn, error) {
 	if o == nil || o.in == nil {
-		return nil, fmt.Errorf("missing input message")
+		return nil, errors.New("missing input message")
 	}
 	return o.in, nil
 }
 
 func (o *testMsg) getOut() (*testMsgOut, error) {
 	if o == nil || o.out == nil {
-		return nil, fmt.Errorf("missing output message")
+		return nil, errors.New("missing output message")
 	}
 	return o.out, nil
 }
@@ -240,7 +240,7 @@ func (s *ttStream) await(t *testing.T, expectServerDone bool) (serverInvoked boo
 	case <-s.done:
 		return true, s.result
 	case <-time.After(3 * time.Second):
-		return true, fmt.Errorf("timeout: interceptor still did not finish after 3 seconds")
+		return true, errors.New("timeout: interceptor still did not finish after 3 seconds")
 	}
 }
 
@@ -429,7 +429,7 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 					}
 				}
 			default:
-				return fmt.Errorf("expected message")
+				return errors.New("expected message")
 			}
 		}
 		for key, vals := range stream.rspTrailer {
@@ -485,7 +485,7 @@ func (i *testInterceptor) restUnaryHandler(
 			} else {
 				codecName := codecNames[contentType]
 				if !assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match") {
-					return fmt.Errorf("codec didn't match")
+					return errors.New("codec didn't match")
 				}
 				if err := codec.Unmarshal(body, got); err != nil {
 					return err
@@ -513,9 +513,9 @@ func (i *testInterceptor) restUnaryHandler(
 		rsp.Header().Set("Content-Encoding", "identity")
 		if restIsHTTPBody(out.msg.ProtoReflect().Descriptor(), nil) { //nolint:nestif
 			msg, _ := out.msg.(*httpbody.HttpBody)
-			rsp.Header().Set("Content-Type", msg.ContentType)
-			_, err = rsp.Write(msg.Data)
-			assert.NoError(stream.T, err, "failed to write response")
+			rsp.Header().Set("Content-Type", msg.GetContentType())
+			_, err = rsp.Write(msg.GetData())
+			require.NoError(stream.T, err, "failed to write response")
 		} else {
 			body, err = codec.MarshalAppend(nil, out.msg)
 			if err != nil {
@@ -531,7 +531,7 @@ func (i *testInterceptor) restUnaryHandler(
 				body = dst.Bytes()
 			}
 			_, err = rsp.Write(body)
-			assert.NoError(stream.T, err, "failed to write response")
+			require.NoError(stream.T, err, "failed to write response")
 		}
 
 		// Write trailers.
@@ -825,23 +825,23 @@ func protocolAssertMiddleware(
 		switch protocol {
 		case ProtocolGRPC:
 			wantHdr = map[string][]string{
-				"Content-Type":  {fmt.Sprintf("application/grpc+%s", codec)},
+				"Content-Type":  {"application/grpc+" + codec},
 				"Grpc-Encoding": allowedCompression,
 			}
 		case ProtocolGRPCWeb:
 			wantHdr = map[string][]string{
-				"Content-Type":  {fmt.Sprintf("application/grpc-web+%s", codec)},
+				"Content-Type":  {"application/grpc-web+" + codec},
 				"Grpc-Encoding": allowedCompression,
 			}
 		case ProtocolConnect:
 			if strings.HasPrefix(req.Header.Get("Content-Type"), "application/connect") {
 				wantHdr = map[string][]string{
-					"Content-Type":             {fmt.Sprintf("application/connect+%s", codec)},
+					"Content-Type":             {"application/connect+" + codec},
 					"Connect-Content-Encoding": allowedCompression,
 				}
 			} else if req.Method == http.MethodPost {
 				wantHdr = map[string][]string{
-					"Content-Type":     {fmt.Sprintf("application/%s", codec)},
+					"Content-Type":     {"application/" + codec},
 					"Content-Encoding": allowedCompression,
 				}
 			}
@@ -916,15 +916,15 @@ func runRPCTestCase[Client any](
 		receivedErr = stream.err
 	}
 	if receivedErr == nil {
-		assert.NoError(t, err)
+		require.NoError(t, err)
 	} else {
-		assert.Equal(t, receivedErr.Code(), connect.CodeOf(err))
+		require.Equal(t, receivedErr.Code(), connect.CodeOf(err))
 	}
 	// Also check the error observed by the server.
 	if expectedErr == nil {
-		assert.NoError(t, serverErr)
+		require.NoError(t, serverErr)
 	} else if serverInvoked {
-		assert.Error(t, serverErr)
+		require.Error(t, serverErr)
 		if expectServerCancel && connect.CodeOf(serverErr) != connect.CodeOf(expectedErr) {
 			// We expect the server to either have seen the same error or it later
 			// observed a cancel error (since the middleware cancels the request

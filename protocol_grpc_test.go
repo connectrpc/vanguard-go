@@ -42,7 +42,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
 	// if error has no details, no need to generate this response trailer
 	assert.Equal(t, "", rec.Header().Get("Grpc-Status-Details-Bin"))
-	assert.Len(t, rec.Body.Bytes(), 0)
+	assert.Empty(t, rec.Body.Bytes())
 
 	got := grpcExtractErrorFromTrailer(rec.Header())
 	assert.Equal(t, cerr, got)
@@ -57,7 +57,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Equal(t, "16", rec.Header().Get("Grpc-Status"))
 	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
 	assert.Equal(t, "CBASGXRlc3QgZXJyb3I6IEhlbGxvLCDkuJbnlYwaOAovdHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUucHJvdG9idWYuU3RyaW5nVmFsdWUSBQoDZm9v", rec.Header().Get("Grpc-Status-Details-Bin"))
-	assert.Len(t, rec.Body.Bytes(), 0)
+	assert.Empty(t, rec.Body.Bytes())
 
 	got = grpcExtractErrorFromTrailer(rec.Header())
 	assert.Equal(t, cerr, got)
@@ -113,34 +113,34 @@ func TestGRPCPercentEncoding(t *testing.T) {
 func TestGRPCDecodeTimeout(t *testing.T) {
 	t.Parallel()
 	_, err := grpcDecodeTimeout("")
-	assert.True(t, errors.Is(err, errNoTimeout))
+	require.ErrorIs(t, err, errNoTimeout)
 
 	_, err = grpcDecodeTimeout("foo")
-	assert.NotNil(t, err)
+	assert.Error(t, err) //nolint:testifylint
 	_, err = grpcDecodeTimeout("12xS")
-	assert.NotNil(t, err)
-	_, err = grpcDecodeTimeout("999999999n") // 9 digits
-	assert.NotNil(t, err)
-	assert.False(t, errors.Is(err, errNoTimeout))
-	_, err = grpcDecodeTimeout("99999999H") // 8 digits but overflows time.Duration
-	assert.True(t, errors.Is(err, errNoTimeout))
+	assert.Error(t, err)                          //nolint:testifylint
+	_, err = grpcDecodeTimeout("999999999n")      // 9 digits
+	assert.Error(t, err)                          //nolint:testifylint
+	assert.False(t, errors.Is(err, errNoTimeout)) //nolint:testifylint
+	_, err = grpcDecodeTimeout("99999999H")       // 8 digits but overflows time.Duration
+	assert.ErrorIs(t, err, errNoTimeout)          //nolint:testifylint
 
 	duration, err := grpcDecodeTimeout("45S")
-	assert.Nil(t, err)
-	assert.Equal(t, duration, 45*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, 45*time.Second, duration)
 
 	const long = "99999999S"
 	duration, err = grpcDecodeTimeout(long) // 8 digits, shouldn't overflow
-	assert.Nil(t, err)
-	assert.Equal(t, duration, 99999999*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, 99999999*time.Second, duration)
 }
 
 func TestGRPCEncodeTimeout(t *testing.T) {
 	t.Parallel()
 	timeout := grpcEncodeTimeout(time.Hour + time.Second)
-	assert.Equal(t, timeout, "3601000m")
+	assert.Equal(t, "3601000m", timeout)
 	timeout = grpcEncodeTimeout(time.Duration(math.MaxInt64))
-	assert.Equal(t, timeout, "2562047H")
+	assert.Equal(t, "2562047H", timeout)
 	timeout = grpcEncodeTimeout(-1 * time.Hour)
-	assert.Equal(t, timeout, "0n")
+	assert.Equal(t, "0n", timeout)
 }

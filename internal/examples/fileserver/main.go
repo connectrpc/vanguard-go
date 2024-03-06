@@ -82,7 +82,7 @@ type ContentService struct {
 }
 
 func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.IndexRequest]) (*connect.Response[httpbody.HttpBody], error) {
-	name := req.Msg.Page
+	name := req.Msg.GetPage()
 	log.Printf("Index: %v", name)
 	if name == "/" || name == "" {
 		name = "."
