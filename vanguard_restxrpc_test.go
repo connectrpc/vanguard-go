@@ -553,7 +553,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 					rsp := httptest.NewRecorder()
 
 					func() {
-						// Capture http.ErrAbortHanlder panics.
+						// Capture http.ErrAbortHandler panics.
 						defer func() {
 							if recovered := recover(); recovered != nil {
 								if err, ok := recovered.(error); ok {
