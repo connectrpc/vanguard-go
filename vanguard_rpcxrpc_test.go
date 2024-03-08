@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -89,13 +91,25 @@ func TestMux_RPCxRPC(t *testing.T) {
 		t.Cleanup(server.Close)
 		return testServer{name: name, server: server}
 	}
-	var servers []testServer
+	servers := []testServer{}
 	for _, protocol := range protocols {
 		for _, codec := range codecs {
 			for _, compression := range compressions {
 				servers = append(servers, makeServer(protocol, codec, compression))
 			}
 		}
+	}
+	for _, server := range servers {
+		serverURL, err := url.Parse(server.server.URL)
+		require.NoError(t, err)
+		proxy := httputil.NewSingleHostReverseProxy(serverURL)
+		proxy.Transport = server.server.Client().Transport
+		proxyServer := httptest.NewUnstartedServer(proxy)
+		proxyServer.EnableHTTP2 = true
+		proxyServer.StartTLS()
+		disableCompression(proxyServer)
+		t.Cleanup(proxyServer.Close)
+		servers = append(servers, testServer{name: server.name + "/proxy", server: proxyServer})
 	}
 
 	type testOpt struct {

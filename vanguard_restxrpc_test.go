@@ -16,7 +16,9 @@ package vanguard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -71,11 +73,18 @@ func TestMux_RESTxRPC(t *testing.T) {
 		connect.WithInterceptors(&interceptor),
 	))
 
+	server := httptest.NewServer(serveMux)
+	t.Cleanup(server.Close)
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(serverURL)
+	proxy.Transport = server.Client().Transport
+
 	type testMux struct {
 		name    string
 		handler http.Handler
 	}
-	makeMux := func(protocol Protocol, codec, compression string) testMux {
+	wrapHandler := func(protocol Protocol, codec, compression string, handler http.Handler) http.Handler {
 		opts := []ServiceOption{
 			WithTargetProtocols(protocol),
 			WithTargetCodecs(codec),
@@ -85,8 +94,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		} else {
 			opts = append(opts, WithNoTargetCompression())
 		}
-		svcHandler := protocolAssertMiddleware(protocol, codec, compression, serveMux)
-		name := fmt.Sprintf("%s_%s_%s", protocol, codec, compression)
+		svcHandler := protocolAssertMiddleware(protocol, codec, compression, handler)
 
 		services := make([]*Service, len(serviceNames))
 		for i, svcName := range serviceNames {
@@ -94,13 +102,20 @@ func TestMux_RESTxRPC(t *testing.T) {
 		}
 		handler, err := NewTranscoder(services)
 		require.NoError(t, err)
-		return testMux{name: name, handler: handler}
+		return handler
 	}
 	var muxes []testMux
 	for _, protocol := range protocols {
 		for _, codec := range codecs {
 			for _, compression := range compressions {
-				muxes = append(muxes, makeMux(protocol, codec, compression))
+				muxes = append(muxes, testMux{
+					name:    fmt.Sprintf("%s_%s_%s", protocol, codec, compression),
+					handler: wrapHandler(protocol, codec, compression, serveMux),
+				})
+				muxes = append(muxes, testMux{
+					name:    fmt.Sprintf("proxy/%s_%s_%s", protocol, codec, compression),
+					handler: wrapHandler(protocol, codec, compression, proxy),
+				})
 			}
 		}
 	}
@@ -367,6 +382,28 @@ func TestMux_RESTxRPC(t *testing.T) {
 			]`,
 		},
 	}, {
+		// Checks errors on decoding the request body.
+		name: "GetCheckout-Error",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v2/checkouts/nan", // invalid ID
+			body:   nil,
+			meta: http.Header{
+				"Message": []string{"hello"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs:   []testMsg{},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "invalid parameter \"id\" invalid character 'a' in literal null (expecting 'u')",
+			},
+		},
+	}, {
 		name: "Index",
 		input: input{
 			method: http.MethodGet,
@@ -514,7 +551,25 @@ func TestMux_RESTxRPC(t *testing.T) {
 					t.Log("req:", string(debug))
 
 					rsp := httptest.NewRecorder()
-					opts.mux.handler.ServeHTTP(rsp, req)
+
+					func() {
+						// Capture http.ErrAbortHandler panics.
+						defer func() {
+							if recovered := recover(); recovered != nil {
+								if err, ok := recovered.(error); ok {
+									if errors.Is(err, http.ErrAbortHandler) {
+										return
+									}
+								}
+								t.Error("unexpected panic:", recovered)
+							}
+						}()
+						// Inject http.Server into the request context to convince
+						// httputil.ReverseProxy we are in a server context.
+						svr := &http.Server{} //nolint:gosec // dummy server for testing
+						req = req.WithContext(context.WithValue(req.Context(), http.ServerContextKey, svr))
+						opts.mux.handler.ServeHTTP(rsp, req)
+					}()
 
 					result := rsp.Result()
 					defer result.Body.Close()
