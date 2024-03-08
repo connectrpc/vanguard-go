@@ -56,6 +56,7 @@ func TestServiceWithSchema(t *testing.T) {
 
 	svcDesc := file.Services().ByName("BlahService")
 	require.NotNil(t, svcDesc)
+	methodPath := "/" + string(svcDesc.FullName()) + "/Do"
 
 	t.Run("default_bespoke_resolver", func(t *testing.T) {
 		t.Parallel()
@@ -66,7 +67,7 @@ func TestServiceWithSchema(t *testing.T) {
 		transcoder, err := NewTranscoder([]*Service{svc})
 		require.NoError(t, err)
 
-		res := transcoder.methods["/"+string(svcDesc.FullName())+"/Do"].resolver
+		res := transcoder.methods[methodPath].resolver
 		// Resolver can also resolve other messages in the file.
 		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
 		require.NoError(t, err)
@@ -87,7 +88,7 @@ func TestServiceWithSchema(t *testing.T) {
 		transcoder, err := NewTranscoder([]*Service{svc})
 		require.NoError(t, err)
 
-		res := transcoder.methods["/"+string(svcDesc.FullName())+"/Do"].resolver
+		res := transcoder.methods[methodPath].resolver
 		// It cannot resolve other types that were in the same file.
 		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
 		require.ErrorIs(t, err, protoregistry.NotFound)
@@ -112,7 +113,7 @@ func TestServiceWithSchema(t *testing.T) {
 		transcoder, err := NewTranscoder([]*Service{svc})
 		require.NoError(t, err)
 
-		res := transcoder.methods["/"+string(svcDesc.FullName())+"/Do"].resolver
+		res := transcoder.methods[methodPath].resolver
 		// It cannot resolve other types that were in the same file.
 		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
 		require.ErrorIs(t, err, protoregistry.NotFound)
