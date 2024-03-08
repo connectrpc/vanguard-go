@@ -57,7 +57,7 @@ func TestServiceWithSchema(t *testing.T) {
 	svcDesc := file.Services().ByName("BlahService")
 	require.NotNil(t, svcDesc)
 
-	t.Run("default bespoke resolver", func(t *testing.T) {
+	t.Run("default_bespoke_resolver", func(t *testing.T) {
 		t.Parallel()
 		svc := NewServiceWithSchema(svcDesc, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
@@ -77,7 +77,7 @@ func TestServiceWithSchema(t *testing.T) {
 		_, ok := timestampType.New().Interface().(*dynamicpb.Message)
 		assert.True(t, ok)
 	})
-	t.Run("default bespoke resolver, service has no parent file", func(t *testing.T) {
+	t.Run("default_bespoke_resolver_service_has_no_parent_file", func(t *testing.T) {
 		t.Parallel()
 		svcDescNoParent := &serviceWithNoParentFile{ServiceDescriptor: svcDesc}
 		svc := NewServiceWithSchema(svcDescNoParent, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -98,7 +98,7 @@ func TestServiceWithSchema(t *testing.T) {
 		_, ok := timestampType.New().Interface().(*timestamppb.Timestamp)
 		assert.True(t, ok)
 	})
-	t.Run("uses dynamic message type with bad resolver", func(t *testing.T) {
+	t.Run("uses_dynamic_message_type_with_bad_resolver", func(t *testing.T) {
 		t.Parallel()
 		svc := NewServiceWithSchema(
 			svcDesc,
@@ -123,7 +123,7 @@ func TestServiceWithSchema(t *testing.T) {
 		_, ok := timestampType.New().Interface().(*timestamppb.Timestamp)
 		assert.True(t, ok)
 	})
-	t.Run("fails for rest only because no http rules", func(t *testing.T) {
+	t.Run("fails_for_rest_only_because_no_http_rules", func(t *testing.T) {
 		t.Parallel()
 		svc := NewServiceWithSchema(
 			svcDesc,

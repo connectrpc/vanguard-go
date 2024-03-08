@@ -424,12 +424,12 @@ type serviceOptions struct {
 
 type methodConfig struct {
 	*serviceOptions
-	descriptor        protoreflect.MethodDescriptor
-	request, response protoreflect.MessageType
-	methodPath        string
-	streamType        connect.StreamType
-	handler           http.Handler
-	httpRule          *routeTarget // First HTTP rule, if any.
+	descriptor                protoreflect.MethodDescriptor
+	requestType, responseType protoreflect.MessageType
+	methodPath                string
+	streamType                connect.StreamType
+	handler                   http.Handler
+	httpRule                  *routeTarget // First HTTP rule, if any.
 }
 
 func descKind(desc protoreflect.Descriptor) string {

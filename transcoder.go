@@ -176,20 +176,20 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 	if _, ok := t.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
-	request, err := opts.resolver.FindMessageByName(methodDesc.Input().FullName())
+	requestType, err := opts.resolver.FindMessageByName(methodDesc.Input().FullName())
 	if err != nil {
-		request = dynamicpb.NewMessageType(methodDesc.Input())
+		requestType = dynamicpb.NewMessageType(methodDesc.Input())
 	}
-	response, err := opts.resolver.FindMessageByName(methodDesc.Output().FullName())
+	responseType, err := opts.resolver.FindMessageByName(methodDesc.Output().FullName())
 	if err != nil {
-		response = dynamicpb.NewMessageType(methodDesc.Output())
+		responseType = dynamicpb.NewMessageType(methodDesc.Output())
 	}
 
 	methodConf := &methodConfig{
 		serviceOptions: opts,
 		descriptor:     methodDesc,
-		request:        request,
-		response:       response,
+		requestType:    requestType,
+		responseType:   responseType,
 		methodPath:     methodPath,
 		handler:        handler,
 	}
@@ -514,7 +514,7 @@ func (o *operation) handle() {
 
 	if mustDecodeRequest {
 		// Need the message type to decode
-		reqMsg.msg = o.methodConf.request.New().Interface()
+		reqMsg.msg = o.methodConf.requestType.New().Interface()
 	}
 
 	if requireMessageForRequestLine {
@@ -1120,7 +1120,7 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 
 	if mustDecodeResponse {
 		// We will have to decode and re-encode, so we need the message type.
-		respMsg.msg = w.op.methodConf.response.New().Interface()
+		respMsg.msg = w.op.methodConf.responseType.New().Interface()
 	}
 
 	var endMustBeInHeaders bool

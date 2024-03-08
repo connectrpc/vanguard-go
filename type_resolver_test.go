@@ -33,7 +33,7 @@ import (
 
 func TestCanUseGlobalTypes(t *testing.T) {
 	t.Parallel()
-	t.Run("service descriptor from global files", func(t *testing.T) {
+	t.Run("service_descriptor_from_global_files", func(t *testing.T) {
 		t.Parallel()
 		desc, err := protoregistry.GlobalFiles.FindDescriptorByName(testv1connect.LibraryServiceName)
 		require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestCanUseGlobalTypes(t *testing.T) {
 
 		assert.True(t, canUseGlobalTypes(svcDesc))
 	})
-	t.Run("service descriptor not from global files", func(t *testing.T) {
+	t.Run("service_descriptor_not_from_global_files", func(t *testing.T) {
 		t.Parallel()
 		prefix := randomPrefix(t)
 		file, err := makeFile(prefix)
@@ -53,7 +53,7 @@ func TestCanUseGlobalTypes(t *testing.T) {
 
 		assert.False(t, canUseGlobalTypes(svcDesc))
 	})
-	t.Run("service descriptor from global files without types", func(t *testing.T) {
+	t.Run("service_descriptor_from_global_files_without_types", func(t *testing.T) {
 		t.Parallel()
 		prefix := randomPrefix(t)
 		file, err := makeFile(prefix)
