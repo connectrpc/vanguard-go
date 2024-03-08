@@ -31,6 +31,7 @@ import (
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
@@ -177,12 +178,18 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
 	requestType, err := opts.resolver.FindMessageByName(methodDesc.Input().FullName())
-	if err != nil {
+	if errors.Is(err, protoregistry.NotFound) {
 		requestType = dynamicpb.NewMessageType(methodDesc.Input())
+	} else if err != nil {
+		return fmt.Errorf("request type %s, for method %s, could not be resolved: %v",
+			methodDesc.Input().FullName(), methodDesc.FullName(), err)
 	}
 	responseType, err := opts.resolver.FindMessageByName(methodDesc.Output().FullName())
-	if err != nil {
+	if errors.Is(err, protoregistry.NotFound) {
 		responseType = dynamicpb.NewMessageType(methodDesc.Output())
+	} else if err != nil {
+		return fmt.Errorf("response type %s, for method %s, could not be resolved: %v",
+			methodDesc.Output().FullName(), methodDesc.FullName(), err)
 	}
 
 	methodConf := &methodConfig{
