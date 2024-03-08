@@ -47,7 +47,7 @@ func TestHTTPErrorWriter(t *testing.T) {
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 	assert.Equal(t, "identity", rec.Header().Get("Content-Encoding"))
 	var out bytes.Buffer
-	assert.NoError(t, json.Compact(&out, rec.Body.Bytes()))
+	require.NoError(t, json.Compact(&out, rec.Body.Bytes()))
 	assert.Equal(t, `{"code":16,"message":"test error: Hello, 世界","details":[]}`, out.String())
 
 	body := bytes.NewBuffer(rec.Body.Bytes())
@@ -70,14 +70,14 @@ func TestHTTPErrorFromResponse(t *testing.T) {
 			Domain:   "vanguard.connectrpc.com",
 			Metadata: map[string]string{"key1": "value1"},
 		})
-		require.Nil(t, err)
+		require.NoError(t, err)
 		stat := status.Status{
 			Code:    int32(connect.CodeUnauthenticated),
 			Message: "auth error",
 			Details: []*anypb.Any{errorInfo},
 		}
 		out, err := protojson.Marshal(&stat)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewBuffer(out))
 		assert.Equal(t, connect.CodeUnauthenticated, got.Code())
 		assert.Equal(t, "auth error", got.Message())
@@ -90,11 +90,11 @@ func TestHTTPErrorFromResponse(t *testing.T) {
 		assert.Equal(t, "Unauthorized", got.Message())
 		assert.Len(t, got.Details(), 1)
 		value, err := got.Details()[0].Value()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		httpBody, ok := value.(*httpbody.HttpBody)
 		assert.True(t, ok)
-		assert.Equal(t, "application/json", httpBody.ContentType)
-		assert.Equal(t, []byte("unauthorized"), httpBody.Data)
+		assert.Equal(t, "application/json", httpBody.GetContentType())
+		assert.Equal(t, []byte("unauthorized"), httpBody.GetData())
 	})
 	t.Run("invalidAny", func(t *testing.T) {
 		t.Parallel()
@@ -103,7 +103,7 @@ func TestHTTPErrorFromResponse(t *testing.T) {
 			Message: "auth error",
 		}
 		out, err := protojson.Marshal(&stat)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		out = append(out[:len(out)-1], []byte(`,"details":{"@type":"foo","value":"bar"}`)...)
 		got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", bytes.NewBuffer(out))
 		t.Log(got)
@@ -111,11 +111,11 @@ func TestHTTPErrorFromResponse(t *testing.T) {
 		assert.Equal(t, "Unauthorized", got.Message())
 		assert.Len(t, got.Details(), 1)
 		value, err := got.Details()[0].Value()
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		httpBody, ok := value.(*httpbody.HttpBody)
 		assert.True(t, ok)
-		assert.Equal(t, "application/json", httpBody.ContentType)
-		assert.Equal(t, out, httpBody.Data)
+		assert.Equal(t, "application/json", httpBody.GetContentType())
+		assert.Equal(t, out, httpBody.GetData())
 	})
 }
 

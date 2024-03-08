@@ -1,6 +1,6 @@
 module connectrpc.com/vanguard
 
-go 1.19
+go 1.20
 
 require (
 	buf.build/gen/go/connectrpc/eliza/connectrpc/go v1.11.1-20230822171018-8b8b971d6fde.1

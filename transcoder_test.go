@@ -89,7 +89,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 	}{
 		{
 			name: "enveloping_reader",
-			expectation: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
+			expectation: func(t *testing.T, _ http.ResponseWriter, req *http.Request) {
 				t.Helper()
 				_, ok := req.Body.(*envelopingReader)
 				assert.True(t, ok, "request body should be *envelopingReader")
@@ -114,7 +114,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 		},
 		{
 			name: "enveloping_writer",
-			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+			expectation: func(t *testing.T, rsp http.ResponseWriter, _ *http.Request) {
 				t.Helper()
 				rw, ok := rsp.(*responseWriter)
 				require.True(t, ok, "response writer should be *responseWriter")
@@ -241,7 +241,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 		},
 		{
 			name: "transforming_reader",
-			expectation: func(t *testing.T, rw http.ResponseWriter, req *http.Request) {
+			expectation: func(t *testing.T, _ http.ResponseWriter, req *http.Request) {
 				t.Helper()
 				_, ok := req.Body.(*transformingReader)
 				assert.True(t, ok, "request body should be *transformingReader")
@@ -285,7 +285,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 		},
 		{
 			name: "transforming_writer",
-			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+			expectation: func(t *testing.T, rsp http.ResponseWriter, _ *http.Request) {
 				t.Helper()
 				rw, ok := rsp.(*responseWriter)
 				require.True(t, ok, "response writer should be *responseWriter")
@@ -431,7 +431,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 		},
 		{
 			name: "error_writer",
-			expectation: func(t *testing.T, rsp http.ResponseWriter, req *http.Request) {
+			expectation: func(t *testing.T, rsp http.ResponseWriter, _ *http.Request) {
 				t.Helper()
 				rw, ok := rsp.(*responseWriter)
 				require.True(t, ok, "response writer should be *responseWriter")
@@ -480,7 +480,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 		{
 			name:          "per_svc_options",
 			optsOnService: true,
-			makeMux: func(req *testRequest, svcs []*Service) (http.Handler, error) {
+			makeMux: func(_ *testRequest, svcs []*Service) (http.Handler, error) {
 				// svcs already have options defined on them
 				return NewTranscoder(svcs, WithDefaultServiceOptions(WithMaxMessageBufferBytes(1024)))
 			},
@@ -1609,7 +1609,7 @@ func checkStageRead(t *testing.T, msg *message, compressed bool) {
 func checkStageDecoded(t *testing.T, msg *message) {
 	t.Helper()
 	require.Equal(t, stageDecoded, msg.stage)
-	require.Equal(t, testDataString, msg.msg.(*wrapperspb.StringValue).Value)
+	require.Equal(t, testDataString, msg.msg.(*wrapperspb.StringValue).GetValue())
 	// Should not be possible to go backwards.
 	require.Error(t, msg.advanceToStage(nil, stageRead))
 	require.Error(t, msg.advanceToStage(nil, stageEmpty))
@@ -1647,7 +1647,7 @@ func (f *fakeCodec) Name() string {
 
 func (f *fakeCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
 	f.marshalCalls++
-	val := msg.(*wrapperspb.StringValue).Value
+	val := msg.(*wrapperspb.StringValue).GetValue()
 	return append(b, ([]byte)(val)...), nil
 }
 

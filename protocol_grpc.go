@@ -544,8 +544,8 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 			protocolError("invalid protobuf for error details: %w", err),
 		)
 	}
-	trailerErr := connect.NewWireError(connect.Code(stat.Code), errors.New(stat.Message))
-	for _, msg := range stat.Details {
+	trailerErr := connect.NewWireError(connect.Code(stat.GetCode()), errors.New(stat.GetMessage()))
+	for _, msg := range stat.GetDetails() {
 		errDetail, err := connect.NewErrorDetail(msg)
 		if err != nil {
 			// shouldn't happen since msg is an Any and doesn't need to be marshalled

@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -111,7 +110,7 @@ func Example_restClientToRpcServer() {
 		logger.Println(err)
 		return
 	}
-	logger.Println(book.Author)
+	logger.Println(book.GetAuthor())
 	// Output: 200 OK
 	// application/json
 	// Arthur C. Clarke
@@ -159,7 +158,7 @@ func Example_rpcClientToRestServer() {
 		logger.Println(err)
 		return
 	}
-	logger.Println(rsp.Msg.Description)
+	logger.Println(rsp.Msg.GetDescription())
 	// Output: Have you seen Blade Runner?
 }
 
@@ -181,7 +180,7 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 			}))
 			msg, err = got.Msg, gotErr
 		default:
-			err = connect.NewError(connect.CodeNotFound, fmt.Errorf("method not found"))
+			err = connect.NewError(connect.CodeNotFound, errors.New("method not found"))
 		}
 	case http.MethodPost:
 		switch {
@@ -197,10 +196,10 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 			}))
 			msg, err = got.Msg, gotErr
 		default:
-			err = connect.NewError(connect.CodeNotFound, fmt.Errorf("method not found"))
+			err = connect.NewError(connect.CodeNotFound, errors.New("method not found"))
 		}
 	default:
-		err = connect.NewError(connect.CodeNotFound, fmt.Errorf("method not found"))
+		err = connect.NewError(connect.CodeNotFound, errors.New("method not found"))
 	}
 	rsp.Header().Set("Content-Type", "application/json")
 	var body []byte
@@ -225,8 +224,8 @@ type libraryRPC struct {
 func (s *libraryRPC) GetBook(_ context.Context, req *connect.Request[testv1.GetBookRequest]) (*connect.Response[testv1.Book], error) {
 	msg := req.Msg
 	rsp := connect.NewResponse(&testv1.Book{
-		Name:        msg.Name,
-		Parent:      strings.Join(strings.Split(msg.Name, "/")[:2], "/"),
+		Name:        msg.GetName(),
+		Parent:      strings.Join(strings.Split(msg.GetName(), "/")[:2], "/"),
 		CreateTime:  timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
 		Title:       "Do Androids Dream of Electric Sheep?",
 		Author:      "Philip K. Dick",
@@ -240,10 +239,10 @@ func (s *libraryRPC) GetBook(_ context.Context, req *connect.Request[testv1.GetB
 
 func (s *libraryRPC) CreateBook(_ context.Context, req *connect.Request[testv1.CreateBookRequest]) (*connect.Response[testv1.Book], error) {
 	msg := req.Msg
-	book := req.Msg.Book
+	book := req.Msg.GetBook()
 	rsp := connect.NewResponse(&testv1.Book{
-		Name:        strings.Join([]string{msg.Parent, "books", msg.BookId}, "/"),
-		Parent:      msg.Parent,
+		Name:        strings.Join([]string{msg.GetParent(), "books", msg.GetBookId()}, "/"),
+		Parent:      msg.GetParent(),
 		CreateTime:  timestamppb.New(time.Date(1968, 1, 1, 0, 0, 0, 0, time.UTC)),
 		Title:       book.GetTitle(),
 		Author:      book.GetAuthor(),
