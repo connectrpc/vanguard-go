@@ -111,7 +111,6 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 	defaultServiceOptions := serviceOptions{
 		maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
 		maxGetURLBytes:    DefaultMaxGetURLBytes,
-		resolver:          protoregistry.GlobalTypes,
 		preferredCodec:    CodecProto,
 		codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
 		compressorNames:   map[string]struct{}{CompressionGzip: {}},
@@ -127,14 +126,43 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		unknownHandler: transcoderOpts.unknownHandler,
 		methods:        map[string]*methodConfig{},
 	}
+
+	var restOnlyServices []protoreflect.ServiceDescriptor
 	for _, svc := range services {
-		if err := transcoder.registerService(svc, defaultServiceOptions); err != nil {
+		resolvedOpts := defaultServiceOptions
+		for _, opt := range svc.opts {
+			opt.applyToService(&resolvedOpts)
+		}
+		if err := transcoder.registerService(svc, resolvedOpts); err != nil {
 			return nil, err
+		}
+		if len(resolvedOpts.protocols) == 1 {
+			_, ok := resolvedOpts.protocols[ProtocolREST]
+			if ok {
+				restOnlyServices = append(restOnlyServices, svc.schema)
+			}
 		}
 	}
 	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
 		return nil, err
 	}
+
+	// Finally, check that any services with only REST as target protocol
+	// actually have at least one method with REST mappings.
+	for _, svcDesc := range restOnlyServices {
+		methods := svcDesc.Methods()
+		var numSupportedMethods int
+		for i, length := 0, methods.Len(); i < length; i++ {
+			methodDesc := methods.Get(i)
+			if transcoder.methods[methodPath(methodDesc)].httpRule != nil {
+				numSupportedMethods++
+			}
+		}
+		if numSupportedMethods == 0 {
+			return nil, fmt.Errorf("service %s only supports REST target protocol but has no methods with HTTP rules", svcDesc.FullName())
+		}
+	}
+
 	return transcoder, nil
 }
 
@@ -252,6 +280,18 @@ func NewService(servicePath string, handler http.Handler, opts ...ServiceOption)
 }
 
 // NewServiceWithSchema creates a new service using the given schema and handler.
+// This option is appropriate for use with dynamic schemas.
+//
+// The default type resolver for the service will use [protoregistry.GlobalTypes]
+// if the given service matches a descriptor of the same name registered in
+// [protoregistry.GlobalFiles]. Otherwise, the default resolver will use
+// [dynamic messages] for the given service's request and response types. In
+// either case, the default resolver will fall back to [protoregistry.GlobalTypes]
+// for resolving extensions and message types for messages inside [anypb.Any]
+// values.
+//
+// [dynamic messages]: https://pkg.go.dev/google.golang.org/protobuf/types/dynamicpb#Message
+// [anypb.Any]: https://pkg.go.dev/google.golang.org/protobuf/types/known/anypb#Any
 func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) *Service {
 	return &Service{
 		schema:  schema,
@@ -361,17 +401,6 @@ type transcoderOptions struct {
 	compressors           compressionMap
 }
 
-// TypeResolver can resolve message and extension types and is used to instantiate
-// messages as needed for the middleware to serialize/de-serialize request and
-// response payloads.
-//
-// Implementations of this interface should be comparable, so they can be used as
-// map keys. Typical implementations are pointers to structs, which are suitable.
-type TypeResolver interface {
-	protoregistry.MessageTypeResolver
-	protoregistry.ExtensionTypeResolver
-}
-
 type transcoderOptionFunc func(*transcoderOptions)
 
 func (f transcoderOptionFunc) applyToTranscoder(opts *transcoderOptions) {
@@ -395,11 +424,12 @@ type serviceOptions struct {
 
 type methodConfig struct {
 	*serviceOptions
-	descriptor protoreflect.MethodDescriptor
-	methodPath string
-	streamType connect.StreamType
-	handler    http.Handler
-	httpRule   *routeTarget // First HTTP rule, if any.
+	descriptor                protoreflect.MethodDescriptor
+	requestType, responseType protoreflect.MessageType
+	methodPath                string
+	streamType                connect.StreamType
+	handler                   http.Handler
+	httpRule                  *routeTarget // First HTTP rule, if any.
 }
 
 func descKind(desc protoreflect.Descriptor) string {
@@ -426,4 +456,8 @@ func descKind(desc protoreflect.Descriptor) string {
 	default:
 		return fmt.Sprintf("%T", desc)
 	}
+}
+
+func methodPath(methodDesc protoreflect.MethodDescriptor) string {
+	return "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
 }
