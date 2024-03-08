@@ -181,14 +181,14 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 	if errors.Is(err, protoregistry.NotFound) {
 		requestType = dynamicpb.NewMessageType(methodDesc.Input())
 	} else if err != nil {
-		return fmt.Errorf("request type %s, for method %s, could not be resolved: %v",
+		return fmt.Errorf("request type %s, for method %s, could not be resolved: %w",
 			methodDesc.Input().FullName(), methodDesc.FullName(), err)
 	}
 	responseType, err := opts.resolver.FindMessageByName(methodDesc.Output().FullName())
 	if errors.Is(err, protoregistry.NotFound) {
 		responseType = dynamicpb.NewMessageType(methodDesc.Output())
 	} else if err != nil {
-		return fmt.Errorf("response type %s, for method %s, could not be resolved: %v",
+		return fmt.Errorf("response type %s, for method %s, could not be resolved: %w",
 			methodDesc.Output().FullName(), methodDesc.FullName(), err)
 	}
 
