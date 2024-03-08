@@ -31,6 +31,8 @@ import (
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/types/dynamicpb"
 )
 
 // Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
@@ -80,10 +82,6 @@ func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request
 }
 
 func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error {
-	for _, opt := range svc.opts {
-		opt.applyToService(&svcOpts)
-	}
-
 	if len(svcOpts.protocols) == 0 {
 		return fmt.Errorf("service %s was configured with no target protocols", svc.schema.FullName())
 	}
@@ -118,7 +116,7 @@ func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error
 	}
 
 	if svcOpts.resolver == nil {
-		return fmt.Errorf("service %s is configured with a nil type resolver", svc.schema.FullName())
+		svcOpts.resolver = resolverForService(svc.schema)
 	}
 
 	methods := svc.schema.Methods()
@@ -175,13 +173,30 @@ func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {
 }
 
 func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflect.MethodDescriptor, opts *serviceOptions) error {
-	methodPath := "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
+	methodPath := methodPath(methodDesc)
 	if _, ok := t.methods[methodPath]; ok {
 		return fmt.Errorf("duplicate registration: method %s has already been configured", methodDesc.FullName())
 	}
+	requestType, err := opts.resolver.FindMessageByName(methodDesc.Input().FullName())
+	if errors.Is(err, protoregistry.NotFound) {
+		requestType = dynamicpb.NewMessageType(methodDesc.Input())
+	} else if err != nil {
+		return fmt.Errorf("request type %s, for method %s, could not be resolved: %w",
+			methodDesc.Input().FullName(), methodDesc.FullName(), err)
+	}
+	responseType, err := opts.resolver.FindMessageByName(methodDesc.Output().FullName())
+	if errors.Is(err, protoregistry.NotFound) {
+		responseType = dynamicpb.NewMessageType(methodDesc.Output())
+	} else if err != nil {
+		return fmt.Errorf("response type %s, for method %s, could not be resolved: %w",
+			methodDesc.Output().FullName(), methodDesc.FullName(), err)
+	}
+
 	methodConf := &methodConfig{
 		serviceOptions: opts,
 		descriptor:     methodDesc,
+		requestType:    requestType,
+		responseType:   responseType,
 		methodPath:     methodPath,
 		handler:        handler,
 	}
@@ -432,6 +447,10 @@ func (o *operation) validate(transcoder *Transcoder) error {
 			}
 		}
 	}
+	if o.server.protocol.protocol() == ProtocolREST && o.restTarget == nil {
+		// This method cannot be implemented this way. So serve a 404 for this method's URI path.
+		return errNotFound
+	}
 
 	// Now that we've ruled out the use of bidi streaming above, it's safe to simulate HTTP/2
 	// for the benefit of gRPC handlers, which require HTTP/2.
@@ -502,12 +521,7 @@ func (o *operation) handle() {
 
 	if mustDecodeRequest {
 		// Need the message type to decode
-		messageType, err := o.methodConf.resolver.FindMessageByName(o.methodConf.descriptor.Input().FullName())
-		if err != nil {
-			o.reportError(err)
-			return
-		}
-		reqMsg.msg = messageType.New().Interface()
+		reqMsg.msg = o.methodConf.requestType.New().Interface()
 	}
 
 	if requireMessageForRequestLine {
@@ -1113,12 +1127,7 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 
 	if mustDecodeResponse {
 		// We will have to decode and re-encode, so we need the message type.
-		messageType, err := w.op.methodConf.resolver.FindMessageByName(w.op.methodConf.descriptor.Output().FullName())
-		if err != nil {
-			w.reportError(err)
-			return
-		}
-		respMsg.msg = messageType.New().Interface()
+		respMsg.msg = w.op.methodConf.responseType.New().Interface()
 	}
 
 	var endMustBeInHeaders bool

@@ -38,12 +38,104 @@ import (
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/dynamicpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
 	defaultTestTimeout = 30 * time.Second
 )
+
+func TestServiceWithSchema(t *testing.T) {
+	t.Parallel()
+	file, err := makeFile("")
+	require.NoError(t, err)
+
+	svcDesc := file.Services().ByName("BlahService")
+	require.NotNil(t, svcDesc)
+	methodPath := "/" + string(svcDesc.FullName()) + "/Do"
+
+	t.Run("default_bespoke_resolver", func(t *testing.T) {
+		t.Parallel()
+		svc := NewServiceWithSchema(svcDesc, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+		// Make sure we can validate the service and that the default resolver is able to
+		// correctly resolve request and response types.
+		transcoder, err := NewTranscoder([]*Service{svc})
+		require.NoError(t, err)
+
+		res := transcoder.methods[methodPath].resolver
+		// Resolver can also resolve other messages in the file.
+		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
+		require.NoError(t, err)
+		// And it can resolve anything in the service file's transitive dependencies.
+		timestampType, err := res.FindMessageByName("google.protobuf.Timestamp")
+		require.NoError(t, err)
+		// All types are dynamic.
+		_, ok := timestampType.New().Interface().(*dynamicpb.Message)
+		assert.True(t, ok)
+	})
+	t.Run("default_bespoke_resolver_service_has_no_parent_file", func(t *testing.T) {
+		t.Parallel()
+		svcDescNoParent := &serviceWithNoParentFile{ServiceDescriptor: svcDesc}
+		svc := NewServiceWithSchema(svcDescNoParent, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+
+		// Still works. But now we just use dynamic message types using the
+		// method descriptors.
+		transcoder, err := NewTranscoder([]*Service{svc})
+		require.NoError(t, err)
+
+		res := transcoder.methods[methodPath].resolver
+		// It cannot resolve other types that were in the same file.
+		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
+		require.ErrorIs(t, err, protoregistry.NotFound)
+		// This type can be resolved, because the default resolver will fallback to global types.
+		timestampType, err := res.FindMessageByName("google.protobuf.Timestamp")
+		require.NoError(t, err)
+		// But since it is from global types, it is NOT a dynamic message type.
+		_, ok := timestampType.New().Interface().(*timestamppb.Timestamp)
+		assert.True(t, ok)
+	})
+	t.Run("uses_dynamic_message_type_with_bad_resolver", func(t *testing.T) {
+		t.Parallel()
+		svc := NewServiceWithSchema(
+			svcDesc,
+			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+			// Global registry doesn't know about these types.
+			WithTypeResolver(protoregistry.GlobalTypes),
+		)
+
+		// Still works. But now we just use dynamic message types using the
+		// method descriptors.
+		transcoder, err := NewTranscoder([]*Service{svc})
+		require.NoError(t, err)
+
+		res := transcoder.methods[methodPath].resolver
+		// It cannot resolve other types that were in the same file.
+		_, err = res.FindMessageByName("foo.bar.baz.v1.Blue")
+		require.ErrorIs(t, err, protoregistry.NotFound)
+		// This type can be resolved, because the default resolver will fallback to global types.
+		timestampType, err := res.FindMessageByName("google.protobuf.Timestamp")
+		require.NoError(t, err)
+		// But since it is from global types, it is NOT a dynamic message type.
+		_, ok := timestampType.New().Interface().(*timestamppb.Timestamp)
+		assert.True(t, ok)
+	})
+	t.Run("fails_for_rest_only_because_no_http_rules", func(t *testing.T) {
+		t.Parallel()
+		svc := NewServiceWithSchema(
+			svcDesc,
+			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+			WithTargetProtocols(ProtocolREST),
+		)
+
+		_, err := NewTranscoder([]*Service{svc})
+		require.ErrorContains(t, err, "service foo.bar.baz.v1.BlahService only supports REST target protocol but has no methods with HTTP rules")
+	})
+}
 
 func TestRuleSelector(t *testing.T) {
 	t.Parallel()
@@ -983,5 +1075,17 @@ func assertTestTimeoutEncoded(ctx context.Context) error {
 	if deadline.Before(now.Add(defaultTestTimeout - 5*time.Second)) {
 		return errors.New("context deadline should be at least 20 seconds")
 	}
+	return nil
+}
+
+type serviceWithNoParentFile struct {
+	protoreflect.ServiceDescriptor
+}
+
+func (s *serviceWithNoParentFile) ParentFile() protoreflect.FileDescriptor {
+	return nil
+}
+
+func (s *serviceWithNoParentFile) Parent() protoreflect.Descriptor {
 	return nil
 }
