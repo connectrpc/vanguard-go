@@ -36,7 +36,7 @@ import (
 //nolint:gochecknoglobals
 var httpStatusCodeFromRPCIndex = [...]int{
 	http.StatusOK,                  // 0 OK
-	http.StatusRequestTimeout,      // 1 Canceled
+	499,                            // 1 Canceled
 	http.StatusInternalServerError, // 2 Unknown
 	http.StatusBadRequest,          // 3 InvalidArgument
 	http.StatusGatewayTimeout,      // 4 DeadlineExceeded
@@ -65,6 +65,8 @@ func httpStatusCodeToRPC(code int) connect.Code {
 	switch code {
 	case http.StatusOK:
 		return 0 // OK
+	case http.StatusBadRequest:
+		return connect.CodeInternal // Internal
 	case http.StatusUnauthorized:
 		return connect.CodeUnauthenticated // Unauthenticated
 	case http.StatusForbidden:
