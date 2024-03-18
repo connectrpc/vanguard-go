@@ -33,36 +33,40 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
+//nolint:gochecknoglobals
+var httpStatusCodeFromRPCIndex = [...]int{
+	http.StatusOK,                  // 0 OK
+	499,                            // 1 Canceled
+	http.StatusInternalServerError, // 2 Unknown
+	http.StatusBadRequest,          // 3 InvalidArgument
+	http.StatusGatewayTimeout,      // 4 DeadlineExceeded
+	http.StatusNotFound,            // 5 NotFound
+	http.StatusConflict,            // 6 AlreadyExists
+	http.StatusForbidden,           // 7 PermissionDenied
+	http.StatusTooManyRequests,     // 8 ResourceExhausted
+	http.StatusBadRequest,          // 9 FailedPrecondition
+	http.StatusConflict,            // 10 Aborted
+	http.StatusBadRequest,          // 11 OutOfRange
+	http.StatusNotImplemented,      // 12 Unimplemented
+	http.StatusInternalServerError, // 13 Internal
+	http.StatusServiceUnavailable,  // 14 Unavailable
+	http.StatusInternalServerError, // 15 DataLoss
+	http.StatusUnauthorized,        // 16 Unauthenticated
+}
+
 func httpStatusCodeFromRPC(code connect.Code) int {
-	var codes = [...]int{
-		http.StatusOK,                  // 0 OK
-		http.StatusRequestTimeout,      // 1 Canceled
-		http.StatusInternalServerError, // 2 Unknown
-		http.StatusBadRequest,          // 3 InvalidArgument
-		http.StatusGatewayTimeout,      // 4 DeadlineExceeded
-		http.StatusNotFound,            // 5 NotFound
-		http.StatusConflict,            // 6 AlreadyExists
-		http.StatusForbidden,           // 7 PermissionDenied
-		http.StatusTooManyRequests,     // 8 ResourceExhausted
-		http.StatusBadRequest,          // 9 FailedPrecondition
-		http.StatusConflict,            // 10 Aborted
-		http.StatusBadRequest,          // 11 OutOfRange
-		http.StatusNotImplemented,      // 12 Unimplemented
-		http.StatusInternalServerError, // 13 Internal
-		http.StatusServiceUnavailable,  // 14 Unavailable
-		http.StatusInternalServerError, // 15 DataLoss
-		http.StatusUnauthorized,        // 16 Unauthenticated
-	}
-	if int(code) > len(codes) {
+	if int(code) > len(httpStatusCodeFromRPCIndex) {
 		return http.StatusInternalServerError
 	}
-	return codes[code]
+	return httpStatusCodeFromRPCIndex[code]
 }
 
 func httpStatusCodeToRPC(code int) connect.Code {
 	switch code {
 	case http.StatusOK:
 		return 0 // OK
+	case http.StatusBadRequest:
+		return connect.CodeInternal // Internal
 	case http.StatusUnauthorized:
 		return connect.CodeUnauthenticated // Unauthenticated
 	case http.StatusForbidden:
