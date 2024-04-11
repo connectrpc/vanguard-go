@@ -145,7 +145,7 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 }
 
 func restHTTPBodyRequestIsEmpty(op *operation) bool {
-	return op.request.ContentLength < 0
+	return op.restTarget.method == http.MethodGet && op.restTarget.requestBodyFields == nil
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
