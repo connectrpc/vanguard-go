@@ -143,7 +143,6 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 		restHTTPBodyRequest(op) ||
 		op.restTarget.method == http.MethodGet
 }
-}
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
 	if err := r.prepareUnmarshalledRequestFromBody(op, src, target); err != nil {
