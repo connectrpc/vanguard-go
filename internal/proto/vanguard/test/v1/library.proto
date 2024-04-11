@@ -50,6 +50,13 @@ service LibraryService {
       body: "shelf"
     };
   }
+  // Lists shelves.
+  rpc ListShelves(ListShelvesRequest) returns (ListShelvesResponse) {
+    // List method maps to HTTP GET.
+    option (google.api.http) = {
+      get: "/v1/shelves"
+    };
+  }
   // Updates a book.
   rpc UpdateBook(UpdateBookRequest) returns (Book) {
     // Update maps to HTTP PATCH. Resource name is mapped to a URL path.
@@ -173,6 +180,21 @@ message CreateShelfRequest {
   Shelf shelf = 1;
 }
 
+message ListShelvesRequest {
+  // The maximum number of items to return.
+  int32 page_size = 1;
+
+  // The next_page_token value returned from a previous List request, if any.
+  string page_token = 2;
+}
+
+message ListShelvesResponse {
+  // The list of shelves.
+  repeated Shelf shelves = 1;
+  // Token to retrieve the next page of results, or empty if there are no
+  // more results in the list.
+  string next_page_token = 2;
+}
 message UpdateBookRequest {
   // The book resource which replaces the resource on the server.
   Book book = 1;

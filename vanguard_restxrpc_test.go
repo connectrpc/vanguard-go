@@ -185,6 +185,28 @@ func TestMux_RESTxRPC(t *testing.T) {
 		output output
 	}
 	testRequests := []testRequest{{
+		name: "ListShelves-GetNilRequest",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves",
+			body:   nil,
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListShelvesProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListShelvesRequest{},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.ListShelvesResponse{},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.ListShelvesResponse{},
+		},
+	}, {
 		name: "GetBook",
 		input: input{
 			method: http.MethodGet,
