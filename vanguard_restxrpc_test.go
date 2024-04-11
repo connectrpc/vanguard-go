@@ -185,6 +185,53 @@ func TestMux_RESTxRPC(t *testing.T) {
 		output output
 	}
 	testRequests := []testRequest{{
+		name: "ListShelves-GetNilRequest",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves",
+			body:   nil,
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListShelvesProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListShelvesRequest{},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.ListShelvesResponse{},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.ListShelvesResponse{},
+		},
+	}, {
+		name: "ListShelves-GetEmptyRequest",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves",
+			body:   &emptypb.Empty{},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListShelvesProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListShelvesRequest{},
+				}},
+				{out: &testMsgOut{
+					err: newConnectError(connect.CodeUnknown, "request should have no body; instead got 2 bytes"),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusInternalServerError,
+			body: &status.Status{
+				Code:    int32(connect.CodeUnknown),
+				Message: "request should have no body; instead got 2 bytes",
+			},
+		},
+	}, {
 		name: "GetBook",
 		input: input{
 			method: http.MethodGet,

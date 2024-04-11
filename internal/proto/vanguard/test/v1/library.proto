@@ -50,6 +50,13 @@ service LibraryService {
       body: "shelf"
     };
   }
+  // Lists shelves.
+  rpc ListShelves(ListShelvesRequest) returns (ListShelvesResponse) {
+    // List method maps to HTTP GET.
+    option (google.api.http) = {
+      get: "/v1/shelves"
+    };
+  }
   // Updates a book.
   rpc UpdateBook(UpdateBookRequest) returns (Book) {
     // Update maps to HTTP PATCH. Resource name is mapped to a URL path.
@@ -171,6 +178,12 @@ message Shelf {}
 
 message CreateShelfRequest {
   Shelf shelf = 1;
+}
+
+message ListShelvesRequest {}
+
+message ListShelvesResponse {
+  repeated Shelf shelves = 1;
 }
 
 message UpdateBookRequest {

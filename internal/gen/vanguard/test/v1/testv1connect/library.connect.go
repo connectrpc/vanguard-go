@@ -59,6 +59,9 @@ const (
 	// LibraryServiceCreateShelfProcedure is the fully-qualified name of the LibraryService's
 	// CreateShelf RPC.
 	LibraryServiceCreateShelfProcedure = "/vanguard.test.v1.LibraryService/CreateShelf"
+	// LibraryServiceListShelvesProcedure is the fully-qualified name of the LibraryService's
+	// ListShelves RPC.
+	LibraryServiceListShelvesProcedure = "/vanguard.test.v1.LibraryService/ListShelves"
 	// LibraryServiceUpdateBookProcedure is the fully-qualified name of the LibraryService's UpdateBook
 	// RPC.
 	LibraryServiceUpdateBookProcedure = "/vanguard.test.v1.LibraryService/UpdateBook"
@@ -92,6 +95,7 @@ var (
 	libraryServiceCreateBookMethodDescriptor    = libraryServiceServiceDescriptor.Methods().ByName("CreateBook")
 	libraryServiceListBooksMethodDescriptor     = libraryServiceServiceDescriptor.Methods().ByName("ListBooks")
 	libraryServiceCreateShelfMethodDescriptor   = libraryServiceServiceDescriptor.Methods().ByName("CreateShelf")
+	libraryServiceListShelvesMethodDescriptor   = libraryServiceServiceDescriptor.Methods().ByName("ListShelves")
 	libraryServiceUpdateBookMethodDescriptor    = libraryServiceServiceDescriptor.Methods().ByName("UpdateBook")
 	libraryServiceDeleteBookMethodDescriptor    = libraryServiceServiceDescriptor.Methods().ByName("DeleteBook")
 	libraryServiceSearchBooksMethodDescriptor   = libraryServiceServiceDescriptor.Methods().ByName("SearchBooks")
@@ -112,6 +116,8 @@ type LibraryServiceClient interface {
 	ListBooks(context.Context, *connect.Request[v1.ListBooksRequest]) (*connect.Response[v1.ListBooksResponse], error)
 	// Creates a shelf.
 	CreateShelf(context.Context, *connect.Request[v1.CreateShelfRequest]) (*connect.Response[v1.Shelf], error)
+	// Lists shelves.
+	ListShelves(context.Context, *connect.Request[v1.ListShelvesRequest]) (*connect.Response[v1.ListShelvesResponse], error)
 	// Updates a book.
 	UpdateBook(context.Context, *connect.Request[v1.UpdateBookRequest]) (*connect.Response[v1.Book], error)
 	// Deletes a book.
@@ -158,6 +164,12 @@ func NewLibraryServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+LibraryServiceCreateShelfProcedure,
 			connect.WithSchema(libraryServiceCreateShelfMethodDescriptor),
+			connect.WithClientOptions(opts...),
+		),
+		listShelves: connect.NewClient[v1.ListShelvesRequest, v1.ListShelvesResponse](
+			httpClient,
+			baseURL+LibraryServiceListShelvesProcedure,
+			connect.WithSchema(libraryServiceListShelvesMethodDescriptor),
 			connect.WithClientOptions(opts...),
 		),
 		updateBook: connect.NewClient[v1.UpdateBookRequest, v1.Book](
@@ -220,6 +232,7 @@ type libraryServiceClient struct {
 	createBook    *connect.Client[v1.CreateBookRequest, v1.Book]
 	listBooks     *connect.Client[v1.ListBooksRequest, v1.ListBooksResponse]
 	createShelf   *connect.Client[v1.CreateShelfRequest, v1.Shelf]
+	listShelves   *connect.Client[v1.ListShelvesRequest, v1.ListShelvesResponse]
 	updateBook    *connect.Client[v1.UpdateBookRequest, v1.Book]
 	deleteBook    *connect.Client[v1.DeleteBookRequest, emptypb.Empty]
 	searchBooks   *connect.Client[v1.SearchBooksRequest, v1.SearchBooksResponse]
@@ -248,6 +261,11 @@ func (c *libraryServiceClient) ListBooks(ctx context.Context, req *connect.Reque
 // CreateShelf calls vanguard.test.v1.LibraryService.CreateShelf.
 func (c *libraryServiceClient) CreateShelf(ctx context.Context, req *connect.Request[v1.CreateShelfRequest]) (*connect.Response[v1.Shelf], error) {
 	return c.createShelf.CallUnary(ctx, req)
+}
+
+// ListShelves calls vanguard.test.v1.LibraryService.ListShelves.
+func (c *libraryServiceClient) ListShelves(ctx context.Context, req *connect.Request[v1.ListShelvesRequest]) (*connect.Response[v1.ListShelvesResponse], error) {
+	return c.listShelves.CallUnary(ctx, req)
 }
 
 // UpdateBook calls vanguard.test.v1.LibraryService.UpdateBook.
@@ -300,6 +318,8 @@ type LibraryServiceHandler interface {
 	ListBooks(context.Context, *connect.Request[v1.ListBooksRequest]) (*connect.Response[v1.ListBooksResponse], error)
 	// Creates a shelf.
 	CreateShelf(context.Context, *connect.Request[v1.CreateShelfRequest]) (*connect.Response[v1.Shelf], error)
+	// Lists shelves.
+	ListShelves(context.Context, *connect.Request[v1.ListShelvesRequest]) (*connect.Response[v1.ListShelvesResponse], error)
 	// Updates a book.
 	UpdateBook(context.Context, *connect.Request[v1.UpdateBookRequest]) (*connect.Response[v1.Book], error)
 	// Deletes a book.
@@ -342,6 +362,12 @@ func NewLibraryServiceHandler(svc LibraryServiceHandler, opts ...connect.Handler
 		LibraryServiceCreateShelfProcedure,
 		svc.CreateShelf,
 		connect.WithSchema(libraryServiceCreateShelfMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
+	)
+	libraryServiceListShelvesHandler := connect.NewUnaryHandler(
+		LibraryServiceListShelvesProcedure,
+		svc.ListShelves,
+		connect.WithSchema(libraryServiceListShelvesMethodDescriptor),
 		connect.WithHandlerOptions(opts...),
 	)
 	libraryServiceUpdateBookHandler := connect.NewUnaryHandler(
@@ -405,6 +431,8 @@ func NewLibraryServiceHandler(svc LibraryServiceHandler, opts ...connect.Handler
 			libraryServiceListBooksHandler.ServeHTTP(w, r)
 		case LibraryServiceCreateShelfProcedure:
 			libraryServiceCreateShelfHandler.ServeHTTP(w, r)
+		case LibraryServiceListShelvesProcedure:
+			libraryServiceListShelvesHandler.ServeHTTP(w, r)
 		case LibraryServiceUpdateBookProcedure:
 			libraryServiceUpdateBookHandler.ServeHTTP(w, r)
 		case LibraryServiceDeleteBookProcedure:
@@ -444,6 +472,10 @@ func (UnimplementedLibraryServiceHandler) ListBooks(context.Context, *connect.Re
 
 func (UnimplementedLibraryServiceHandler) CreateShelf(context.Context, *connect.Request[v1.CreateShelfRequest]) (*connect.Response[v1.Shelf], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("vanguard.test.v1.LibraryService.CreateShelf is not implemented"))
+}
+
+func (UnimplementedLibraryServiceHandler) ListShelves(context.Context, *connect.Request[v1.ListShelvesRequest]) (*connect.Response[v1.ListShelvesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("vanguard.test.v1.LibraryService.ListShelves is not implemented"))
 }
 
 func (UnimplementedLibraryServiceHandler) UpdateBook(context.Context, *connect.Request[v1.UpdateBookRequest]) (*connect.Response[v1.Book], error) {
