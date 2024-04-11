@@ -141,7 +141,7 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 		len(op.request.URL.Query()) != 0 ||
 		op.restTarget.requestBodyFields != nil ||
 		restHTTPBodyRequest(op) ||
-		op.restTarget.method == http.MethodGet
+		op.restTarget.method != http.MethodPost
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
