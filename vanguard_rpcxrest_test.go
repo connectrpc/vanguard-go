@@ -417,6 +417,28 @@ func TestMux_RPCxREST(t *testing.T) {
 				},
 			}},
 		},
+	}, {
+		name: "Delete",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&testv1.DeleteRequest{Filename: "message.txt"},
+			}
+			return outputFromUnary(ctx, clients.contentClient.Delete, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/vanguard.test.v1.ContentService/Delete",
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.DeleteRequest{Filename: "message.txt"},
+				}},
+				{out: &testMsgOut{
+					msg: &emptypb.Empty{},
+				}},
+			},
+		},
+		output: output{
+			messages: []proto.Message{&emptypb.Empty{}},
+		},
 	}}
 
 	for _, opts := range testOpts {
