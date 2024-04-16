@@ -71,9 +71,17 @@ const (
 // The returned handler does the routing and dispatch to the RPC handlers
 // associated with each provided service. Routing supports more than just the
 // service path provided to NewService since HTTP transcoding annotations are
-// used to also support REST-ful URI paths for each method.
+// used to also support RESTful URI paths for each method.
 //
-// The returned handler also acts like a middleware, transparently "upgrading"
+// RESTful routing can be established either through google.api.http annotations in the
+// service's schema or by configuration using [WithRules]. These annotations define mappings
+// between HTTP methods and paths to RPC methods. Refer to the [annotations.HttpRule] message
+// for detailed information. By default, transcoding is provided for a POST request to the
+// service's fully-qualified name and method name. This is effectively the mapping of a
+// request of POST /GRPC_SERVICE_FULL_NAME/METHOD_NAME. No additional mappings conflicting
+// with this default mapping may be added.
+//
+// Additionally, the returned handler also acts as a middleware, transparently "upgrading"
 // the RPC handlers to support incoming request protocols they wouldn't otherwise
 // support. This can be used to upgrade Connect handlers to support REST requests
 // (based on HTTP transcoding configuration) or gRPC handlers to support Connect,
@@ -81,9 +89,8 @@ const (
 // translate all incoming requests to a single protocol that another backend server
 // supports.
 //
-// If any options given implement ServiceOption, they are treated as default service
-// options and apply to all configured services, unless overridden by a particular
-// service.
+// Any options implementing ServiceOption are considered default service options and are applied
+// to all configured services, unless overridden by a specific service.
 func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, error) {
 	for _, svc := range services {
 		if svc.err != nil {
@@ -127,7 +134,6 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		methods:        map[string]*methodConfig{},
 	}
 
-	var restOnlyServices []protoreflect.ServiceDescriptor
 	for _, svc := range services {
 		resolvedOpts := defaultServiceOptions
 		for _, opt := range svc.opts {
@@ -136,33 +142,10 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		if err := transcoder.registerService(svc, resolvedOpts); err != nil {
 			return nil, err
 		}
-		if len(resolvedOpts.protocols) == 1 {
-			_, ok := resolvedOpts.protocols[ProtocolREST]
-			if ok {
-				restOnlyServices = append(restOnlyServices, svc.schema)
-			}
-		}
 	}
 	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
 		return nil, err
 	}
-
-	// Finally, check that any services with only REST as target protocol
-	// actually have at least one method with REST mappings.
-	for _, svcDesc := range restOnlyServices {
-		methods := svcDesc.Methods()
-		var numSupportedMethods int
-		for i, length := 0, methods.Len(); i < length; i++ {
-			methodDesc := methods.Get(i)
-			if transcoder.methods[methodPath(methodDesc)].httpRule != nil {
-				numSupportedMethods++
-			}
-		}
-		if numSupportedMethods == 0 {
-			return nil, fmt.Errorf("service %s only supports REST target protocol but has no methods with HTTP rules", svcDesc.FullName())
-		}
-	}
-
 	return transcoder, nil
 }
 

@@ -238,6 +238,37 @@ func TestMux_RESTxRPC(t *testing.T) {
 			body: &testv1.Book{Name: "shelves/1/books/1"},
 		},
 	}, {
+		name: "GetBook-DefaultMethod",
+		input: input{
+			method: http.MethodPost,
+			path:   "/vanguard.test.v1.LibraryService/GetBook",
+			body:   &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+			meta: http.Header{
+				"Message": []string{"hello"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			reqHeader: http.Header{
+				"Message": []string{"hello"},
+			},
+			rspHeader: http.Header{
+				"Message": []string{"world"},
+			},
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/1"},
+		},
+	}, {
 		name: "GetBook-NotAllowed",
 		input: input{
 			method: http.MethodPut,

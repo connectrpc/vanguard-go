@@ -124,17 +124,6 @@ func TestServiceWithSchema(t *testing.T) {
 		_, ok := timestampType.New().Interface().(*timestamppb.Timestamp)
 		assert.True(t, ok)
 	})
-	t.Run("fails_for_rest_only_because_no_http_rules", func(t *testing.T) {
-		t.Parallel()
-		svc := NewServiceWithSchema(
-			svcDesc,
-			http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
-			WithTargetProtocols(ProtocolREST),
-		)
-
-		_, err := NewTranscoder([]*Service{svc})
-		require.ErrorContains(t, err, "service foo.bar.baz.v1.BlahService only supports REST target protocol but has no methods with HTTP rules")
-	})
 }
 
 func TestRuleSelector(t *testing.T) {

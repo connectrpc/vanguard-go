@@ -216,6 +216,14 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 		methodConf.streamType = connect.StreamTypeUnary
 	}
 
+	// Add the default HTTP POST route for the method.
+	if err := t.addRule(&annotations.HttpRule{
+		Pattern: &annotations.HttpRule_Post{Post: methodPath},
+		Body:    "*",
+	}, methodConf); err != nil {
+		return err
+	}
+	// Add the declared HTTP rules for the method.
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
 		if err := t.addRule(httpRule, methodConf); err != nil {
 			return err
