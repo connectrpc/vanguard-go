@@ -412,7 +412,17 @@ type methodConfig struct {
 	methodPath                string
 	streamType                connect.StreamType
 	handler                   http.Handler
-	httpRule                  *routeTarget // First HTTP rule, if any.
+	restTargets               []*routeTarget
+	restDefaultTarget         *routeTarget
+}
+
+// getRestTarget returns the explicit HTTP target for the method, or the default
+// HTTP target if none is specified.
+func (m *methodConfig) getRestTarget() *routeTarget {
+	if len(m.restTargets) > 0 {
+		return m.restTargets[0] // The first rule is preferred.
+	}
+	return m.restDefaultTarget
 }
 
 func descKind(desc protoreflect.Descriptor) string {

@@ -234,9 +234,9 @@ func initTrie(tb testing.TB) *routeTrie {
 					name: fmt.Sprintf("%s %s", method, route),
 				},
 			}
-			target, err := makeTarget(config, "POST", "*", "*", segments, variables)
+			target, err := makeTarget(config, method, "*", "*", segments, variables)
 			require.NoError(tb, err)
-			err = trie.insert(method, target, segments)
+			err = trie.insert(target)
 			require.NoError(tb, err)
 		}
 	}

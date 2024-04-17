@@ -72,7 +72,18 @@ func (t *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (
 	if err != nil {
 		return nil, err
 	}
-	if err := t.insert(method, target, segments); err != nil {
+	if err := t.insert(target); err != nil {
+		return nil, err
+	}
+	return target, nil
+}
+
+// addDefaultRoute adds a default target to the router for the given method.
+// This may be overridden by a explicit rule. The default route is of the form
+// POST /service/method.
+func (t *routeTrie) addDefaultRoute(config *methodConfig) (*routeTarget, error) {
+	target := makeDefaultTarget(config)
+	if err := t.insert(target); err != nil {
 		return nil, err
 	}
 	return target, nil
@@ -103,17 +114,15 @@ func (t *routeTrie) insertVerb(verb string) routeMethods {
 
 // insert the target into the trie using the given method and segment path.
 // The path is followed until the final segment is reached.
-func (t *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
+func (t *routeTrie) insert(target *routeTarget) error {
 	cursor := t
-	for _, segment := range segments.path {
+	for _, segment := range target.path {
 		cursor = cursor.insertChild(segment)
 	}
-	if existing := cursor.verbs[segments.verb][method]; existing != nil {
-		return alreadyExistsError{
-			existing: existing, pathPattern: segments.String(), method: method,
-		}
+	if existing := cursor.verbs[target.verb][target.method]; existing != nil && !existing.isImplicit {
+		return alreadyExistsError{target: target, existing: existing}
 	}
-	cursor.insertVerb(segments.verb)[method] = target
+	cursor.insertVerb(target.verb)[target.method] = target
 	return nil
 }
 
@@ -124,9 +133,8 @@ func (t *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTarg
 		// Must start with "/" or if it ends with ":" it won't match
 		return nil, nil, nil
 	}
-	uriPath = uriPath[1:] // skip the leading slash
 
-	path := strings.Split(uriPath, "/")
+	path := strings.Split(uriPath[1:], "/") // skip the leading slash
 	var verb string
 	if len(path) > 0 {
 		lastElement := path[len(path)-1]
@@ -208,6 +216,14 @@ type routeTarget struct {
 	responseBodyFieldPath string
 	responseBodyFields    []protoreflect.FieldDescriptor
 	vars                  []routeTargetVar
+
+	// isImplicit is true if the target was created implicitly, such as for a
+	// default method. This is used to prevent overwriting an explicit target.
+	isImplicit bool
+}
+
+func (t *routeTarget) String() string {
+	return t.method + " " + pathSegments{path: t.path, verb: t.verb}.String()
 }
 
 func makeTarget(
@@ -264,6 +280,25 @@ func makeTarget(
 		responseBodyFields:    responseBodyFields,
 		vars:                  routeTargetVars,
 	}, nil
+}
+
+// makeDefaultTarget of the form POST /service/method.
+func makeDefaultTarget(
+	config *methodConfig,
+) *routeTarget {
+	return &routeTarget{
+		config: config,
+		method: http.MethodPost,
+		path: []string{
+			string(config.descriptor.Parent().FullName()),
+			string(config.descriptor.Name()),
+		},
+		requestBodyFieldPath:  "*",
+		requestBodyFields:     []protoreflect.FieldDescriptor{},
+		responseBodyFieldPath: "*",
+		responseBodyFields:    []protoreflect.FieldDescriptor{},
+		isImplicit:            true,
+	}
 }
 
 type routeTargetVar struct {
@@ -359,7 +394,7 @@ func resolvePathToDescriptors(msg protoreflect.MessageDescriptor, path string) (
 		msg = field.Message()
 		if msg == nil {
 			return nil, fmt.Errorf("in field path %q: field %q of type %s should be a message but is instead %s",
-				path, part, msg.FullName(), field.Kind())
+				path, part, protoreflect.MessageKind, field.Kind())
 		}
 		fields = msg.Fields()
 	}
@@ -380,10 +415,12 @@ func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor) string
 }
 
 type alreadyExistsError struct {
-	existing            *routeTarget
-	pathPattern, method string
+	target, existing *routeTarget
 }
 
 func (a alreadyExistsError) Error() string {
-	return fmt.Sprintf("target for %s, method %s already exists: %s", a.pathPattern, a.method, a.existing.config.descriptor.FullName())
+	return fmt.Sprintf(
+		"target for %s already exists: %s",
+		a.target.String(), a.existing.config.descriptor.FullName(),
+	)
 }

@@ -163,10 +163,12 @@ func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {
 	}
 	for methodConf, rules := range methodRules {
 		for _, rule := range rules {
-			if err := t.addRule(rule, methodConf); err != nil {
+			targets, err := t.addRule(rule, methodConf)
+			if err != nil {
 				// TODO: use the multi-error type errors.Join()
 				return err
 			}
+			methodConf.restTargets = append(methodConf.restTargets, targets...)
 		}
 	}
 	return nil
@@ -216,38 +218,43 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 		methodConf.streamType = connect.StreamTypeUnary
 	}
 
-	// Add the default HTTP POST route for the method.
-	if err := t.addRule(&annotations.HttpRule{
-		Pattern: &annotations.HttpRule_Post{Post: methodPath},
-		Body:    "*",
-	}, methodConf); err != nil {
-		return err
+	// Add the implicit HTTP POST route for the method.
+	defaultTarget, err := t.restRoutes.addDefaultRoute(methodConf)
+	if err != nil {
+		return fmt.Errorf("failed to add default REST route for method %s: %w", methodPath, err)
 	}
-	// Add the declared HTTP rules for the method.
+	methodConf.restDefaultTarget = defaultTarget
+	// Add the explict declared HTTP rules for the method.
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		if err := t.addRule(httpRule, methodConf); err != nil {
+		targets, err := t.addRule(httpRule, methodConf)
+		if err != nil {
 			return err
 		}
+		methodConf.restTargets = targets
 	}
 	return nil
 }
 
-func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) error {
+// addRule adds an HTTP rule to the transcoder, creating a route for each binding.
+func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) ([]*routeTarget, error) {
+	var targets []*routeTarget
 	methodPath := methodConf.methodPath
 	firstTarget, err := t.restRoutes.addRoute(methodConf, httpRule)
 	if err != nil {
-		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
+		return nil, fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
 	}
-	methodConf.httpRule = firstTarget
+	targets = append(targets, firstTarget)
 	for i, rule := range httpRule.GetAdditionalBindings() {
 		if len(rule.GetAdditionalBindings()) > 0 {
-			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
+			return nil, fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
 		}
-		if _, err := t.restRoutes.addRoute(methodConf, rule); err != nil {
-			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
+		addTarget, err := t.restRoutes.addRoute(methodConf, rule)
+		if err != nil {
+			return nil, fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 		}
+		targets = append(targets, addTarget)
 	}
-	return nil
+	return targets, nil
 }
 
 func (t *Transcoder) newOperation(writer http.ResponseWriter, request *http.Request) *operation {
@@ -640,7 +647,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 		if methodConf == nil {
 			return errNotFound
 		}
-		o.restTarget = methodConf.httpRule
+		o.restTarget = methodConf.getRestTarget()
 		if o.request.Method != http.MethodPost {
 			mayAllowGet, ok := o.client.protocol.(clientProtocolAllowsGet)
 			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
