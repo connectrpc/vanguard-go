@@ -78,8 +78,8 @@ const (
 // between HTTP methods and paths to RPC methods. Refer to the [annotations.HttpRule] message
 // for detailed information. By default, transcoding is provided for a POST request to the
 // service's fully-qualified name and method name. This is effectively the mapping of a
-// request of POST /GRPC_SERVICE_FULL_NAME/METHOD_NAME. No additional mappings conflicting
-// with this default mapping may be added.
+// request of POST /GRPC_SERVICE_FULL_NAME/METHOD_NAME. Additional mappings may override
+// the default mapping if required.
 //
 // Additionally, the returned handler also acts as a middleware, transparently "upgrading"
 // the RPC handlers to support incoming request protocols they wouldn't otherwise

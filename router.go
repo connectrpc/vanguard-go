@@ -79,7 +79,7 @@ func (t *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (
 }
 
 // addDefaultRoute adds a default target to the router for the given method.
-// This may be overridden by a explicit rule. The default route is of the form
+// This may be overridden by an explicit rule. The default route is of the form
 // POST /service/method.
 func (t *routeTrie) addDefaultRoute(config *methodConfig) (*routeTarget, error) {
 	target := makeDefaultTarget(config)
