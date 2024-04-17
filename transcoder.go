@@ -224,7 +224,7 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 		return fmt.Errorf("failed to add default REST route for method %s: %w", methodPath, err)
 	}
 	methodConf.restDefaultTarget = defaultTarget
-	// Add the explict declared HTTP rules for the method.
+	// Add the explicit declared HTTP rules for the method.
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
 		targets, err := t.addRule(httpRule, methodConf)
 		if err != nil {
@@ -237,7 +237,7 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 
 // addRule adds an HTTP rule to the transcoder, creating a route for each binding.
 func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) ([]*routeTarget, error) {
-	var targets []*routeTarget
+	targets := make([]*routeTarget, 0, 1+len(httpRule.GetAdditionalBindings()))
 	methodPath := methodConf.methodPath
 	firstTarget, err := t.restRoutes.addRoute(methodConf, httpRule)
 	if err != nil {
