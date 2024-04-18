@@ -43,6 +43,7 @@ func TestMux_RPCxREST(t *testing.T) {
 	serviceNames := []string{
 		testv1connect.LibraryServiceName,
 		testv1connect.ContentServiceName,
+		testv1connect.RestrictedServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -145,8 +146,9 @@ func TestMux_RPCxREST(t *testing.T) {
 
 	ctx := context.Background()
 	type testClients struct {
-		contentClient testv1connect.ContentServiceClient
-		libClient     testv1connect.LibraryServiceClient
+		contentClient    testv1connect.ContentServiceClient
+		libClient        testv1connect.LibraryServiceClient
+		restrictedClient testv1connect.RestrictedServiceClient
 	}
 	type output struct {
 		header   http.Header
@@ -439,6 +441,48 @@ func TestMux_RPCxREST(t *testing.T) {
 		output: output{
 			messages: []proto.Message{&emptypb.Empty{}},
 		},
+	}, {
+		name: "StreamClient-Restricted",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&emptypb.Empty{},
+			}
+			return outputFromBidiStream(ctx, clients.restrictedClient.BidiStream, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/streams/client",
+		},
+		output: output{
+			wantErr: newConnectError(connect.CodeUnknown, "stream type bidi not supported with REST protocol"),
+		},
+	}, {
+		name: "StreamServer-Restricted",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&emptypb.Empty{},
+			}
+			return outputFromBidiStream(ctx, clients.restrictedClient.BidiStream, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/streams/server",
+		},
+		output: output{
+			wantErr: newConnectError(connect.CodeUnknown, "stream type bidi not supported with REST protocol"),
+		},
+	}, {
+		name: "StreamBidi-Restricted",
+		input: func(clients testClients, hdr http.Header) (http.Header, []proto.Message, http.Header, error) {
+			msgs := []proto.Message{
+				&emptypb.Empty{},
+			}
+			return outputFromBidiStream(ctx, clients.restrictedClient.BidiStream, hdr, msgs)
+		},
+		stream: testStream{
+			method: "/streams/bidi",
+		},
+		output: output{
+			wantErr: newConnectError(connect.CodeUnknown, "stream type bidi not supported with REST protocol"),
+		},
 	}}
 
 	for _, opts := range testOpts {
@@ -448,6 +492,9 @@ func TestMux_RPCxREST(t *testing.T) {
 				opts.server.Client(), opts.server.URL, opts.opts...,
 			),
 			contentClient: testv1connect.NewContentServiceClient(
+				opts.server.Client(), opts.server.URL, opts.opts...,
+			),
+			restrictedClient: testv1connect.NewRestrictedServiceClient(
 				opts.server.Client(), opts.server.URL, opts.opts...,
 			),
 		}

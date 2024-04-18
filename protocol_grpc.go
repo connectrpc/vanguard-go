@@ -107,6 +107,10 @@ func (g grpcServerProtocol) protocol() Protocol {
 	return ProtocolGRPC
 }
 
+func (g grpcServerProtocol) acceptsStreamType(_ *operation, _ connect.StreamType) bool {
+	return true
+}
+
 func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	grpcAddRequestMeta("application/grpc+", meta, headers)
 	headers.Set("Te", "trailers")
@@ -221,6 +225,10 @@ var _ serverEnvelopedProtocolHandler = grpcWebServerProtocol{}
 
 func (g grpcWebServerProtocol) protocol() Protocol {
 	return ProtocolGRPCWeb
+}
+
+func (g grpcWebServerProtocol) acceptsStreamType(_ *operation, _ connect.StreamType) bool {
+	return true
 }
 
 func (g grpcWebServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {

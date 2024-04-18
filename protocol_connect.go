@@ -251,6 +251,10 @@ func (c connectUnaryServerProtocol) protocol() Protocol {
 	return ProtocolConnect
 }
 
+func (c connectUnaryServerProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
+	return streamType == connect.StreamTypeUnary
+}
+
 func (c connectUnaryServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	headers.Set("Content-Type", contentConnectUnaryPrefix+meta.codec)
 	if meta.compression != "" {
@@ -496,6 +500,10 @@ var _ serverEnvelopedProtocolHandler = connectStreamServerProtocol{}
 
 func (c connectStreamServerProtocol) protocol() Protocol {
 	return ProtocolConnect
+}
+
+func (c connectStreamServerProtocol) acceptsStreamType(_ *operation, streamType connect.StreamType) bool {
+	return streamType != connect.StreamTypeUnary
 }
 
 func (c connectStreamServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {

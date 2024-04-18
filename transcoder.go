@@ -402,12 +402,14 @@ func (o *operation) validate(transcoder *Transcoder) error {
 	o.request.ContentLength = -1 // transforming it will likely change it
 
 	// Identify the method being invoked.
-	err := o.resolveMethod(transcoder)
-	if err != nil {
+	if err := o.resolveMethod(transcoder); err != nil {
 		return err
 	}
 	if !o.client.protocol.acceptsStreamType(o, o.methodConf.streamType) {
-		return newHTTPError(http.StatusUnsupportedMediaType, "stream type %s not supported with %s protocol", o.methodConf.streamType, o.client.protocol)
+		return newHTTPError(http.StatusUnsupportedMediaType,
+			"stream type %s not supported with %s protocol",
+			o.methodConf.streamType, o.client.protocol,
+		)
 	}
 	if o.methodConf.streamType == connect.StreamTypeBidi && o.request.ProtoMajor < 2 {
 		return newHTTPError(http.StatusHTTPVersionNotSupported, "bidi streams require HTTP/2")
@@ -462,9 +464,12 @@ func (o *operation) validate(transcoder *Transcoder) error {
 			}
 		}
 	}
-	if o.server.protocol.protocol() == ProtocolREST && o.restTarget == nil {
-		// This method cannot be implemented this way. So serve a 404 for this method's URI path.
-		return errNotFound
+
+	if !o.server.protocol.acceptsStreamType(o, o.methodConf.streamType) {
+		return newHTTPError(http.StatusUnsupportedMediaType,
+			"stream type %s not supported with %s protocol",
+			o.methodConf.streamType, o.server.protocol,
+		)
 	}
 
 	// Now that we've ruled out the use of bidi streaming above, it's safe to simulate HTTP/2

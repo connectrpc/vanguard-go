@@ -47,6 +47,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 	serviceNames := []string{
 		testv1connect.LibraryServiceName,
 		testv1connect.ContentServiceName,
+		testv1connect.RestrictedServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -553,6 +554,36 @@ func TestMux_RESTxRPC(t *testing.T) {
 			meta: http.Header{
 				"Content-Type": []string{"text/plain"},
 			},
+		},
+	}, {
+		name: "StreamClient-Restricted",
+		input: input{
+			method: http.MethodPost,
+			path:   "/streams/client",
+		},
+		output: output{
+			code:    http.StatusUnsupportedMediaType,
+			rawBody: "stream type client not supported with REST protocol\n",
+		},
+	}, {
+		name: "StreamServer-Restricted",
+		input: input{
+			method: http.MethodPost,
+			path:   "/streams/server",
+		},
+		output: output{
+			code:    http.StatusUnsupportedMediaType,
+			rawBody: "stream type server not supported with REST protocol\n",
+		},
+	}, {
+		name: "StreamBidi-Restricted",
+		input: input{
+			method: http.MethodPost,
+			path:   "/streams/bidi",
+		},
+		output: output{
+			code:    http.StatusUnsupportedMediaType,
+			rawBody: "stream type bidi not supported with REST protocol\n",
 		},
 	}}
 
