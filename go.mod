@@ -6,7 +6,7 @@ require (
 	buf.build/gen/go/connectrpc/eliza/connectrpc/go v1.11.1-20230822171018-8b8b971d6fde.1
 	buf.build/gen/go/connectrpc/eliza/grpc/go v1.3.0-20230822171018-8b8b971d6fde.1
 	buf.build/gen/go/connectrpc/eliza/protocolbuffers/go v1.31.0-20230822171018-8b8b971d6fde.1
-	connectrpc.com/connect v1.14.0
+	connectrpc.com/connect v1.16.2
 	connectrpc.com/grpcreflect v1.2.0
 	github.com/google/go-cmp v0.5.9
 	github.com/stretchr/testify v1.8.4
