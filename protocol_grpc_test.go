@@ -25,8 +25,10 @@ import (
 	"unicode/utf8"
 
 	"connectrpc.com/connect"
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -45,7 +47,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Empty(t, rec.Body.Bytes())
 
 	got := grpcExtractErrorFromTrailer(rec.Header())
-	assert.Equal(t, cerr, got)
+	compareErrors(t, cerr, got)
 
 	// Now again, but this time an error with details
 	errDetail, err := connect.NewErrorDetail(&wrapperspb.StringValue{Value: "foo"})
@@ -60,7 +62,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Empty(t, rec.Body.Bytes())
 
 	got = grpcExtractErrorFromTrailer(rec.Header())
-	assert.Equal(t, cerr, got)
+	compareErrors(t, cerr, got)
 }
 
 func TestGRPCEncodeTimeoutQuick(t *testing.T) {
@@ -143,4 +145,25 @@ func TestGRPCEncodeTimeout(t *testing.T) {
 	assert.Equal(t, "2562047H", timeout)
 	timeout = grpcEncodeTimeout(-1 * time.Hour)
 	assert.Equal(t, "0n", timeout)
+}
+
+func compareErrors(t *testing.T, got, want *connect.Error) {
+	t.Helper()
+	assert.Equal(t, want.Code(), got.Code(), "wrong code")
+	assert.Equal(t, want.Message(), got.Message(), "wrong message")
+	wantDetails := want.Details()
+	gotDetails := got.Details()
+	if !assert.Len(t, wantDetails, len(gotDetails), "wrong number of details") {
+		return
+	}
+	for i, wantDetail := range wantDetails {
+		gotDetail := gotDetails[i]
+		if assert.Equal(t, wantDetail.Type(), gotDetail.Type(), "wrong detail type at index %d", i) {
+			wantedMsg, err := wantDetail.Value()
+			require.NoError(t, err, "failed to deserialize wanted detail at index %d", i)
+			gotMsg, err := gotDetail.Value()
+			require.NoError(t, err, "failed to deserialize got detail at index %d", i)
+			require.Empty(t, cmp.Diff(wantedMsg, gotMsg, protocmp.Transform()))
+		}
+	}
 }
