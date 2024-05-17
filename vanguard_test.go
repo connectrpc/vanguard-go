@@ -916,13 +916,21 @@ func protocolAssertMiddleware(
 		var wantHdr map[string][]string
 		switch protocol {
 		case ProtocolGRPC:
+			wantContentType := []string{"application/grpc+" + codec}
+			if codec == CodecProto {
+				wantContentType = append(wantContentType, "application/grpc")
+			}
 			wantHdr = map[string][]string{
-				"Content-Type":  {"application/grpc+" + codec},
+				"Content-Type":  wantContentType,
 				"Grpc-Encoding": allowedCompression,
 			}
 		case ProtocolGRPCWeb:
+			wantContentType := []string{"application/grpc-web+" + codec}
+			if codec == CodecProto {
+				wantContentType = append(wantContentType, "application/grpc-web")
+			}
 			wantHdr = map[string][]string{
-				"Content-Type":  {"application/grpc-web+" + codec},
+				"Content-Type":  wantContentType,
 				"Grpc-Encoding": allowedCompression,
 			}
 		case ProtocolConnect:

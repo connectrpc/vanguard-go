@@ -357,6 +357,7 @@ func grpcAddRequestMeta(contentTypePrefix string, meta requestMeta, headers http
 
 func grpcAddResponseMeta(contentTypePrefix string, meta responseMeta, headers http.Header) int {
 	if meta.end != nil {
+		headers.Set("Content-Type", contentTypePrefix+meta.codec)
 		grpcWriteEndToTrailers(meta.end, headers)
 		return http.StatusOK
 	}

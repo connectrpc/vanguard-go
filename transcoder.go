@@ -854,8 +854,18 @@ func (r *envelopingReader) prepareNext() error {
 		r.envRemain = 0
 		return nil
 	case r.rw.op.clientEnveloper == nil:
+		if r.current != nil {
+			// If there is no enveloping, the entire body is part of a single
+			// message. And we've already prepared that message once. So there
+			// is no more.
+			return io.EOF
+		}
 		env.compressed = r.rw.op.client.reqCompression != nil
 		if r.rw.op.contentLen != -1 {
+			limit := int64(r.rw.op.methodConf.maxMsgBufferBytes)
+			if r.rw.op.contentLen > limit {
+				return bufferLimitError(limit)
+			}
 			r.current = &hardLimitReader{r: r.r, rw: r.rw, limit: r.rw.op.contentLen, makeError: contentLengthError}
 			env.length = uint32(r.rw.op.contentLen)
 		} else {
