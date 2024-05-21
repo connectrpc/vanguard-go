@@ -58,6 +58,8 @@ const (
 	// ContentServiceSubscribeProcedure is the fully-qualified name of the ContentService's Subscribe
 	// RPC.
 	ContentServiceSubscribeProcedure = "/vanguard.test.v1.ContentService/Subscribe"
+	// ContentServiceDeleteProcedure is the fully-qualified name of the ContentService's Delete RPC.
+	ContentServiceDeleteProcedure = "/vanguard.test.v1.ContentService/Delete"
 )
 
 // These variables are the protoreflect.Descriptor objects for the RPCs defined in this package.
@@ -67,6 +69,7 @@ var (
 	contentServiceUploadMethodDescriptor    = contentServiceServiceDescriptor.Methods().ByName("Upload")
 	contentServiceDownloadMethodDescriptor  = contentServiceServiceDescriptor.Methods().ByName("Download")
 	contentServiceSubscribeMethodDescriptor = contentServiceServiceDescriptor.Methods().ByName("Subscribe")
+	contentServiceDeleteMethodDescriptor    = contentServiceServiceDescriptor.Methods().ByName("Delete")
 )
 
 // ContentServiceClient is a client for the vanguard.test.v1.ContentService service.
@@ -79,6 +82,8 @@ type ContentServiceClient interface {
 	Download(context.Context, *connect.Request[v1.DownloadRequest]) (*connect.ServerStreamForClient[v1.DownloadResponse], error)
 	// Subscribe to updates for changes to content.
 	Subscribe(context.Context) *connect.BidiStreamForClient[v1.SubscribeRequest, v1.SubscribeResponse]
+	// Delete a file at the given path.
+	Delete(context.Context, *connect.Request[v1.DeleteRequest]) (*connect.Response[emptypb.Empty], error)
 }
 
 // NewContentServiceClient constructs a client for the vanguard.test.v1.ContentService service. By
@@ -115,6 +120,12 @@ func NewContentServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(contentServiceSubscribeMethodDescriptor),
 			connect.WithClientOptions(opts...),
 		),
+		delete: connect.NewClient[v1.DeleteRequest, emptypb.Empty](
+			httpClient,
+			baseURL+ContentServiceDeleteProcedure,
+			connect.WithSchema(contentServiceDeleteMethodDescriptor),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -124,6 +135,7 @@ type contentServiceClient struct {
 	upload    *connect.Client[v1.UploadRequest, emptypb.Empty]
 	download  *connect.Client[v1.DownloadRequest, v1.DownloadResponse]
 	subscribe *connect.Client[v1.SubscribeRequest, v1.SubscribeResponse]
+	delete    *connect.Client[v1.DeleteRequest, emptypb.Empty]
 }
 
 // Index calls vanguard.test.v1.ContentService.Index.
@@ -146,6 +158,11 @@ func (c *contentServiceClient) Subscribe(ctx context.Context) *connect.BidiStrea
 	return c.subscribe.CallBidiStream(ctx)
 }
 
+// Delete calls vanguard.test.v1.ContentService.Delete.
+func (c *contentServiceClient) Delete(ctx context.Context, req *connect.Request[v1.DeleteRequest]) (*connect.Response[emptypb.Empty], error) {
+	return c.delete.CallUnary(ctx, req)
+}
+
 // ContentServiceHandler is an implementation of the vanguard.test.v1.ContentService service.
 type ContentServiceHandler interface {
 	// Index returns a html index page at the given path.
@@ -156,6 +173,8 @@ type ContentServiceHandler interface {
 	Download(context.Context, *connect.Request[v1.DownloadRequest], *connect.ServerStream[v1.DownloadResponse]) error
 	// Subscribe to updates for changes to content.
 	Subscribe(context.Context, *connect.BidiStream[v1.SubscribeRequest, v1.SubscribeResponse]) error
+	// Delete a file at the given path.
+	Delete(context.Context, *connect.Request[v1.DeleteRequest]) (*connect.Response[emptypb.Empty], error)
 }
 
 // NewContentServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -188,6 +207,12 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 		connect.WithSchema(contentServiceSubscribeMethodDescriptor),
 		connect.WithHandlerOptions(opts...),
 	)
+	contentServiceDeleteHandler := connect.NewUnaryHandler(
+		ContentServiceDeleteProcedure,
+		svc.Delete,
+		connect.WithSchema(contentServiceDeleteMethodDescriptor),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/vanguard.test.v1.ContentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ContentServiceIndexProcedure:
@@ -198,6 +223,8 @@ func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.Handler
 			contentServiceDownloadHandler.ServeHTTP(w, r)
 		case ContentServiceSubscribeProcedure:
 			contentServiceSubscribeHandler.ServeHTTP(w, r)
+		case ContentServiceDeleteProcedure:
+			contentServiceDeleteHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -221,4 +248,8 @@ func (UnimplementedContentServiceHandler) Download(context.Context, *connect.Req
 
 func (UnimplementedContentServiceHandler) Subscribe(context.Context, *connect.BidiStream[v1.SubscribeRequest, v1.SubscribeResponse]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("vanguard.test.v1.ContentService.Subscribe is not implemented"))
+}
+
+func (UnimplementedContentServiceHandler) Delete(context.Context, *connect.Request[v1.DeleteRequest]) (*connect.Response[emptypb.Empty], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("vanguard.test.v1.ContentService.Delete is not implemented"))
 }

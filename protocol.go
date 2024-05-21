@@ -176,6 +176,7 @@ type clientProtocolAllowsGet interface {
 // and understand the responses it sends.
 type serverProtocolHandler interface {
 	protocol() Protocol
+	acceptsStreamType(*operation, connect.StreamType) bool
 
 	// Encodes the given requestMeta has headers into the given target
 	// headers. If non-nil, allowedCompression should be used instead

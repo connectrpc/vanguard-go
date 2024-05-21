@@ -42,6 +42,11 @@ service ContentService {
   }
   // Subscribe to updates for changes to content.
   rpc Subscribe(stream SubscribeRequest) returns (stream SubscribeResponse);
+  // Delete a file at the given path.
+  rpc Delete(DeleteRequest) returns (google.protobuf.Empty) {
+    // This method does not have an HTTP mapping, but is still callable via its
+    // default POST HTTP mapping.
+  }
 }
 
 message IndexRequest {
@@ -64,6 +69,11 @@ message DownloadRequest {
 message DownloadResponse {
   // The file contents.
   google.api.HttpBody file = 1;
+}
+
+message DeleteRequest {
+  // The path to the file to delete.
+  string filename = 1;
 }
 
 message SubscribeRequest {

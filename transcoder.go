@@ -163,10 +163,12 @@ func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {
 	}
 	for methodConf, rules := range methodRules {
 		for _, rule := range rules {
-			if err := t.addRule(rule, methodConf); err != nil {
+			targets, err := t.addRule(rule, methodConf)
+			if err != nil {
 				// TODO: use the multi-error type errors.Join()
 				return err
 			}
+			methodConf.restTargets = append(methodConf.restTargets, targets...)
 		}
 	}
 	return nil
@@ -216,30 +218,43 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 		methodConf.streamType = connect.StreamTypeUnary
 	}
 
+	// Add the implicit HTTP POST route for the method.
+	defaultTarget, err := t.restRoutes.addDefaultRoute(methodConf)
+	if err != nil {
+		return fmt.Errorf("failed to add default REST route for method %s: %w", methodPath, err)
+	}
+	methodConf.restDefaultTarget = defaultTarget
+	// Add the explicit declared HTTP rules for the method.
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		if err := t.addRule(httpRule, methodConf); err != nil {
+		targets, err := t.addRule(httpRule, methodConf)
+		if err != nil {
 			return err
 		}
+		methodConf.restTargets = targets
 	}
 	return nil
 }
 
-func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) error {
+// addRule adds an HTTP rule to the transcoder, creating a route for each binding.
+func (t *Transcoder) addRule(httpRule *annotations.HttpRule, methodConf *methodConfig) ([]*routeTarget, error) {
+	targets := make([]*routeTarget, 0, 1+len(httpRule.GetAdditionalBindings()))
 	methodPath := methodConf.methodPath
 	firstTarget, err := t.restRoutes.addRoute(methodConf, httpRule)
 	if err != nil {
-		return fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
+		return nil, fmt.Errorf("failed to add REST route for method %s: %w", methodPath, err)
 	}
-	methodConf.httpRule = firstTarget
+	targets = append(targets, firstTarget)
 	for i, rule := range httpRule.GetAdditionalBindings() {
 		if len(rule.GetAdditionalBindings()) > 0 {
-			return fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
+			return nil, fmt.Errorf("nested additional bindings are not supported (method %s)", methodPath)
 		}
-		if _, err := t.restRoutes.addRoute(methodConf, rule); err != nil {
-			return fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
+		addTarget, err := t.restRoutes.addRoute(methodConf, rule)
+		if err != nil {
+			return nil, fmt.Errorf("failed to add REST route (add'l binding #%d) for method %s: %w", i+1, methodPath, err)
 		}
+		targets = append(targets, addTarget)
 	}
-	return nil
+	return targets, nil
 }
 
 func (t *Transcoder) newOperation(writer http.ResponseWriter, request *http.Request) *operation {
@@ -387,12 +402,14 @@ func (o *operation) validate(transcoder *Transcoder) error {
 	o.request.ContentLength = -1 // transforming it will likely change it
 
 	// Identify the method being invoked.
-	err := o.resolveMethod(transcoder)
-	if err != nil {
+	if err := o.resolveMethod(transcoder); err != nil {
 		return err
 	}
 	if !o.client.protocol.acceptsStreamType(o, o.methodConf.streamType) {
-		return newHTTPError(http.StatusUnsupportedMediaType, "stream type %s not supported with %s protocol", o.methodConf.streamType, o.client.protocol)
+		return newHTTPError(http.StatusUnsupportedMediaType,
+			"stream type %s not supported with %s protocol",
+			o.methodConf.streamType, o.client.protocol,
+		)
 	}
 	if o.methodConf.streamType == connect.StreamTypeBidi && o.request.ProtoMajor < 2 {
 		return newHTTPError(http.StatusHTTPVersionNotSupported, "bidi streams require HTTP/2")
@@ -447,9 +464,12 @@ func (o *operation) validate(transcoder *Transcoder) error {
 			}
 		}
 	}
-	if o.server.protocol.protocol() == ProtocolREST && o.restTarget == nil {
-		// This method cannot be implemented this way. So serve a 404 for this method's URI path.
-		return errNotFound
+
+	if !o.server.protocol.acceptsStreamType(o, o.methodConf.streamType) {
+		return newHTTPError(http.StatusUnsupportedMediaType,
+			"stream type %s not supported with %s protocol",
+			o.methodConf.streamType, o.server.protocol,
+		)
 	}
 
 	// Now that we've ruled out the use of bidi streaming above, it's safe to simulate HTTP/2
@@ -632,7 +652,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 		if methodConf == nil {
 			return errNotFound
 		}
-		o.restTarget = methodConf.httpRule
+		o.restTarget = methodConf.getRestTarget()
 		if o.request.Method != http.MethodPost {
 			mayAllowGet, ok := o.client.protocol.(clientProtocolAllowsGet)
 			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)

@@ -47,6 +47,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 	serviceNames := []string{
 		testv1connect.LibraryServiceName,
 		testv1connect.ContentServiceName,
+		testv1connect.RestrictedServiceName,
 	}
 	codecs := []string{
 		CodecJSON,
@@ -212,6 +213,37 @@ func TestMux_RESTxRPC(t *testing.T) {
 			method: http.MethodGet,
 			path:   "/v1/shelves/1/books/1",
 			body:   nil,
+			meta: http.Header{
+				"Message": []string{"hello"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			reqHeader: http.Header{
+				"Message": []string{"hello"},
+			},
+			rspHeader: http.Header{
+				"Message": []string{"world"},
+			},
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/1"},
+		},
+	}, {
+		name: "GetBook-DefaultMethod",
+		input: input{
+			method: http.MethodPost,
+			path:   "/vanguard.test.v1.LibraryService/GetBook",
+			body:   &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 			meta: http.Header{
 				"Message": []string{"hello"},
 			},
@@ -522,6 +554,36 @@ func TestMux_RESTxRPC(t *testing.T) {
 			meta: http.Header{
 				"Content-Type": []string{"text/plain"},
 			},
+		},
+	}, {
+		name: "StreamClient-Restricted",
+		input: input{
+			method: http.MethodPost,
+			path:   "/streams/client",
+		},
+		output: output{
+			code:    http.StatusUnsupportedMediaType,
+			rawBody: "stream type client not supported with REST protocol\n",
+		},
+	}, {
+		name: "StreamServer-Restricted",
+		input: input{
+			method: http.MethodPost,
+			path:   "/streams/server",
+		},
+		output: output{
+			code:    http.StatusUnsupportedMediaType,
+			rawBody: "stream type server not supported with REST protocol\n",
+		},
+	}, {
+		name: "StreamBidi-Restricted",
+		input: input{
+			method: http.MethodPost,
+			path:   "/streams/bidi",
+		},
+		output: output{
+			code:    http.StatusUnsupportedMediaType,
+			rawBody: "stream type bidi not supported with REST protocol\n",
 		},
 	}}
 

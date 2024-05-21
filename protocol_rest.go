@@ -45,16 +45,7 @@ func (r restClientProtocol) protocol() Protocol {
 }
 
 func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.StreamType) bool {
-	switch streamType {
-	case connect.StreamTypeUnary:
-		return true
-	case connect.StreamTypeClient:
-		return restHTTPBodyRequest(op)
-	case connect.StreamTypeServer:
-		return restHTTPBodyResponse(op)
-	default:
-		return false
-	}
+	return restAcceptsStreamType(op, streamType)
 }
 
 func (r restClientProtocol) endMustBeInHeaders() bool {
@@ -266,6 +257,10 @@ func (r restServerProtocol) protocol() Protocol {
 	return ProtocolREST
 }
 
+func (r restServerProtocol) acceptsStreamType(op *operation, streamType connect.StreamType) bool {
+	return restAcceptsStreamType(op, streamType)
+}
+
 func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	// TODO: don't set content-type on no body requests.
 	headers["Content-Type"] = []string{contentRestPrefix + meta.codec}
@@ -400,6 +395,19 @@ func (r restServerProtocol) requestLine(op *operation, req proto.Message) (urlPa
 
 func (r restServerProtocol) String() string {
 	return r.protocol().String()
+}
+
+func restAcceptsStreamType(op *operation, streamType connect.StreamType) bool {
+	switch streamType {
+	case connect.StreamTypeUnary:
+		return true
+	case connect.StreamTypeClient:
+		return restHTTPBodyRequest(op)
+	case connect.StreamTypeServer:
+		return restHTTPBodyResponse(op)
+	default:
+		return false
+	}
 }
 
 // Decode timeout as a float in seconds from X-Server-Timeout header.
