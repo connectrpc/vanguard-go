@@ -1,0 +1,41 @@
+version: v2
+modules:
+  - path: internal/examples/pets/internal/proto
+    lint:
+      use:
+        - DEFAULT
+      except:
+        - ENUM_VALUE_PREFIX
+        - ENUM_VALUE_UPPER_SNAKE_CASE
+        - ENUM_ZERO_VALUE_SUFFIX
+        - FIELD_NOT_REQUIRED
+        - PACKAGE_NO_IMPORT_CYCLE
+        - RPC_REQUEST_RESPONSE_UNIQUE
+        - RPC_REQUEST_STANDARD_NAME
+        - RPC_RESPONSE_STANDARD_NAME
+      rpc_allow_google_protobuf_empty_responses: true
+      disallow_comment_ignores: true
+    breaking:
+      use:
+        - WIRE_JSON
+      except:
+        - FIELD_SAME_DEFAULT
+  - path: internal/proto
+    lint:
+      use:
+        - DEFAULT
+      except:
+        - FIELD_NOT_REQUIRED
+        - PACKAGE_NO_IMPORT_CYCLE
+        - RPC_REQUEST_RESPONSE_UNIQUE
+        - RPC_REQUEST_STANDARD_NAME
+        - RPC_RESPONSE_STANDARD_NAME
+      rpc_allow_google_protobuf_empty_responses: true
+      disallow_comment_ignores: true
+    breaking:
+      use:
+        - WIRE_JSON
+      except:
+        - FIELD_SAME_DEFAULT
+deps:
+  - buf.build/googleapis/googleapis
