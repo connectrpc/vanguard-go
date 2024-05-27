@@ -17,5 +17,3 @@ plugins:
   - remote: buf.build/grpc/go:v1.3.0
     out: internal/gen
     opt: paths=source_relative
-inputs:
-  - directory: internal/proto
