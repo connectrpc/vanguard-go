@@ -1,18 +1,19 @@
-version: v1
+version: v2
 managed:
   enabled: true
-  go_package_prefix:
-    default: connectrpc.com/vanguard/internal/gen
-    except:
-      - buf.build/googleapis/googleapis
+  disable:
+    - file_option: go_package
+      module: buf.build/googleapis/googleapis
+  override:
+    - file_option: go_package_prefix
+      value: connectrpc.com/vanguard/internal/gen
 plugins:
-  - plugin: buf.build/protocolbuffers/go:v1.32.0
+  - remote: buf.build/protocolbuffers/go:v1.32.0
     out: internal/gen
     opt: paths=source_relative
-  - plugin: buf.build/connectrpc/go:v1.14.0
+  - remote: buf.build/connectrpc/go:v1.14.0
     out: internal/gen
     opt: paths=source_relative
-  # gRPC generated code is used by vanguardgrpc examples
-  - plugin: buf.build/grpc/go:v1.3.0
+  - remote: buf.build/grpc/go:v1.3.0
     out: internal/gen
     opt: paths=source_relative
