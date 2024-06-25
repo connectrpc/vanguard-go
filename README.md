@@ -3,7 +3,8 @@
 [![Build](https://github.com/connectrpc/vanguard-go/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/connectrpc/vanguard-go/actions/workflows/ci.yaml)
 [![Report Card](https://goreportcard.com/badge/connectrpc.com/vanguard)](https://goreportcard.com/report/github.com/connectrpc/vanguard-go)
 [![GoDoc](https://pkg.go.dev/badge/connectrpc.com/vanguard.svg)](https://pkg.go.dev/github.com/connectrpc/vanguard-go)
-[![Slack](https://img.shields.io/badge/slack-buf-%23e01563)][badges_slack]
+[![Slack](https://img.shields.io/badge/slack-buf-%23e01563)][![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fconnectrpc%2Fvanguard-go.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fconnectrpc%2Fvanguard-go?ref=badge_shield)
+[badges_slack]
 
 Vanguard is a powerful library for Go `net/http` servers that enables seamless
 transcoding between REST and RPC protocols. Whether you need to bridge the gap
@@ -249,3 +250,7 @@ Offered under the [Apache 2 license][badges_license].
 
 [badges_license]: https://github.com/connectrpc/vanguard-go/blob/main/LICENSE
 [badges_slack]: https://buf.build/links/slack
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fconnectrpc%2Fvanguard-go.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fconnectrpc%2Fvanguard-go?ref=badge_large)
