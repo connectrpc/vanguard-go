@@ -404,7 +404,7 @@ func (o *operation) validate(transcoder *Transcoder) error {
 	// Identify the request encoding and compression.
 	reqMeta, err := clientProtoHandler.extractProtocolRequestHeaders(o, o.request.Header)
 	if err != nil {
-		return newHTTPError(http.StatusBadRequest, err.Error())
+		return newHTTPError(http.StatusBadRequest, "%w", err)
 	}
 	// Remove other headers that might mess up the next leg
 	if enc := o.request.Header.Get("Content-Encoding"); enc != "" && enc != CompressionIdentity {
@@ -603,8 +603,7 @@ func (o *operation) handle() {
 
 func (o *operation) resolveMethod(transcoder *Transcoder) error {
 	uriPath := o.request.URL.Path
-	switch o.client.protocol.protocol() {
-	case ProtocolREST:
+	if o.client.protocol.protocol() == ProtocolREST {
 		var methods routeMethods
 		o.restTarget, o.restVars, methods = transcoder.restRoutes.match(uriPath, o.request.Method)
 		if o.restTarget != nil {
@@ -627,35 +626,34 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 				"Allow": []string{sb.String()},
 			},
 		}
-	default:
-		methodConf := transcoder.methods[uriPath]
-		if methodConf == nil {
-			return errNotFound
-		}
-		o.restTarget = methodConf.httpRule
-		if o.request.Method != http.MethodPost {
-			mayAllowGet, ok := o.client.protocol.(clientProtocolAllowsGet)
-			allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
-			if !allowsGet {
-				return &httpError{
-					code: http.StatusMethodNotAllowed,
-					header: http.Header{
-						"Allow": []string{http.MethodPost},
-					},
-				}
-			}
-			if allowsGet && o.request.Method != http.MethodGet {
-				return &httpError{
-					code: http.StatusMethodNotAllowed,
-					header: http.Header{
-						"Allow": []string{http.MethodGet + "," + http.MethodPost},
-					},
-				}
-			}
-		}
-		o.methodConf = methodConf
-		return nil
 	}
+	methodConf := transcoder.methods[uriPath]
+	if methodConf == nil {
+		return errNotFound
+	}
+	o.restTarget = methodConf.httpRule
+	if o.request.Method != http.MethodPost {
+		mayAllowGet, ok := o.client.protocol.(clientProtocolAllowsGet)
+		allowsGet := ok && mayAllowGet.allowsGetRequests(methodConf)
+		if !allowsGet {
+			return &httpError{
+				code: http.StatusMethodNotAllowed,
+				header: http.Header{
+					"Allow": []string{http.MethodPost},
+				},
+			}
+		}
+		if allowsGet && o.request.Method != http.MethodGet {
+			return &httpError{
+				code: http.StatusMethodNotAllowed,
+				header: http.Header{
+					"Allow": []string{http.MethodGet + "," + http.MethodPost},
+				},
+			}
+		}
+	}
+	o.methodConf = methodConf
+	return nil
 }
 
 // reportError handles an error that occurs while setting up the operation. It should not be used

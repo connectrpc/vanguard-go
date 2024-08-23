@@ -376,7 +376,7 @@ func (i *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 		if err := assertTestTimeoutEncoded(ctx); err != nil {
 			return nil, err
 		}
-		val := req.Header().Get("test")
+		val := req.Header().Get("Test")
 		if val == "" {
 			return next(ctx, req)
 		}
@@ -462,7 +462,7 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 		if err := assertTestTimeoutEncoded(ctx); err != nil {
 			return err
 		}
-		val := conn.RequestHeader().Get("test")
+		val := conn.RequestHeader().Get("Test")
 		if val == "" {
 			return next(ctx, conn)
 		}
@@ -635,7 +635,7 @@ func (i *testInterceptor) restUnaryHandler(
 		return nil
 	}
 	return func(rsp http.ResponseWriter, req *http.Request) {
-		val := req.Header.Get("test")
+		val := req.Header.Get("Test")
 		if val == "" {
 			http.Error(rsp, "missing test header", http.StatusInternalServerError)
 			return
@@ -706,7 +706,7 @@ type testServer struct {
 
 func appendClientProtocolOptions(t *testing.T, opts []connect.ClientOption, protocol Protocol) []connect.ClientOption {
 	t.Helper()
-	switch protocol {
+	switch protocol { //nolint:exhaustive
 	case ProtocolGRPC:
 		return append(opts, connect.WithGRPC())
 	case ProtocolGRPCWeb:
@@ -914,7 +914,7 @@ func protocolAssertMiddleware(
 	}
 	return func(rsp http.ResponseWriter, req *http.Request) {
 		var wantHdr map[string][]string
-		switch protocol {
+		switch protocol { //nolint:exhaustive
 		case ProtocolGRPC:
 			wantContentType := []string{"application/grpc+" + codec}
 			if codec == CodecProto {

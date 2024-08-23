@@ -103,7 +103,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 }
 
 func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
-	switch kind := field.Kind(); kind {
+	switch kind := field.Kind(); kind { //nolint:exhaustive // All supported types are covered.
 	case protoreflect.BoolKind:
 		var b bool
 		if err := json.Unmarshal(data, &b); err != nil {
@@ -274,7 +274,7 @@ func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 }
 
 func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Value) ([]byte, error) {
-	switch kind := field.Kind(); kind {
+	switch kind := field.Kind(); kind { //nolint:exhaustive // All supported types are covered.
 	case protoreflect.BoolKind,
 		protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
 		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
