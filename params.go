@@ -103,7 +103,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 }
 
 func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
-	switch kind := field.Kind(); kind { //nolint:exhaustive // All supported types are covered.
+	switch kind := field.Kind(); kind {
 	case protoreflect.BoolKind:
 		var b bool
 		if err := json.Unmarshal(data, &b); err != nil {
@@ -168,7 +168,7 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 			return protoreflect.Value{}, fmt.Errorf("unknown enum: %s", data)
 		}
 		return protoreflect.ValueOf(enumVal.Number()), nil
-	case protoreflect.MessageKind:
+	case protoreflect.MessageKind, protoreflect.GroupKind:
 		return unmarshalFieldWKT(msg, field, data)
 	default:
 		return protoreflect.Value{}, fmt.Errorf("unsupported type %s", field.Kind())
@@ -274,7 +274,7 @@ func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 }
 
 func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Value) ([]byte, error) {
-	switch kind := field.Kind(); kind { //nolint:exhaustive // All supported types are covered.
+	switch kind := field.Kind(); kind {
 	case protoreflect.BoolKind,
 		protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind,
 		protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind,
@@ -299,7 +299,7 @@ func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Va
 			return nil, fmt.Errorf("unknown enum value %d", value.Enum())
 		}
 		return []byte(enumValue.Name()), nil
-	case protoreflect.MessageKind:
+	case protoreflect.MessageKind, protoreflect.GroupKind:
 		return marshalFieldWKT(field, value)
 	default:
 		return nil, fmt.Errorf("unsupported type %s", field.Kind())
