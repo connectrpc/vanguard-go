@@ -351,6 +351,8 @@ func computeVarValues(path []string, target *routeTarget) ([]routeTargetVarMatch
 
 // resolvePathToFieldDescriptors translates the given path string, in the form of
 // "ident.ident.ident", into a path of FieldDescriptors, relative to the given msg.
+// If fromJSON is true, the JSON name of the field is used first, falling back to
+// the proto name.
 func resolvePathToFieldDescriptors(
 	msg protoreflect.MessageDescriptor, path string, fromJSON bool,
 ) ([]protoreflect.FieldDescriptor, error) {
@@ -396,7 +398,7 @@ func resolvePathToFieldDescriptors(
 }
 
 // resolveFieldDescriptorsToPath translates the given path of FieldDescriptors into a string
-// of the form "ident.ident.ident".
+// of the form "ident.ident.ident". If toJSON is true, the JSON name of the field is used.
 func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor, toJSON bool) string {
 	if len(fields) == 0 {
 		return ""
