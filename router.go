@@ -216,29 +216,49 @@ func makeTarget(
 	segments pathSegments,
 	variables []pathVariable,
 ) (*routeTarget, error) {
-	requestBodyFields, err := resolvePathToDescriptors(config.descriptor.Input(), requestBody)
-	if err != nil {
-		return nil, err
-	}
-	if len(requestBodyFields) > 1 {
-		return nil, fmt.Errorf(
-			"unexpected request body path %q: must be a single field",
-			requestBody,
+	var requestBodyFields []protoreflect.FieldDescriptor
+	if requestBody == "*" {
+		// non-nil, empty slice means use the whole thing
+		requestBodyFields = []protoreflect.FieldDescriptor{}
+	} else if requestBody != "" {
+		var err error
+		requestBodyFields, err = resolvePathToFieldDescriptors(
+			config.descriptor.Input(), requestBody, protoreflect.FieldDescriptors.ByName,
 		)
+		if err != nil {
+			return nil, err
+		}
+		if len(requestBodyFields) > 1 {
+			return nil, fmt.Errorf(
+				"unexpected request body path %q: must be a single field",
+				requestBody,
+			)
+		}
 	}
-	responseBodyFields, err := resolvePathToDescriptors(config.descriptor.Output(), responseBody)
-	if err != nil {
-		return nil, err
-	}
-	if len(responseBodyFields) > 1 {
-		return nil, fmt.Errorf(
-			"unexpected response body path %q: must be a single field",
-			requestBody,
+	var responseBodyFields []protoreflect.FieldDescriptor
+	if responseBody == "*" {
+		// non-nil, empty slice means use the whole thing
+		responseBodyFields = []protoreflect.FieldDescriptor{}
+	} else if responseBody != "" {
+		var err error
+		responseBodyFields, err = resolvePathToFieldDescriptors(
+			config.descriptor.Output(), responseBody, protoreflect.FieldDescriptors.ByName,
 		)
+		if err != nil {
+			return nil, err
+		}
+		if len(responseBodyFields) > 1 {
+			return nil, fmt.Errorf(
+				"unexpected response body path %q: must be a single field",
+				requestBody,
+			)
+		}
 	}
 	routeTargetVars := make([]routeTargetVar, len(variables))
 	for i, variable := range variables {
-		fields, err := resolvePathToDescriptors(config.descriptor.Input(), variable.fieldPath)
+		fields, err := resolvePathToFieldDescriptors(
+			config.descriptor.Input(), variable.fieldPath, protoreflect.FieldDescriptors.ByName,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -329,27 +349,32 @@ func computeVarValues(path []string, target *routeTarget) ([]routeTargetVarMatch
 	return vars, nil
 }
 
-// resolvePathToDescriptors translates the given path string, in the form of "ident.ident.ident",
-// into a path of FieldDescriptors, relative to the given msg.
-func resolvePathToDescriptors(msg protoreflect.MessageDescriptor, path string) ([]protoreflect.FieldDescriptor, error) {
+// resolvePathToFieldDescriptors translates the given path string, in the form of
+// "ident.ident.ident", into a path of FieldDescriptors, relative to the given msg.
+func resolvePathToFieldDescriptors(
+	msg protoreflect.MessageDescriptor,
+	path string,
+	getter func(protoreflect.FieldDescriptors, protoreflect.Name) protoreflect.FieldDescriptor,
+) ([]protoreflect.FieldDescriptor, error) {
 	if path == "" {
-		return nil, nil
-	}
-	if path == "*" {
-		// non-nil, empty slice means use the whole thing
-		return []protoreflect.FieldDescriptor{}, nil
+		return nil, fmt.Errorf("empty field path")
 	}
 	fields := msg.Fields()
-	parts := strings.Split(path, ".")
-	result := make([]protoreflect.FieldDescriptor, len(parts))
-	for i, part := range parts {
-		field := fields.ByName(protoreflect.Name(part))
+	result := make([]protoreflect.FieldDescriptor, strings.Count(path, ".")+1)
+	for i, remaining := 0, path; remaining != ""; i++ {
+		part := remaining
+		if i := strings.IndexByte(remaining, '.'); i >= 0 {
+			part, remaining = remaining[:i], remaining[i+1:]
+		} else {
+			remaining = ""
+		}
+		field := getter(fields, protoreflect.Name(part))
 		if field == nil {
 			return nil, fmt.Errorf("in field path %q: element %q does not correspond to any field of type %s",
 				path, part, msg.FullName())
 		}
 		result[i] = field
-		if i == len(parts)-1 {
+		if remaining == "" {
 			break
 		}
 		if field.Cardinality() == protoreflect.Repeated {
@@ -372,11 +397,14 @@ func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor) string
 	if len(fields) == 0 {
 		return ""
 	}
-	parts := make([]string, len(fields))
+	sb := strings.Builder{}
 	for i, field := range fields {
-		parts[i] = string(field.Name())
+		if i > 0 {
+			sb.WriteByte('.')
+		}
+		_, _ = sb.WriteString(string(field.Name()))
 	}
-	return strings.Join(parts, ".")
+	return sb.String()
 }
 
 type alreadyExistsError struct {

@@ -160,7 +160,9 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	}
 	// And finally from the query string:
 	for fieldPath, values := range op.queryValues() {
-		fields, err := resolvePathToDescriptors(msg.Descriptor(), fieldPath)
+		fields, err := resolvePathToFieldDescriptors(
+			msg.Descriptor(), fieldPath, restFieldGetter,
+		)
 		if err != nil {
 			return err
 		}
@@ -439,6 +441,15 @@ func restIsHTTPBody(msg protoreflect.MessageDescriptor, bodyPath []protoreflect.
 		msg = field.Message()
 	}
 	return msg != nil && msg.FullName() == "google.api.HttpBody"
+}
+
+// restFieldGetter returns a field descriptor by name or JSON name.
+func restFieldGetter(fds protoreflect.FieldDescriptors, name protoreflect.Name) protoreflect.FieldDescriptor {
+	fd := fds.ByName(name)
+	if fd == nil {
+		fd = fds.ByJSONName(string(name))
+	}
+	return fd
 }
 
 type accessor func(protoreflect.Message, protoreflect.FieldDescriptor) protoreflect.Value

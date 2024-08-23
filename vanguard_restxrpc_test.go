@@ -319,6 +319,49 @@ func TestMux_RESTxRPC(t *testing.T) {
 			},
 		},
 	}, {
+		name: "CreateBook-JSONQueryParams",
+		input: input{
+			method: http.MethodPost,
+			path:   "/v1/shelves/1/books",
+			values: url.Values{
+				"bookId":    []string{"1"},
+				"requestId": []string{"2"},
+			},
+			body: &testv1.Book{
+				Title:  "The Art of Computer Programming",
+				Author: "Donald E. Knuth",
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceCreateBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.CreateBookRequest{
+						Parent:    "shelves/1",
+						BookId:    "1",
+						RequestId: "2",
+						Book: &testv1.Book{
+							Title:  "The Art of Computer Programming",
+							Author: "Donald E. Knuth",
+						},
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{
+						Title:  "The Art of Computer Programming",
+						Author: "Donald E. Knuth",
+					},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{
+				Title:  "The Art of Computer Programming",
+				Author: "Donald E. Knuth",
+			},
+		},
+	}, {
 		name: "MoveBooks",
 		input: input{
 			method: http.MethodPost,
