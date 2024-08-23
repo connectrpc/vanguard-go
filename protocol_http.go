@@ -237,7 +237,7 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	fieldRanger = func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		fields = append(fields, field)
 		defer func() { fields = fields[:len(fields)-1] }() // pop
-		fieldPath := resolveFieldDescriptorsToPath(fields)
+		fieldPath := resolveFieldDescriptorsToPath(fields, false)
 		fieldIndex := fieldPathCounts[fieldPath]
 
 		switch {
@@ -271,7 +271,11 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 					fieldError = err
 					return false
 				}
-				query.Add(fieldPath, string(encoded))
+				query.Add(
+					// Query values are encoded in their JSON representation.
+					resolveFieldDescriptorsToPath(fields, true),
+					string(encoded),
+				)
 				fieldIndex++
 			}
 		case fieldIndex == 0:
@@ -280,7 +284,11 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 				fieldError = err
 				return false
 			}
-			query.Add(fieldPath, string(encoded))
+			query.Add(
+				// Query values are encoded in their JSON representation.
+				resolveFieldDescriptorsToPath(fields, true),
+				string(encoded),
+			)
 			fieldIndex++
 		}
 

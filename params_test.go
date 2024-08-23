@@ -62,7 +62,7 @@ func TestIsParameter(t *testing.T) {
 		testCase := testCase
 		t.Run(testCase.fieldPath, func(t *testing.T) {
 			t.Parallel()
-			fields, err := resolvePathToFieldDescriptors(desc, testCase.fieldPath, restFieldGetter)
+			fields, err := resolvePathToFieldDescriptors(desc, testCase.fieldPath, true)
 			require.NoError(t, err)
 			field := fields[len(fields)-1]
 			assert.Equal(t, testCase.isParam, isParameterType(field))
@@ -395,7 +395,7 @@ func TestSetParameter(t *testing.T) {
 			t.Parallel()
 
 			desc := testCase.want.ProtoReflect().Descriptor()
-			fields, err := resolvePathToFieldDescriptors(desc, testCase.fields, restFieldGetter)
+			fields, err := resolvePathToFieldDescriptors(desc, testCase.fields, true)
 			if err != nil {
 				assert.Equal(t, testCase.wantErr, err.Error())
 				return
@@ -695,7 +695,7 @@ func TestGetParameter(t *testing.T) {
 			t.Parallel()
 
 			desc := testCase.msg.ProtoReflect().Descriptor()
-			fields, err := resolvePathToFieldDescriptors(desc, testCase.fields, restFieldGetter)
+			fields, err := resolvePathToFieldDescriptors(desc, testCase.fields, true)
 			if err != nil {
 				assert.Equal(t, testCase.wantErr, err.Error())
 				return

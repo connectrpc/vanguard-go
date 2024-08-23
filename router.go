@@ -223,7 +223,7 @@ func makeTarget(
 	} else if requestBody != "" {
 		var err error
 		requestBodyFields, err = resolvePathToFieldDescriptors(
-			config.descriptor.Input(), requestBody, protoreflect.FieldDescriptors.ByName,
+			config.descriptor.Input(), requestBody, false,
 		)
 		if err != nil {
 			return nil, err
@@ -242,7 +242,7 @@ func makeTarget(
 	} else if responseBody != "" {
 		var err error
 		responseBodyFields, err = resolvePathToFieldDescriptors(
-			config.descriptor.Output(), responseBody, protoreflect.FieldDescriptors.ByName,
+			config.descriptor.Output(), responseBody, false,
 		)
 		if err != nil {
 			return nil, err
@@ -257,7 +257,7 @@ func makeTarget(
 	routeTargetVars := make([]routeTargetVar, len(variables))
 	for i, variable := range variables {
 		fields, err := resolvePathToFieldDescriptors(
-			config.descriptor.Input(), variable.fieldPath, protoreflect.FieldDescriptors.ByName,
+			config.descriptor.Input(), variable.fieldPath, false,
 		)
 		if err != nil {
 			return nil, err
@@ -352,12 +352,10 @@ func computeVarValues(path []string, target *routeTarget) ([]routeTargetVarMatch
 // resolvePathToFieldDescriptors translates the given path string, in the form of
 // "ident.ident.ident", into a path of FieldDescriptors, relative to the given msg.
 func resolvePathToFieldDescriptors(
-	msg protoreflect.MessageDescriptor,
-	path string,
-	getter func(protoreflect.FieldDescriptors, protoreflect.Name) protoreflect.FieldDescriptor,
+	msg protoreflect.MessageDescriptor, path string, fromJSON bool,
 ) ([]protoreflect.FieldDescriptor, error) {
 	if path == "" {
-		return nil, fmt.Errorf("empty field path")
+		return nil, errors.New("empty field path")
 	}
 	fields := msg.Fields()
 	result := make([]protoreflect.FieldDescriptor, strings.Count(path, ".")+1)
@@ -368,10 +366,16 @@ func resolvePathToFieldDescriptors(
 		} else {
 			remaining = ""
 		}
-		field := getter(fields, protoreflect.Name(part))
+		var field protoreflect.FieldDescriptor
+		if fromJSON {
+			field = fields.ByJSONName(part)
+		}
 		if field == nil {
-			return nil, fmt.Errorf("in field path %q: element %q does not correspond to any field of type %s",
-				path, part, msg.FullName())
+			field = fields.ByName(protoreflect.Name(part))
+			if field == nil {
+				return nil, fmt.Errorf("in field path %q: element %q does not correspond to any field of type %s",
+					path, part, msg.FullName())
+			}
 		}
 		result[i] = field
 		if remaining == "" {
@@ -393,7 +397,7 @@ func resolvePathToFieldDescriptors(
 
 // resolveFieldDescriptorsToPath translates the given path of FieldDescriptors into a string
 // of the form "ident.ident.ident".
-func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor) string {
+func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor, toJSON bool) string {
 	if len(fields) == 0 {
 		return ""
 	}
@@ -402,7 +406,13 @@ func resolveFieldDescriptorsToPath(fields []protoreflect.FieldDescriptor) string
 		if i > 0 {
 			sb.WriteByte('.')
 		}
-		_, _ = sb.WriteString(string(field.Name()))
+		var name string
+		if toJSON {
+			name = field.JSONName()
+		} else {
+			name = string(field.Name())
+		}
+		_, _ = sb.WriteString(name)
 	}
 	return sb.String()
 }

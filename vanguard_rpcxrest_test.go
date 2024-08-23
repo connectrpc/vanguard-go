@@ -228,7 +228,7 @@ func TestMux_RPCxREST(t *testing.T) {
 			return outputFromUnary(ctx, clients.libClient.CreateBook, hdr, msgs)
 		},
 		stream: testStream{
-			method: "/v1/shelves/1/books?book_id=1&request_id=2",
+			method: "/v1/shelves/1/books?bookId=1&requestId=2",
 			msgs: []testMsg{
 				{in: &testMsgIn{
 					msg: &testv1.Book{
