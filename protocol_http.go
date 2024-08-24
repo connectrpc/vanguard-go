@@ -237,6 +237,8 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	fieldRanger = func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		fields = append(fields, field)
 		defer func() { fields = fields[:len(fields)-1] }() // pop
+		// The field path is resolved to the proto format for lookups,
+		// but the query values are encoded in their JSON representation.
 		fieldPath := resolveFieldDescriptorsToPath(fields, false)
 		fieldIndex := fieldPathCounts[fieldPath]
 
