@@ -281,7 +281,8 @@ func TestMux_RESTxRPC(t *testing.T) {
 			method: http.MethodPost,
 			path:   "/v1/shelves/1/books",
 			values: url.Values{
-				"book_id":    []string{"1"},
+				// Fields by JSON name or proto name are supported.
+				"bookId":     []string{"1"},
 				"request_id": []string{"2"},
 			},
 			body: &testv1.Book{
