@@ -387,12 +387,12 @@ func resolvePathToFieldDescriptors(
 			return nil, fmt.Errorf("in field path %q: field %q of type %s should not be a list or map",
 				path, part, msg.FullName())
 		}
-		msg = field.Message()
-		if msg == nil {
+		childMsg := field.Message()
+		if childMsg == nil {
 			return nil, fmt.Errorf("in field path %q: field %q of type %s should be a message but is instead %s",
 				path, part, msg.FullName(), field.Kind())
 		}
-		fields = msg.Fields()
+		msg, fields = childMsg, childMsg.Fields()
 	}
 	return result, nil
 }
