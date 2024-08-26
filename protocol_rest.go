@@ -52,6 +52,8 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 		return restHTTPBodyRequest(op)
 	case connect.StreamTypeServer:
 		return restHTTPBodyResponse(op)
+	case connect.StreamTypeBidi:
+		return false
 	default:
 		return false
 	}

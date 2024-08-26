@@ -1042,11 +1042,11 @@ func TestTranscoder_PassThrough(t *testing.T) {
 			}
 
 			_, isWrapped := respWriter.(*responseWriter)
-			require.False(t, isWrapped)
+			assert.False(t, isWrapped)
 			_, isWrapped = request.Body.(*envelopingReader)
-			require.False(t, isWrapped)
+			assert.False(t, isWrapped)
 			_, isWrapped = request.Body.(*transformingReader)
-			require.False(t, isWrapped)
+			assert.False(t, isWrapped)
 
 			// carry on...
 			handler.ServeHTTP(respWriter, request)

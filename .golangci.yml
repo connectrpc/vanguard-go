@@ -33,38 +33,29 @@ linters:
   enable-all: true
   disable:
     - cyclop            # covered by gocyclo
-    - deadcode          # abandoned
-    - depguard          # may enable later but needs configuration
-    - exhaustive        # noisy in practice: many switches have default, so they don't need to be exhaustive
-    - exhaustivestruct  # replaced by exhaustruct
-    - exhaustruct       # opt-in on a type-by-type basis (no useful for now)
+    - depguard          # unnecessary for small libraries
+    - execinquery       # deprecated since golangci v1.58
     - funlen            # rely on code review to limit function length
     - gocognit          # dubious "cognitive overhead" quantification
     - gofumpt           # prefer standard gofmt
     - goimports         # rely on gci instead
-    - golint            # deprecated by Go team
     - gomnd             # some unnamed constants are okay
-    - ifshort           # deprecated by author
     - inamedparam       # convention is not followed
-    - interfacer        # deprecated by author
     - ireturn           # "accept interfaces, return structs" isn't ironclad
     - lll               # don't want hard limits for line length
     - maintidx          # covered by gocyclo
-    - maligned          # readability trumps efficient struct packing
+    - mnd               # status codes are clearer than constants
     - nlreturn          # generous whitespace violates house style
-    - nosnakecase       # deprecated in https://github.com/golangci/golangci-lint/pull/3065
-    - nonamedreturns    # named returns are fine; it's bare returns that are bad
-    - scopelint         # deprecated by author
-    - structcheck       # abandoned
+    - nonamedreturns    # named returns are fine; it's *bare* returns that are bad
+    - protogetter       # too many false positives
     - testpackage       # internal tests are fine
-    - varcheck          # abandoned
     - wrapcheck         # don't _always_ need to wrap errors
     - wsl               # generous whitespace violates house style
 issues:
   exclude:
     # Don't ban use of fmt.Errorf to create new errors, but the remaining
     # checks from err113 are useful.
-    - "err113: do not define dynamic errors.*"
+    - "do not define dynamic errors, use wrapped static errors instead: .*"
   exclude-rules:
     - path: internal/examples/.*/.*\.go
       linters:

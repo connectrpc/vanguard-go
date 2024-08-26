@@ -169,7 +169,7 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 			return protoreflect.Value{}, fmt.Errorf("unknown enum: %s", data)
 		}
 		return protoreflect.ValueOf(enumVal.Number()), nil
-	case protoreflect.MessageKind:
+	case protoreflect.MessageKind, protoreflect.GroupKind:
 		return unmarshalFieldWKT(msg, field, data)
 	default:
 		return protoreflect.Value{}, fmt.Errorf("unsupported type %s", field.Kind())
@@ -300,7 +300,7 @@ func marshalFieldValue(field protoreflect.FieldDescriptor, value protoreflect.Va
 			return nil, fmt.Errorf("unknown enum value %d", value.Enum())
 		}
 		return []byte(enumValue.Name()), nil
-	case protoreflect.MessageKind:
+	case protoreflect.MessageKind, protoreflect.GroupKind:
 		return marshalFieldWKT(field, value)
 	default:
 		return nil, fmt.Errorf("unsupported type %s", field.Kind())
