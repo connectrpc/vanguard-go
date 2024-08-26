@@ -162,7 +162,9 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	}
 	// And finally from the query string:
 	for fieldPath, values := range op.queryValues() {
-		fields, err := resolvePathToDescriptors(msg.Descriptor(), fieldPath)
+		fields, err := resolvePathToFieldDescriptors(
+			msg.Descriptor(), fieldPath, true,
+		)
 		if err != nil {
 			return err
 		}

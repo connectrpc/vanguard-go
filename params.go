@@ -75,19 +75,20 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	data := []byte(param)
 	value, err := unmarshalFieldValue(leaf, field, data)
 	if err != nil {
+		// Resolve the field path for the error message in proto format.
+		// The JSON format is not used for consistency with other errors.
+		fieldPath := resolveFieldDescriptorsToPath(fields, false)
 		if jsonErr := (*json.UnmarshalTypeError)(nil); errors.As(err, &jsonErr) ||
 			// protojson errors are not exported, check the error string.
 			strings.HasPrefix(err.Error(), "proto") {
 			return connect.NewError(connect.CodeInvalidArgument,
 				fmt.Errorf("invalid parameter %q value for type %q: %s",
-					resolveFieldDescriptorsToPath(fields), field.Kind(), data,
+					fieldPath, field.Kind(), data,
 				),
 			)
 		}
 		return connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("invalid parameter %q %w",
-				resolveFieldDescriptorsToPath(fields), err,
-			),
+			fmt.Errorf("invalid parameter %q %w", fieldPath, err),
 		)
 	}
 
