@@ -24,6 +24,10 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+var (
+	errUnknownField = errors.New("unknown field")
+)
+
 // routeTrie is a prefix trie of valid REST URI paths to route targets.
 // It supports evaluation of variables as the path is matched, for
 // interpolating parts of the URI path into an RPC request field. The
@@ -375,8 +379,8 @@ func resolvePathToFieldDescriptors(
 		if field == nil {
 			field = fields.ByName(protoreflect.Name(part))
 			if field == nil {
-				return nil, fmt.Errorf("in field path %q: element %q does not correspond to any field of type %s",
-					path, part, msg.FullName())
+				return nil, fmt.Errorf("in field path %q: element %q does not correspond to any field of type %s: %w",
+					path, part, msg.FullName(), errUnknownField)
 			}
 		}
 		result[i] = field
