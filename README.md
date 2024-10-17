@@ -81,13 +81,13 @@ Vanguard.
 // A Connect handler factory function returns the service path and the HTTP
 // handler. So you can pass the result directly to NewService:
 myService := vanguard.NewService(
-    myservicev1connect.NewMyServiceHandler(&myServiceImpl{}),
+	myservicev1connect.NewMyServiceHandler(&myServiceImpl{}),
 )
 
 // If not using a Connect handler, you can still use this function and
 // directly refer to the service's name.
 myService = vanguard.NewService(
-    myservicev1connect.MyServiceName,
+	myservicev1connect.MyServiceName,
 	someOtherHTTPHandler,
 )
 ```
@@ -150,8 +150,8 @@ expecting.
 
 ```go
 transcoder := vanguard.NewTranscoder([]*vanguard.Service{
-    myService,
-    otherService,
+	myService,
+	otherService,
 })
 ```
 
@@ -171,9 +171,9 @@ When creating a transcoder, you can supply options to customize it:
 ```go
 transcoder = vanguard.NewTranscoder(
 	[]*vanguard.Service{
-        myService,
-        otherService,
-    },
+		myService,
+		otherService,
+	},
 	vanguard.WithUnknownHandler(custom404handler),
 	vanguard.WithCodec(myCustomMessageFormat{}),
 )
