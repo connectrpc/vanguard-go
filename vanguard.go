@@ -109,13 +109,12 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 	}
 
 	defaultServiceOptions := serviceOptions{
-		maxMsgBufferBytes:    DefaultMaxMessageBufferBytes,
-		maxGetURLBytes:       DefaultMaxGetURLBytes,
-		preferredCodec:       CodecProto,
-		codecNames:           map[string]struct{}{CodecProto: {}, CodecJSON: {}},
-		compressorNames:      map[string]struct{}{CompressionGzip: {}},
-		protocols:            map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
-		restUnmarshalOptions: RESTUnmarshalOptions{},
+		maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
+		maxGetURLBytes:    DefaultMaxGetURLBytes,
+		preferredCodec:    CodecProto,
+		codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
+		compressorNames:   map[string]struct{}{CompressionGzip: {}},
+		protocols:         map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
 	}
 	for _, opt := range transcoderOpts.defaultServiceOptions {
 		opt.applyToService(&defaultServiceOptions)
@@ -394,13 +393,17 @@ func WithMaxGetURLBytes(limit uint32) ServiceOption {
 	})
 }
 
-// WithRESTUnmarshalOptions WithPreferredCodec returns a service option that sets the unmarshal options for the rest protocol.
+// WithRESTUnmarshalOptions returns a service option that sets the unmarshal options for use with the REST protocol.
 func WithRESTUnmarshalOptions(options RESTUnmarshalOptions) ServiceOption {
 	return serviceOptionFunc(func(opts *serviceOptions) {
 		opts.restUnmarshalOptions = options
 	})
 }
 
+// RESTUnmarshalOptions contains options for unmarshalling REST requests.
+//
+// If DiscardUnknownQueryParams is true, any query parameters in a request that do not correspond to a field in the
+// request message will be ignored. If false, such query parameters will cause an error. Defaults to false.
 type RESTUnmarshalOptions struct {
 	DiscardUnknownQueryParams bool
 }

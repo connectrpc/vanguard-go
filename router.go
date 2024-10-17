@@ -379,8 +379,8 @@ func resolvePathToFieldDescriptors(
 		if field == nil {
 			field = fields.ByName(protoreflect.Name(part))
 			if field == nil {
-				return nil, fmt.Errorf("in field path %q: element %q does not correspond to any field of type %s: %w",
-					path, part, msg.FullName(), errUnknownField)
+				return nil, fmt.Errorf("%w in field path %q: element %q does not correspond to any field of type %s",
+					errUnknownField, path, part, msg.FullName())
 			}
 		}
 		result[i] = field
