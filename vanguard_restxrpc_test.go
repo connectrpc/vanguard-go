@@ -565,8 +565,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 				"Content-Type": []string{"text/plain"},
 			},
 		},
-	},
-	}
+	}}
 
 	type testOpt struct {
 		name string
