@@ -393,8 +393,7 @@ func TestSetParameter(t *testing.T) {
 		value:   "hello",
 		want:    &testv1.ParameterValues{},
 		wantErr: "unknown field in field path \"unknownField\": element \"unknownField\" does not correspond to any field of type vanguard.test.v1.ParameterValues",
-	},
-	}
+	}}
 	for _, testCase := range testCases {
 		testCase := testCase
 		t.Run(testCase.fields+"="+testCase.value, func(t *testing.T) {

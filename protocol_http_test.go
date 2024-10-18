@@ -233,15 +233,14 @@ func TestHTTPEncodePathValues(t *testing.T) {
 		tmpl:      "/v2/**",
 		wantPath:  "/v2/**",
 		wantQuery: url.Values{},
+	}, {
+		input:        &testv1.ParameterValues{StringValue: "books/1"},
+		reqFieldPath: "unknownQueryParam",
+		tmpl:         "/v1/{string_value=books/*}:get",
+		wantPath:     "/v1/books/1:get",
+		wantQuery:    url.Values{},
+		wantErr:      "unknown field in field path \"unknownQueryParam\": element \"unknownQueryParam\" does not correspond to any field of type vanguard.test.v1.ParameterValues",
 	},
-		{
-			input:        &testv1.ParameterValues{StringValue: "books/1"},
-			reqFieldPath: "unknownQueryParam",
-			tmpl:         "/v1/{string_value=books/*}:get",
-			wantPath:     "/v1/books/1:get",
-			wantQuery:    url.Values{},
-			wantErr:      "unknown field in field path \"unknownQueryParam\": element \"unknownQueryParam\" does not correspond to any field of type vanguard.test.v1.ParameterValues",
-		},
 	}
 	for _, testCase := range testCases {
 		testCase := testCase

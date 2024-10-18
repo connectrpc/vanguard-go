@@ -401,10 +401,9 @@ func WithRESTUnmarshalOptions(options RESTUnmarshalOptions) ServiceOption {
 }
 
 // RESTUnmarshalOptions contains options for unmarshalling REST requests.
-//
-// If DiscardUnknownQueryParams is true, any query parameters in a request that do not correspond to a field in the
-// request message will be ignored. If false, such query parameters will cause an error. Defaults to false.
 type RESTUnmarshalOptions struct {
+	// If DiscardUnknownQueryParams is true, any query parameters in a request that do not correspond to a field in the
+	// request message will be ignored. If false, such query parameters will cause an error. Defaults to false.
 	DiscardUnknownQueryParams bool
 }
 
