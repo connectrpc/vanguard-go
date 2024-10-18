@@ -16,6 +16,7 @@ package vanguard
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,12 +161,17 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 			return err
 		}
 	}
+
 	// And finally from the query string:
+	discardUnknownQueryParams := op.methodConf.serviceOptions.restUnmarshalOptions.DiscardUnknownQueryParams
 	for fieldPath, values := range op.queryValues() {
 		fields, err := resolvePathToFieldDescriptors(
 			msg.Descriptor(), fieldPath, true,
 		)
 		if err != nil {
+			if discardUnknownQueryParams && errors.Is(err, errUnknownField) {
+				continue
+			}
 			return err
 		}
 		for _, value := range values {

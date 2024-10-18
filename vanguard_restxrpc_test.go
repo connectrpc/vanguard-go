@@ -94,6 +94,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 		} else {
 			opts = append(opts, WithNoTargetCompression())
 		}
+
+		opts = append(opts, WithRESTUnmarshalOptions(RESTUnmarshalOptions{DiscardUnknownQueryParams: true}))
+
 		svcHandler := protocolAssertMiddleware(protocol, codec, compression, handler)
 
 		services := make([]*Service, len(serviceNames))
@@ -491,6 +494,44 @@ func TestMux_RESTxRPC(t *testing.T) {
 		input: input{
 			method: http.MethodGet,
 			path:   "/message.txt:download",
+		},
+		stream: testStream{
+			method: testv1connect.ContentServiceDownloadProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.DownloadRequest{
+						Filename: "message.txt",
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.DownloadResponse{
+						File: &httpbody.HttpBody{
+							ContentType: "text/plain",
+							Data:        []byte("hello"),
+						},
+					},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.DownloadResponse{
+						File: &httpbody.HttpBody{
+							Data: []byte(" world"),
+						},
+					},
+				}},
+			},
+		},
+		output: output{
+			code:    http.StatusOK,
+			rawBody: `hello world`,
+			meta: http.Header{
+				"Content-Type": []string{"text/plain"},
+			},
+		},
+	}, {
+		name: "DiscardUnknownQueryParams",
+		input: input{
+			method: http.MethodGet,
+			path:   "/message.txt:download?unknownParam=1",
 		},
 		stream: testStream{
 			method: testv1connect.ContentServiceDownloadProcedure,
