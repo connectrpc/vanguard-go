@@ -1494,7 +1494,7 @@ func (w *envelopingWriter) maybeInit() {
 	var env envelope
 	env.compressed = w.rw.op.client.respCompression != nil
 	env.length = uint32(w.rw.contentLen)
-	envBytes := w.rw.op.clientEnveloper.encodeEnvelope(envelope{})
+	envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
 	_, err := w.w.Write(envBytes[:])
 	if err != nil {
 		w.err = err

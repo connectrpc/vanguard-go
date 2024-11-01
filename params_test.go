@@ -389,6 +389,12 @@ func TestSetParameter(t *testing.T) {
 			return msg
 		}(),
 	}, {
+		fields: "double_list",
+		value:  "1.234",
+		want: &testv1.ParameterValues{
+			DoubleList: []float64{1.234},
+		},
+	}, {
 		fields:  "unknownField",
 		value:   "hello",
 		want:    &testv1.ParameterValues{},
