@@ -35,6 +35,10 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
+var (
+	errFinalDataAlreadyWritten = fmt.Errorf("final RPC response data already written: %w", context.Canceled)
+)
+
 // Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
 // all supported input protocols (Connect, gRPC, gRPC-Web, REST) into a protocol that the
 // service handlers support. It can do simple routing based on RPC method name, for simple
@@ -1222,8 +1226,7 @@ func (w *responseWriter) reportEnd(end *responseEnd) {
 	}
 	w.flusher.Flush()
 	// response is done
-	w.op.cancel()
-	w.err = context.Canceled
+	w.err = errFinalDataAlreadyWritten
 }
 
 func (w *responseWriter) flushHeaders() {
@@ -1311,7 +1314,7 @@ type envelopingWriter struct {
 	trailerIsCompressed bool
 }
 
-func (w *envelopingWriter) Write(data []byte) (int, error) {
+func (w *envelopingWriter) Write(data []byte) (n int, err error) {
 	w.maybeInit()
 	if w.err != nil {
 		return 0, w.err
@@ -1359,6 +1362,10 @@ func (w *envelopingWriter) Write(data []byte) (int, error) {
 			err := w.handleTrailer()
 			if err != nil {
 				return written, err
+			}
+			if len(data) == 0 {
+				// All done
+				return written, nil
 			}
 		} else {
 			// flush after each message and reset for next envelope
@@ -1527,7 +1534,7 @@ func (w *envelopingWriter) handleTrailer() error {
 	}
 	end.wasCompressed = w.trailerIsCompressed
 	w.rw.reportEnd(&end)
-	w.err = errors.New("final data already written")
+	w.err = errFinalDataAlreadyWritten
 	return nil
 }
 
@@ -1583,7 +1590,7 @@ func (w *transformingWriter) Write(data []byte) (n int, err error) {
 		w.buffer.Write(data[:remainingBytes])
 		written += remainingBytes
 		data = data[remainingBytes:]
-		if w.writingEnvelope {
+		if w.writingEnvelope { //nolint:nestif
 			var envBytes envelopeBytes
 			_, _ = w.buffer.Read(envBytes[:])
 			var err error
@@ -1606,6 +1613,10 @@ func (w *transformingWriter) Write(data []byte) (n int, err error) {
 			if err := w.flushMessage(); err != nil {
 				w.rw.reportError(err)
 				return written, err
+			}
+			if w.latestEnvelope.trailer && len(data) == 0 {
+				// All done.
+				return written, nil
 			}
 			w.expectingBytes = envelopeLen
 			w.writingEnvelope = true
@@ -1651,7 +1662,7 @@ func (w *transformingWriter) flushMessage() error {
 		}
 		end.wasCompressed = w.latestEnvelope.compressed
 		w.rw.reportEnd(&end)
-		w.err = errors.New("final data already written")
+		w.err = errFinalDataAlreadyWritten
 		return nil
 	}
 
@@ -1748,7 +1759,7 @@ type noResponseBodyWriter struct {
 }
 
 func (c noResponseBodyWriter) Write([]byte) (int, error) {
-	return 0, errors.New("final data already written")
+	return 0, errFinalDataAlreadyWritten
 }
 
 func (c noResponseBodyWriter) Close() error {

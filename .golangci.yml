@@ -1,5 +1,3 @@
-run:
-  skip-dirs-use-default: false
 linters-settings:
   errcheck:
     check-type-assertions: true
@@ -52,6 +50,7 @@ linters:
     - wrapcheck         # don't _always_ need to wrap errors
     - wsl               # generous whitespace violates house style
 issues:
+  exclude-dirs-use-default: false
   exclude:
     # Don't ban use of fmt.Errorf to create new errors, but the remaining
     # checks from err113 are useful.
