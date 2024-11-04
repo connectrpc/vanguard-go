@@ -1554,7 +1554,6 @@ type transformingWriter struct {
 	expectingBytes  int
 	writingEnvelope bool
 	latestEnvelope  envelope
-	trailerWritten  bool
 }
 
 func (w *transformingWriter) Write(data []byte) (n int, err error) {
@@ -1615,7 +1614,7 @@ func (w *transformingWriter) Write(data []byte) (n int, err error) {
 				w.rw.reportError(err)
 				return written, err
 			}
-			if w.trailerWritten && len(data) == 0 {
+			if w.latestEnvelope.trailer && len(data) == 0 {
 				// All done.
 				return written, nil
 			}
@@ -1664,7 +1663,6 @@ func (w *transformingWriter) flushMessage() error {
 		end.wasCompressed = w.latestEnvelope.compressed
 		w.rw.reportEnd(&end)
 		w.err = errFinalDataAlreadyWritten
-		w.trailerWritten = true
 		return nil
 	}
 
