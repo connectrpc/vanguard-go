@@ -437,6 +437,9 @@ func restHTTPBodyRequest(op *operation) bool {
 }
 
 func restHTTPBodyResponse(op *operation) bool {
+	if op.restTarget == nil {
+		return false
+	}
 	return restIsHTTPBody(op.methodConf.descriptor.Output(), op.restTarget.responseBodyFields)
 }
 

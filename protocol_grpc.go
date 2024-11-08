@@ -16,6 +16,7 @@ package vanguard
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -151,7 +152,7 @@ func (g grpcServerProtocol) String() string {
 	return g.protocol().String()
 }
 
-// grpcClientProtocol implements the gRPC protocol for
+// grpcWebClientProtocol implements the gRPC-Web protocol for
 // processing RPCs received from the client.
 type grpcWebClientProtocol struct{}
 
@@ -212,7 +213,7 @@ func (g grpcWebClientProtocol) String() string {
 	return g.protocol().String()
 }
 
-// grpcServerProtocol implements the gRPC-Web protocol for
+// grpcWebServerProtocol implements the gRPC-Web protocol for
 // sending RPCs to the server handler.
 type grpcWebServerProtocol struct{}
 
@@ -275,6 +276,73 @@ func (g grpcWebServerProtocol) decodeEndFromMessage(_ *operation, buffer *bytes.
 }
 
 func (g grpcWebServerProtocol) String() string {
+	return g.protocol().String()
+}
+
+// grpcWebTextClientProtocol implements the gRPC-Web protocol for
+// processing RPCs received from the client.
+type grpcWebTextClientProtocol struct{}
+
+var _ clientProtocolHandler = grpcWebTextClientProtocol{}
+var _ clientBodyPreparer = grpcWebTextClientProtocol{}
+var _ envelopedProtocolHandler = grpcWebTextClientProtocol{}
+
+func (g grpcWebTextClientProtocol) protocol() Protocol {
+	return ProtocolGRPCWebText
+}
+
+func (g grpcWebTextClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType) bool {
+	return true
+}
+
+func (g grpcWebTextClientProtocol) requestNeedsPrep(op *operation) bool {
+	// Hijack the request and response body to handle base64 encoding/decoding.
+	op.request.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: newGRPCWebTextReader(op.request.Body),
+		Closer: op.request.Body,
+	}
+	op.writer = newGRPCWebTextResponseWriter(op.writer)
+	return false
+}
+
+func (g grpcWebTextClientProtocol) prepareUnmarshalledRequest(_ *operation, _ []byte, _ proto.Message) error {
+	// requestNeedsPrep always returns false.
+	return errors.New("gRPC-Web text prepareUnmarshalledRequest not implemented")
+}
+
+func (g grpcWebTextClientProtocol) responseNeedsPrep(_ *operation) bool {
+	return false // Setup in requestNeedsPrep.
+}
+
+func (g grpcWebTextClientProtocol) prepareMarshalledResponse(_ *operation, _ []byte, _ proto.Message, _ http.Header) ([]byte, error) {
+	// responseNeedsPrep always returns false.
+	return nil, errors.New("gRPC-Web text prepareMarshalledResponse not implemented")
+}
+
+func (g grpcWebTextClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
+	return grpcExtractRequestMeta("application/grpc-web-text", "application/grpc-web-text+", headers)
+}
+
+func (g grpcWebTextClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
+	return grpcAddResponseMeta("application/grpc-web-text+", meta, headers)
+}
+
+func (g grpcWebTextClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
+	return grpcWebClientProtocol{}.encodeEnd(op, end, writer, wasInHeaders)
+}
+
+func (g grpcWebTextClientProtocol) decodeEnvelope(bytes envelopeBytes) (envelope, error) {
+	return grpcServerProtocol{}.decodeEnvelope(bytes)
+}
+
+func (g grpcWebTextClientProtocol) encodeEnvelope(env envelope) envelopeBytes {
+	return grpcWebClientProtocol{}.encodeEnvelope(env)
+}
+
+func (g grpcWebTextClientProtocol) String() string {
 	return g.protocol().String()
 }
 
@@ -640,4 +708,138 @@ func grpcTimeoutUnitLookup(unit byte) time.Duration {
 	default:
 		return 0
 	}
+}
+
+// grpcWebTextResponseWriter wraps an http.ResponseWriter and base64-encodes
+// the response body for grpc-web-text.
+type grpcWebTextResponseWriter struct {
+	http.ResponseWriter
+
+	encoder io.WriteCloser
+}
+
+// newGRPCWebTextResponseWriter creates a new grpcWebTextResponseWriter.
+func newGRPCWebTextResponseWriter(w http.ResponseWriter) *grpcWebTextResponseWriter {
+	return &grpcWebTextResponseWriter{
+		ResponseWriter: w,
+	}
+}
+
+func (w *grpcWebTextResponseWriter) Write(p []byte) (int, error) {
+	if w.encoder == nil {
+		w.encoder = base64.NewEncoder(base64.StdEncoding, w.ResponseWriter)
+	}
+	return w.encoder.Write(p)
+}
+
+func (w *grpcWebTextResponseWriter) Flush() {
+	// Close the base64 encoder to flush any remaining data. This may be
+	// called multiple times as needed, padding is output on Close.
+	// See https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-WEB.md
+	if w.encoder != nil {
+		_ = w.encoder.Close()
+		w.encoder = nil
+	}
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Unwrap returns the underlying http.ResponseWriter.
+func (w grpcWebTextResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+// grpcWebTextReader wraps an io.Reader and base64-decodes the response body
+// for grpc-web-text.
+type grpcWebTextReader struct {
+	delegate     io.Reader
+	start, end   int
+	inputBuffer  [512]byte
+	outputBuffer [384]byte
+	output       []byte
+}
+
+// newGRPCWebTextReader creates a new grpcWebTextReader.
+func newGRPCWebTextReader(r io.Reader) *grpcWebTextReader {
+	return &grpcWebTextReader{
+		delegate: r,
+	}
+}
+
+// Read reads base64-encoded data from the underlying reader and decodes it.
+// The reader handles padding characters within the stream. It will ensure that
+// padding is always at the end of a chunk of data when processing the chunk.
+func (r *grpcWebTextReader) Read(dst []byte) (int, error) {
+	if len(dst) == 0 {
+		return 0, nil
+	}
+	if len(r.output) > 0 {
+		n := copy(dst, r.output)
+		r.output = r.output[n:]
+		return n, nil
+	}
+	// Read from the stream in 4-byte tokens.
+	for r.end-r.start < 4 {
+		size, err := r.readWithoutNewlines(r.inputBuffer[r.end:])
+		if size == 0 {
+			if err == nil {
+				err = io.ErrNoProgress
+			} else if errors.Is(err, io.EOF) && r.end > r.start {
+				// Non 4-byte chunk at the end of the stream.
+				err = io.ErrUnexpectedEOF
+			}
+			return 0, err
+		}
+		r.end += size
+	}
+	// Decode the next chunk of data.
+	length := ((r.end - r.start) / 4) * 4
+	dstLength := base64.StdEncoding.EncodedLen(len(r.outputBuffer))
+	chunkLength := min(dstLength, length)
+
+	// If we have padding, we split the stream at the padding and decode the
+	// chunk up to the padding.
+	if index := bytes.IndexRune(r.inputBuffer[r.start:r.end], base64.StdPadding); index != -1 {
+		chunkOffset := ((index + 4) / 4) * 4
+		chunkLength = min(chunkLength, chunkOffset)
+	}
+	output := r.outputBuffer[:]
+	input := r.inputBuffer[r.start : r.start+chunkLength]
+	size, err := base64.StdEncoding.Decode(output, input)
+	if err != nil {
+		return 0, err
+	}
+	r.start += chunkLength
+	if r.start == r.end {
+		r.start, r.end = 0, 0
+	}
+	r.output = output[:size]
+	size = copy(dst, r.output)
+	r.output = r.output[size:]
+	return size, err
+}
+
+// readWithoutNewlines reads from the underlying reader, skipping over any
+// newline characters in the buffer. This follows the behavior of
+// base64.NewDecoder.
+func (r *grpcWebTextReader) readWithoutNewlines(dst []byte) (n int, err error) {
+	n, err = r.delegate.Read(dst)
+	for n > 0 {
+		offset := 0
+		for i, b := range dst[:n] {
+			if b != '\r' && b != '\n' {
+				if i != offset {
+					dst[offset] = b
+				}
+				offset++
+			}
+		}
+		if offset > 0 {
+			return offset, err
+		}
+		// Previous buffer entirely whitespace, read again.
+		n, err = r.delegate.Read(dst)
+	}
+	return n, err
 }

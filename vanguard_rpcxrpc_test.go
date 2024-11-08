@@ -16,7 +16,10 @@ package vanguard
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -415,4 +418,160 @@ func TestMux_RPCxRPC(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_grpcWebText(t *testing.T) {
+	t.Parallel()
+
+	var interceptor testInterceptor
+	serveMux := http.NewServeMux()
+	serveMux.Handle(testv1connect.NewContentServiceHandler(
+		testv1connect.UnimplementedContentServiceHandler{},
+		connect.WithInterceptors(&interceptor),
+	))
+
+	svcHandler := protocolAssertMiddleware(
+		ProtocolConnect, CodecProto, CompressionIdentity, serveMux,
+	)
+	services := []*Service{
+		NewService(
+			testv1connect.ContentServiceName,
+			svcHandler,
+			WithNoTargetCompression(),
+		),
+	}
+	handler, err := NewTranscoder(services)
+	require.NoError(t, err)
+	server := httptest.NewUnstartedServer(handler)
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	disableCompression(server)
+	t.Cleanup(server.Close)
+
+	grpcWebClient := grpcWebTextHijackClient{client: server.Client()}
+	client := testv1connect.NewContentServiceClient(
+		grpcWebClient, server.URL, connect.WithGRPCWeb(),
+		connect.WithAcceptCompression("gzip", nil, nil),
+	)
+
+	ctx := context.Background()
+	invoke := func(
+		client testv1connect.ContentServiceClient,
+		header http.Header,
+		msgs []proto.Message,
+	) (http.Header, []proto.Message, http.Header, error) {
+		return outputFromBidiStream(ctx, client.Subscribe, header, msgs)
+	}
+	stream := testStream{
+		method:    testv1connect.ContentServiceSubscribeProcedure,
+		reqHeader: http.Header{"Message": []string{"hello"}},
+		rspHeader: http.Header{"Message": []string{"world"}},
+		msgs: []testMsg{
+			{in: &testMsgIn{
+				msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"xyz.*", "abc*.jpg"}},
+			}},
+			{out: &testMsgOut{
+				msg: &testv1.SubscribeResponse{
+					FilenameChanged: "xyz1.foo",
+				},
+			}},
+			{out: &testMsgOut{
+				msg: &testv1.SubscribeResponse{
+					FilenameChanged: "xyz2.foo",
+				},
+			}},
+			{in: &testMsgIn{
+				msg: &testv1.SubscribeRequest{FilenamePatterns: []string{"test.test"}},
+			}},
+			{out: &testMsgOut{
+				msg: &testv1.SubscribeResponse{
+					FilenameChanged: "test.test",
+				},
+			}},
+		},
+		rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
+	}
+	for i, v := range stream.msgs {
+		var msg proto.Message
+		if v.in != nil {
+			msg = v.in.msg
+		} else {
+			msg = v.out.msg
+		}
+		t.Log(i, proto.Size(msg))
+	}
+	runRPCTestCase(t, &interceptor, client, invoke, stream)
+}
+
+// grpcWebTextHijackClient converts a grpcWeb client to a grpcWebText client.
+type grpcWebTextHijackClient struct {
+	client connect.HTTPClient
+}
+
+func (c grpcWebTextHijackClient) Do(req *http.Request) (*http.Response, error) {
+	if req.Method != http.MethodPost {
+		return nil, fmt.Errorf("unexpected method: %s", req.Method)
+	}
+	if contentType := req.Header.Get("Content-Type"); contentType != "application/grpc-web+proto" {
+		return nil, fmt.Errorf("unexpected content type: %s", contentType)
+	}
+	req.Header.Set("Content-Type", "application/grpc-web-text+proto")
+	req.Header.Del("Content-Length")
+	req.Header.Del("Grpc-Accept-Encoding")
+	requestBody := req.Body
+	pipeReader, pipeWriter := io.Pipe()
+	go func() {
+		var err error
+		for {
+			var env [5]byte
+			if _, err = io.ReadFull(requestBody, env[:]); err != nil {
+				break
+			}
+			size := binary.BigEndian.Uint32(env[1:])
+			buf := make([]byte, size)
+			if _, err = io.ReadFull(requestBody, buf); err != nil {
+				break
+			}
+			enc := base64.NewEncoder(base64.StdEncoding, pipeWriter)
+			if _, err = enc.Write(env[:]); err != nil {
+				break
+			}
+			if _, err := enc.Write(buf); err != nil {
+				break
+			}
+			if err = enc.Close(); err != nil {
+				break
+			}
+		}
+		pipeWriter.CloseWithError(err)
+	}()
+	req.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: pipeReader,
+		Closer: requestBody,
+	}
+
+	rsp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	contentType := rsp.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "application/grpc-web-text+proto") {
+		return rsp, nil // Unknown content type, return as is.
+	}
+
+	rsp.Header.Set("Content-Type", "application/grpc-web+proto")
+	rsp.Header.Del("Content-Length")
+	rspBody := rsp.Body
+	rsp.Body = struct {
+		io.Reader
+		io.Closer
+	}{
+		Reader: newGRPCWebTextReader(rspBody),
+		Closer: rspBody,
+	}
+	return rsp, nil
 }

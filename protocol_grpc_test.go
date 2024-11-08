@@ -17,8 +17,10 @@ package vanguard
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/quick"
 	"time"
@@ -166,4 +168,77 @@ func compareErrors(t *testing.T, got, want *connect.Error) {
 			require.Empty(t, cmp.Diff(wantedMsg, gotMsg, protocmp.Transform()))
 		}
 	}
+}
+
+func TestGRPCWebTextResponseWriter(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	writer := newGRPCWebTextResponseWriter(rec)
+	writer.Header().Set("Content-Type", "application/grpc-web-text+proto")
+	_, err := writer.Write([]byte("Hello, 世界"))
+	require.NoError(t, err)
+	writer.Flush()
+	_, err = writer.Write([]byte("Hello, 世界"))
+	require.NoError(t, err)
+	writer.Flush()
+
+	assert.Equal(t, "SGVsbG8sIOS4lueVjA==SGVsbG8sIOS4lueVjA==", rec.Body.String())
+	assert.Equal(t, "application/grpc-web-text+proto", rec.Header().Get("Content-Type"))
+
+	out, err := io.ReadAll(newGRPCWebTextReader(strings.NewReader(rec.Body.String())))
+	require.NoError(t, err)
+	assert.Equal(t, "Hello, 世界Hello, 世界", string(out))
+}
+
+func TestGRPCWebTextReader(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name, input, output string
+	}{
+		{"hello", "SGVsbG8sIOS4lueVjA==", "Hello, 世界"},
+		{"hello_duplicate", "SGVsbG8sIOS4lueVjA==SGVsbG8sIOS4lueVjA==", "Hello, 世界Hello, 世界"},
+		{"some_data", "c29tZSBkYXRhIHdpdGggACBhbmQg77u/", "some data with \x00 and \ufeff"},
+		{"ab", "QQ==Qg==", "AB"},
+		{"a_b", "Q\nQ=\r=Qg=\r=", "AB"},
+		{
+			"foobar",
+			"Zg==" + "Zm8=" + "Zm9v" + "Zm9vYg==" + "Zm9vYmE=" + "Zm9vYmFy",
+			"f" + "fo" + "foo" + "foob" + "fooba" + "foobar",
+		},
+		{
+			"RFC3548",
+			"FPucA9l+" + "FPucA9k=" + "FPucAw==",
+			"\x14\xfb\x9c\x03\xd9\x7e" + "\x14\xfb\x9c\x03\xd9" + "\x14\xfb\x9c\x03",
+		},
+		{
+			"wikipedia",
+			"c3VyZS4=" + "c3VyZQ==" + "c3Vy" + "c3U=" + "bGVhc3VyZS4=" + "ZWFzdXJlLg==" + "YXN1cmUu" + "c3VyZS4=",
+			"sure." + "sure" + "sur" + "su" + "leasure." + "easure." + "asure." + "sure.",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			decoder := newGRPCWebTextReader(strings.NewReader(test.input))
+			b, err := io.ReadAll(decoder)
+			require.NoError(t, err)
+			output := string(b)
+			assert.Equal(t, test.output, output)
+		})
+	}
+	t.Run("partial_reads", func(t *testing.T) {
+		var buf [5]byte
+		decoder := newGRPCWebTextReader(strings.NewReader("SGVsbG8sIOS4lueVjA==SGVsbG8sIOS4lueVjA=="))
+		total := 0
+		for {
+			n, err := decoder.Read(buf[:])
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			require.NoError(t, err)
+			total += n
+		}
+		assert.Equal(t, len("Hello, 世界Hello, 世界"), total)
+	})
 }
