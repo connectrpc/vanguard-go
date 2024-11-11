@@ -491,15 +491,6 @@ func Test_grpcWebText(t *testing.T) {
 		},
 		rspTrailer: http.Header{"Trailer-Val": []string{"end"}},
 	}
-	for i, v := range stream.msgs {
-		var msg proto.Message
-		if v.in != nil {
-			msg = v.in.msg
-		} else {
-			msg = v.out.msg
-		}
-		t.Log(i, proto.Size(msg))
-	}
 	runRPCTestCase(t, &interceptor, client, invoke, stream)
 }
 

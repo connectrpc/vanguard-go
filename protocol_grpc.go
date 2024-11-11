@@ -775,9 +775,9 @@ func (r *grpcWebTextReader) Read(dst []byte) (int, error) {
 		return 0, nil
 	}
 	if len(r.output) > 0 {
-		n := copy(dst, r.output)
-		r.output = r.output[n:]
-		return n, nil
+		size := copy(dst, r.output)
+		r.output = r.output[size:]
+		return size, nil
 	}
 	// Read from the stream in 4-byte tokens.
 	for r.end-r.start < 4 {
@@ -797,15 +797,14 @@ func (r *grpcWebTextReader) Read(dst []byte) (int, error) {
 	length := ((r.end - r.start) / 4) * 4
 	dstLength := base64.StdEncoding.EncodedLen(len(r.outputBuffer))
 	chunkLength := min(dstLength, length)
-
+	input := r.inputBuffer[r.start : r.start+chunkLength]
 	// If we have padding, we split the stream at the padding and decode the
 	// chunk up to the padding.
-	if index := bytes.IndexRune(r.inputBuffer[r.start:r.end], base64.StdPadding); index != -1 {
-		chunkOffset := ((index + 4) / 4) * 4
-		chunkLength = min(chunkLength, chunkOffset)
+	if index := bytes.IndexRune(input, base64.StdPadding); index != -1 {
+		chunkLength = ((index + 4) / 4) * 4
+		input = input[:chunkLength]
 	}
 	output := r.outputBuffer[:]
-	input := r.inputBuffer[r.start : r.start+chunkLength]
 	size, err := base64.StdEncoding.Decode(output, input)
 	if err != nil {
 		return 0, err
