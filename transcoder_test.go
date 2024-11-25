@@ -1609,7 +1609,9 @@ func checkStageRead(t *testing.T, msg *message, compressed bool) {
 func checkStageDecoded(t *testing.T, msg *message) {
 	t.Helper()
 	require.Equal(t, stageDecoded, msg.stage)
-	require.Equal(t, testDataString, msg.msg.(*wrapperspb.StringValue).GetValue())
+	value, ok := msg.msg.(*wrapperspb.StringValue)
+	require.True(t, ok)
+	require.Equal(t, testDataString, value.GetValue())
 	// Should not be possible to go backwards.
 	require.Error(t, msg.advanceToStage(nil, stageRead))
 	require.Error(t, msg.advanceToStage(nil, stageEmpty))
@@ -1645,15 +1647,22 @@ func (f *fakeCodec) Name() string {
 	return f.name
 }
 
-func (f *fakeCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+func (f *fakeCodec) MarshalAppend(src []byte, msg proto.Message) ([]byte, error) {
 	f.marshalCalls++
-	val := msg.(*wrapperspb.StringValue).GetValue()
-	return append(b, ([]byte)(val)...), nil
+	value, ok := msg.(*wrapperspb.StringValue)
+	if !ok {
+		return nil, fmt.Errorf("unexpected message type %T", msg)
+	}
+	return append(src, ([]byte)(value.GetValue())...), nil
 }
 
-func (f *fakeCodec) Unmarshal(b []byte, msg proto.Message) error {
+func (f *fakeCodec) Unmarshal(src []byte, msg proto.Message) error {
 	f.unmarshalCalls++
-	msg.(*wrapperspb.StringValue).Value = string(b)
+	value, ok := msg.(*wrapperspb.StringValue)
+	if !ok {
+		return fmt.Errorf("unexpected message type %T", msg)
+	}
+	value.Value = string(src)
 	return nil
 }
 

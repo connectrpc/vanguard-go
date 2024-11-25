@@ -206,7 +206,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				data := rsp.Body.Bytes()
 				rsp.Body.Reset()
 				require.NoError(b, json.Compact(rsp.Body, data))
-				assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
+				assert.True(b, bytes.Equal(rspMsgJSON, rsp.Body.Bytes()), "response body")
 			}
 		})
 		b.StopTimer()
@@ -294,7 +294,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			data := rsp.Body.Bytes()
 			rsp.Body.Reset()
 			require.NoError(b, json.Compact(rsp.Body, data))
-			assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
+			assert.True(b, bytes.Equal(rspMsgJSON, rsp.Body.Bytes()), "response body")
 		}
 		b.StopTimer()
 	})

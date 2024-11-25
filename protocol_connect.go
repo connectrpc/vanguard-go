@@ -390,7 +390,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 
 	vals.Set("message", msgStr)
 	queryString := vals.Encode()
-	if uint32(len(op.methodConf.methodPath)+len(queryString)+1) > op.methodConf.maxGetURLBytes {
+	if len(op.methodConf.methodPath)+len(queryString)+1 > int(op.methodConf.maxGetURLBytes) {
 		// URL is too big; fall back to POST
 		return op.methodConf.methodPath, "", http.MethodPost, true, nil
 	}
@@ -452,8 +452,13 @@ func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, 
 	if err := enc.Encode(streamEnd); err != nil {
 		buffer.WriteString(`{"error": {"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}}`)
 	}
-	// TODO: compress?
-	env := envelope{trailer: true, length: uint32(buffer.Len())}
+	if buffer.Len() > math.MaxUint32 {
+		buffer.Reset()
+		buffer.WriteString(`{"error": {"code": "internal", "message": "response too large"}}`)
+	}
+	length := uint32(buffer.Len()) //nolint:gosec // Length is checked above
+	// TODO: Send envelope compressed if possible.
+	env := envelope{trailer: true, length: length}
 	envBytes := c.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
 	_, _ = buffer.WriteTo(writer)

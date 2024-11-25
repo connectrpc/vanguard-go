@@ -784,8 +784,11 @@ func outputFromUnary[Req, Resp any](
 	if len(reqs) != 1 {
 		return nil, nil, nil, fmt.Errorf("unary method takes exactly 1 request but got %d", len(reqs))
 	}
-	req := any(reqs[0])
-	resp, err := method(ctx, makeRequest(headers, req.(*Req)))
+	req, ok := any(reqs[0]).(*Req)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("expected %T, got %T", new(Req), reqs[0])
+	}
+	resp, err := method(ctx, makeRequest(headers, req))
 	if err != nil {
 		var headers http.Header
 		if connErr := new(connect.Error); errors.As(err, &connErr) {
@@ -793,8 +796,11 @@ func outputFromUnary[Req, Resp any](
 		}
 		return headers, nil, nil, err
 	}
-	msg := any(resp.Msg)
-	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
+	msg, ok := any(resp.Msg).(proto.Message)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("expected proto.Message, got %T", resp.Msg)
+	}
+	return resp.Header(), []proto.Message{msg}, resp.Trailer(), nil
 }
 
 func outputFromServerStream[Req, Resp any](
@@ -808,8 +814,11 @@ func outputFromServerStream[Req, Resp any](
 	if len(reqs) != 1 {
 		return nil, nil, nil, fmt.Errorf("unary method takes exactly 1 request but got %d", len(reqs))
 	}
-	req := any(reqs[0])
-	str, err := method(ctx, makeRequest(headers, req.(*Req)))
+	req, ok := any(reqs[0]).(*Req)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("expected %T, got %T", new(Req), reqs[0])
+	}
+	str, err := method(ctx, makeRequest(headers, req))
 	if err != nil {
 		var headers http.Header
 		if connErr := new(connect.Error); errors.As(err, &connErr) {
@@ -819,8 +828,11 @@ func outputFromServerStream[Req, Resp any](
 	}
 	var msgs []proto.Message
 	for str.Receive() {
-		msg := any(str.Msg())
-		msgs = append(msgs, msg.(proto.Message))
+		msg, ok := any(str.Msg()).(proto.Message)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("expected proto.Message, got %T", str.Msg())
+		}
+		msgs = append(msgs, msg)
 	}
 	return str.ResponseHeader(), msgs, str.ResponseTrailer(), str.Err()
 }
@@ -838,7 +850,11 @@ func outputFromClientStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
-		if str.Send(any(msg).(*Req)) != nil {
+		req, ok := any(msg).(*Req)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("expected %T, got %T", new(Req), msg)
+		}
+		if str.Send(req) != nil {
 			// we don't need this error; we'll get the error below
 			// since str.CloseAndReceive returns the actual RPC errors
 			break
@@ -852,8 +868,11 @@ func outputFromClientStream[Req, Resp any](
 		}
 		return headers, nil, nil, err
 	}
-	msg := any(resp.Msg)
-	return resp.Header(), []proto.Message{msg.(proto.Message)}, resp.Trailer(), nil
+	msg, ok := any(resp.Msg).(proto.Message)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("expected proto.Message, got %T", resp.Msg)
+	}
+	return resp.Header(), []proto.Message{msg}, resp.Trailer(), nil
 }
 
 func outputFromBidiStream[Req, Resp any](
@@ -882,8 +901,8 @@ func outputFromBidiStream[Req, Resp any](
 				}
 				return
 			}
-			msg := any(resp)
-			msgs = append(msgs, msg.(proto.Message))
+			msg := any(resp).(proto.Message) //nolint:errcheck
+			msgs = append(msgs, msg)
 		}
 	}()
 
@@ -891,7 +910,8 @@ func outputFromBidiStream[Req, Resp any](
 		str.RequestHeader()[k] = v
 	}
 	for _, msg := range reqs {
-		if str.Send(any(msg).(*Req)) != nil {
+		req := any(msg).(*Req) //nolint:errcheck
+		if str.Send(req) != nil {
 			// we don't need this error; we'll get the error from above
 			// goroutine since str.Receive returns the actual RPC errors
 			break

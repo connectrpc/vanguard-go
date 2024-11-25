@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/textproto"
 	"strconv"
@@ -184,8 +185,13 @@ func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer
 	buffer := op.bufferPool.Get()
 	defer op.bufferPool.Put(buffer)
 	_ = trailers.Write(buffer)
+	if buffer.Len() > math.MaxUint32 {
+		// TODO: FIX ME
+	}
+	length := uint32(buffer.Len()) //nolint:gosec // Length is checked above.
+
 	// TODO: Send envelope compressed if possible.
-	env := envelope{trailer: true, length: uint32(buffer.Len())}
+	env := envelope{trailer: true, length: length}
 	envBytes := g.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
 	_, _ = buffer.WriteTo(writer)
@@ -393,8 +399,14 @@ func grpcWriteEndToTrailers(respEnd *responseEnd, trailers http.Header) {
 }
 
 func grpcStatusFromError(err *connect.Error) *status.Status {
+	var code int32
+	if err.Code() == math.MaxUint32 {
+		code = int32(connect.CodeUnknown)
+	} else {
+		code = int32(err.Code())
+	}
 	stat := &status.Status{
-		Code:    int32(err.Code()),
+		Code:    code,
 		Message: err.Message(),
 	}
 	if details := err.Details(); len(details) > 0 {

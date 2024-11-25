@@ -48,7 +48,7 @@ func TestHTTPErrorWriter(t *testing.T) {
 	assert.Equal(t, "identity", rec.Header().Get("Content-Encoding"))
 	var out bytes.Buffer
 	require.NoError(t, json.Compact(&out, rec.Body.Bytes()))
-	assert.Equal(t, `{"code":16,"message":"test error: Hello, 世界","details":[]}`, out.String())
+	assert.JSONEq(t, `{"code":16,"message":"test error: Hello, 世界","details":[]}`, out.String())
 
 	body := bytes.NewBuffer(rec.Body.Bytes())
 	got := httpErrorFromResponse(http.StatusUnauthorized, "application/json", body)
