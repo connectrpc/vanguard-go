@@ -183,7 +183,7 @@ func TestGRPCWebTextResponseWriter(t *testing.T) {
 	require.NoError(t, err)
 	writer.Flush()
 
-	assert.Equal(t, "SGVsbG8sIOS4lueVjA==SGVsbG8sIOS4lueVjA==", rec.Body.String())
+	assert.Equal(t, "SGVsbG8sIOS4lueVjA==\nSGVsbG8sIOS4lueVjA==\n", rec.Body.String())
 	assert.Equal(t, "application/grpc-web-text+proto", rec.Header().Get("Content-Type"))
 
 	out, err := io.ReadAll(newGRPCWebTextReader(strings.NewReader(rec.Body.String())))

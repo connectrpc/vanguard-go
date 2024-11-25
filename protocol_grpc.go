@@ -740,6 +740,9 @@ func (w *grpcWebTextResponseWriter) Flush() {
 		_ = w.encoder.Close()
 		w.encoder = nil
 	}
+	// Some clients may expect a newline after each message. This does not
+	// affect the base64 encoding.
+	_, _ = w.ResponseWriter.Write([]byte{'\n'})
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
 	}
