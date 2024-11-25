@@ -46,6 +46,11 @@ const (
 	// streaming endpoints. However, bidirectional streams are only supported
 	// when combined with HTTP/2.
 	ProtocolGRPCWeb
+	// ProtocolGRPCWebText is a variant of ProtocolGRPCWeb that uses base64
+	// text encoding for the request and response bodies.
+	//
+	// This protocol is not supported on the server side.
+	ProtocolGRPCWebText
 	// ProtocolREST indicates the REST+JSON protocol. This protocol often
 	// requires non-trivial transformations between HTTP requests and responses
 	// and Protobuf request and response messages.
@@ -96,6 +101,8 @@ func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
 		return grpcServerProtocol{}
 	case ProtocolGRPCWeb:
 		return grpcWebServerProtocol{}
+	case ProtocolGRPCWebText:
+		return nil // gRPC-Web Text is not supported on the server.
 	case ProtocolREST:
 		return restServerProtocol{}
 	default:

@@ -312,6 +312,8 @@ func classifyRequest(req *http.Request) (clientProtocolHandler, url.Values) {
 		return grpcClientProtocol{}, nil
 	case contentType == "application/grpc-web" || strings.HasPrefix(contentType, "application/grpc-web+"):
 		return grpcWebClientProtocol{}, nil
+	case contentType == "application/grpc-web-text" || strings.HasPrefix(contentType, "application/grpc-web-text+"):
+		return grpcWebTextClientProtocol{}, nil
 	case strings.HasPrefix(contentType, "application/"):
 		connectVersion := req.Header["Connect-Protocol-Version"]
 		if len(connectVersion) == 1 && connectVersion[0] == "1" {
@@ -2177,10 +2179,10 @@ func asFlusher(respWriter http.ResponseWriter) http.Flusher {
 	// we can't use that since it isn't available prior to Go 1.21.
 	for {
 		switch typedWriter := respWriter.(type) {
-		case http.Flusher:
-			return typedWriter
 		case errorFlusher:
 			return flusherNoError{f: typedWriter}
+		case http.Flusher:
+			return typedWriter
 		case interface{ Unwrap() http.ResponseWriter }:
 			respWriter = typedWriter.Unwrap()
 		default:
