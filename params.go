@@ -88,7 +88,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 			)
 		}
 		return connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("invalid parameter %q %w", fieldPath, err),
+			fmt.Errorf("invalid parameter %q: %w", fieldPath, err),
 		)
 	}
 

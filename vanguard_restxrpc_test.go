@@ -426,7 +426,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			code: http.StatusBadRequest,
 			body: &status.Status{
 				Code:    int32(connect.CodeInvalidArgument),
-				Message: "invalid parameter \"id\" invalid character 'a' in literal null (expecting 'u')",
+				Message: "invalid parameter \"id\": invalid character 'a' in literal null (expecting 'u')",
 			},
 		},
 	}, {
