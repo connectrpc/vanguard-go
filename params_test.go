@@ -328,7 +328,7 @@ func TestSetParameter(t *testing.T) {
 		fields:  "enum_value",
 		value:   "unknown",
 		want:    &testv1.ParameterValues{},
-		wantErr: "invalid_argument: invalid parameter \"enum_value\" unknown enum: unknown",
+		wantErr: "invalid_argument: invalid parameter \"enum_value\": unknown enum: unknown",
 	}, {
 		fields: "enum_list",
 		value:  "1",
@@ -371,7 +371,7 @@ func TestSetParameter(t *testing.T) {
 		fields:  "string_map",
 		value:   "hello",
 		want:    &testv1.ParameterValues{},
-		wantErr: "invalid_argument: invalid parameter \"string_map\" unsupported message type vanguard.test.v1.ParameterValues.StringMapEntry",
+		wantErr: "invalid_argument: invalid parameter \"string_map\": unsupported message type vanguard.test.v1.ParameterValues.StringMapEntry",
 	}, {
 		fields:  "nested_map.double_value",
 		value:   "1.234",
