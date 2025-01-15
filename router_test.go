@@ -146,7 +146,6 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 	trie := initTrie(t)
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.path, func(t *testing.T) {
 			t.Parallel()
 			var present, absent []string
@@ -157,7 +156,6 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				absent = []string{http.MethodGet, http.MethodPost, http.MethodDelete, http.MethodPut}
 			}
 			for _, method := range present {
-				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
 					target, vars, _ := trie.match(testCase.path, method)
@@ -177,7 +175,6 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 				})
 			}
 			for _, method := range absent {
-				method := method
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
 					target, _, _ := trie.match(testCase.path, method)

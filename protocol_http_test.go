@@ -242,7 +242,6 @@ func TestHTTPEncodePathValues(t *testing.T) {
 		wantErr:      "unknown field in field path \"unknownQueryParam\": element \"unknownQueryParam\" does not correspond to any field of type vanguard.test.v1.ParameterValues",
 	}}
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.tmpl, func(t *testing.T) {
 			t.Parallel()
 			segments, variables, err := parsePathTemplate(testCase.tmpl)

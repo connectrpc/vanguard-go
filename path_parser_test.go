@@ -230,7 +230,6 @@ func TestPath_ParsePathTemplate(t *testing.T) {
 		},
 	}}
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.tmpl, func(t *testing.T) {
 			t.Parallel()
 			segments, variables, err := parsePathTemplate(testCase.tmpl)
@@ -292,7 +291,6 @@ func TestPath_Escaping(t *testing.T) {
 		wantEscaped: "foo%2Fbar",
 	}}
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.input, func(t *testing.T) {
 			t.Parallel()
 			dec, err := pathUnescape(testCase.input, testCase.mode)

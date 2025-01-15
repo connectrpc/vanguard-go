@@ -81,7 +81,6 @@ func TestIssue148(t *testing.T) {
 		"json":  {connect.WithGRPC(), connect.WithProtoJSON()},
 	}
 	for caseName := range clientCases {
-		caseName := caseName
 		clientOpts := clientCases[caseName]
 		t.Run(caseName, func(t *testing.T) {
 			t.Parallel()

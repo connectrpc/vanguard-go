@@ -596,11 +596,9 @@ func TestMux_RESTxRPC(t *testing.T) {
 	}
 	codec := NewJSONCodec(protoregistry.GlobalTypes)
 	for _, opts := range testOpts {
-		opts := opts
 		t.Run(opts.name, func(t *testing.T) {
 			t.Parallel()
 			for _, testCase := range testRequests {
-				testCase := testCase
 				t.Run(testCase.name, func(t *testing.T) {
 					t.Parallel()
 

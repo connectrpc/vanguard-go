@@ -488,7 +488,6 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			for i := range testCase.reqs {
@@ -496,7 +495,6 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 				t.Run(testReq.name, func(t *testing.T) {
 					t.Parallel()
 					for _, mode := range muxTestModes {
-						mode := mode
 						t.Run(mode.name, func(t *testing.T) {
 							t.Parallel()
 
@@ -598,7 +596,6 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -987,7 +984,6 @@ func TestTranscoder_Errors(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1316,19 +1312,15 @@ func TestTranscoder_PassThrough(t *testing.T) {
 	}
 
 	for _, protocolCase := range protocolOptions {
-		protocolCase := protocolCase
 		t.Run(protocolCase.name, func(t *testing.T) {
 			t.Parallel()
 			for _, encodingCase := range encodingOptions {
-				encodingCase := encodingCase
 				t.Run(encodingCase.name, func(t *testing.T) {
 					t.Parallel()
 					for _, compressionCase := range compressionOptions {
-						compressionCase := compressionCase
 						t.Run(compressionCase.name, func(t *testing.T) {
 							t.Parallel()
 							for _, testReq := range testRequests {
-								testReq := testReq
 								t.Run(testReq.name, func(t *testing.T) {
 									t.Parallel()
 
@@ -1499,15 +1491,12 @@ func TestMessage_AdvanceStage(t *testing.T) {
 	}
 
 	for _, compressed := range []bool{true, false} {
-		compressed := compressed
 		t.Run(fmt.Sprintf("compressed:%v", compressed), func(t *testing.T) {
 			t.Parallel()
 			for _, isRequest := range []bool{true, false} {
-				isRequest := isRequest
 				t.Run(fmt.Sprintf("request:%v", isRequest), func(t *testing.T) {
 					t.Parallel()
 					for _, testCase := range testCases {
-						testCase := testCase
 						t.Run(testCase.name, func(t *testing.T) {
 							t.Parallel()
 
