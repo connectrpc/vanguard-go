@@ -60,15 +60,6 @@ const (
 	ContentServiceSubscribeProcedure = "/vanguard.test.v1.ContentService/Subscribe"
 )
 
-// These variables are the protoreflect.Descriptor objects for the RPCs defined in this package.
-var (
-	contentServiceServiceDescriptor         = v1.File_vanguard_test_v1_content_proto.Services().ByName("ContentService")
-	contentServiceIndexMethodDescriptor     = contentServiceServiceDescriptor.Methods().ByName("Index")
-	contentServiceUploadMethodDescriptor    = contentServiceServiceDescriptor.Methods().ByName("Upload")
-	contentServiceDownloadMethodDescriptor  = contentServiceServiceDescriptor.Methods().ByName("Download")
-	contentServiceSubscribeMethodDescriptor = contentServiceServiceDescriptor.Methods().ByName("Subscribe")
-)
-
 // ContentServiceClient is a client for the vanguard.test.v1.ContentService service.
 type ContentServiceClient interface {
 	// Index returns a html index page at the given path.
@@ -90,29 +81,30 @@ type ContentServiceClient interface {
 // http://api.acme.com or https://acme.com/grpc).
 func NewContentServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) ContentServiceClient {
 	baseURL = strings.TrimRight(baseURL, "/")
+	contentServiceMethods := v1.File_vanguard_test_v1_content_proto.Services().ByName("ContentService").Methods()
 	return &contentServiceClient{
 		index: connect.NewClient[v1.IndexRequest, httpbody.HttpBody](
 			httpClient,
 			baseURL+ContentServiceIndexProcedure,
-			connect.WithSchema(contentServiceIndexMethodDescriptor),
+			connect.WithSchema(contentServiceMethods.ByName("Index")),
 			connect.WithClientOptions(opts...),
 		),
 		upload: connect.NewClient[v1.UploadRequest, emptypb.Empty](
 			httpClient,
 			baseURL+ContentServiceUploadProcedure,
-			connect.WithSchema(contentServiceUploadMethodDescriptor),
+			connect.WithSchema(contentServiceMethods.ByName("Upload")),
 			connect.WithClientOptions(opts...),
 		),
 		download: connect.NewClient[v1.DownloadRequest, v1.DownloadResponse](
 			httpClient,
 			baseURL+ContentServiceDownloadProcedure,
-			connect.WithSchema(contentServiceDownloadMethodDescriptor),
+			connect.WithSchema(contentServiceMethods.ByName("Download")),
 			connect.WithClientOptions(opts...),
 		),
 		subscribe: connect.NewClient[v1.SubscribeRequest, v1.SubscribeResponse](
 			httpClient,
 			baseURL+ContentServiceSubscribeProcedure,
-			connect.WithSchema(contentServiceSubscribeMethodDescriptor),
+			connect.WithSchema(contentServiceMethods.ByName("Subscribe")),
 			connect.WithClientOptions(opts...),
 		),
 	}
@@ -164,28 +156,29 @@ type ContentServiceHandler interface {
 // By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
 // and JSON codecs. They also support gzip compression.
 func NewContentServiceHandler(svc ContentServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	contentServiceMethods := v1.File_vanguard_test_v1_content_proto.Services().ByName("ContentService").Methods()
 	contentServiceIndexHandler := connect.NewUnaryHandler(
 		ContentServiceIndexProcedure,
 		svc.Index,
-		connect.WithSchema(contentServiceIndexMethodDescriptor),
+		connect.WithSchema(contentServiceMethods.ByName("Index")),
 		connect.WithHandlerOptions(opts...),
 	)
 	contentServiceUploadHandler := connect.NewClientStreamHandler(
 		ContentServiceUploadProcedure,
 		svc.Upload,
-		connect.WithSchema(contentServiceUploadMethodDescriptor),
+		connect.WithSchema(contentServiceMethods.ByName("Upload")),
 		connect.WithHandlerOptions(opts...),
 	)
 	contentServiceDownloadHandler := connect.NewServerStreamHandler(
 		ContentServiceDownloadProcedure,
 		svc.Download,
-		connect.WithSchema(contentServiceDownloadMethodDescriptor),
+		connect.WithSchema(contentServiceMethods.ByName("Download")),
 		connect.WithHandlerOptions(opts...),
 	)
 	contentServiceSubscribeHandler := connect.NewBidiStreamHandler(
 		ContentServiceSubscribeProcedure,
 		svc.Subscribe,
-		connect.WithSchema(contentServiceSubscribeMethodDescriptor),
+		connect.WithSchema(contentServiceMethods.ByName("Subscribe")),
 		connect.WithHandlerOptions(opts...),
 	)
 	return "/vanguard.test.v1.ContentService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
