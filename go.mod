@@ -2,8 +2,6 @@ module connectrpc.com/vanguard
 
 go 1.22
 
-toolchain go1.23.4
-
 require (
 	buf.build/gen/go/connectrpc/eliza/connectrpc/go v1.11.1-20230822171018-8b8b971d6fde.1
 	buf.build/gen/go/connectrpc/eliza/grpc/go v1.3.0-20230822171018-8b8b971d6fde.1
