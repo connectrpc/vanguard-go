@@ -423,7 +423,7 @@ func grpcStatusFromError(err *connect.Error) *status.Status {
 //	https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
 func grpcPercentEncode(msg string) string {
 	var hexCount int
-	for i := range len(msg) {
+	for i := 0; i < len(msg); i++ {
 		if grpcShouldEscape(msg[i]) {
 			hexCount++
 		}
@@ -434,7 +434,7 @@ func grpcPercentEncode(msg string) string {
 	// We need to escape some characters, so we'll need to allocate a new string.
 	var out strings.Builder
 	out.Grow(len(msg) + 2*hexCount)
-	for i := range len(msg) {
+	for i := 0; i < len(msg); i++ {
 		switch char := msg[i]; {
 		case grpcShouldEscape(char):
 			out.WriteByte('%')

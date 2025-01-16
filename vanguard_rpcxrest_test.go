@@ -420,6 +420,7 @@ func TestMux_RPCxREST(t *testing.T) {
 	}}
 
 	for _, opts := range testOpts {
+		opts := opts
 		clients := testClients{
 			libClient: testv1connect.NewLibraryServiceClient(
 				opts.server.Client(), opts.server.URL, opts.opts...,
@@ -431,6 +432,7 @@ func TestMux_RPCxREST(t *testing.T) {
 		t.Run(opts.name, func(t *testing.T) {
 			t.Parallel()
 			for _, req := range testRequests {
+				req := req
 				t.Run(req.name, func(t *testing.T) {
 					t.Parallel()
 

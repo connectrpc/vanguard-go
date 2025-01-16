@@ -100,6 +100,7 @@ func TestGRPCPercentEncoding(t *testing.T) {
 		`foo%bar`,
 		"fiancée",
 	} {
+		input := input
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
 			assert.True(t, utf8.ValidString(input), "input invalid UTF-8")

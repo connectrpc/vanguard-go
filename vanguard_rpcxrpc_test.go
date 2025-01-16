@@ -395,6 +395,7 @@ func TestMux_RPCxRPC(t *testing.T) {
 		},
 	}
 	for _, opts := range testOpts {
+		opts := opts
 		clients := testClients{
 			libClient: testv1connect.NewLibraryServiceClient(
 				opts.server.Client(), opts.server.URL, opts.opts...,
@@ -405,7 +406,8 @@ func TestMux_RPCxRPC(t *testing.T) {
 		}
 		t.Run(opts.name, func(t *testing.T) {
 			t.Parallel()
-			for _, testCase := range testRequests {
+			for _, testReq := range testRequests {
+				testCase := testReq
 				t.Run(testCase.name, func(t *testing.T) {
 					t.Parallel()
 					runRPCTestCase(t, &interceptor, clients, testCase.invoke, testCase.stream)

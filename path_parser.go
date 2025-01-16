@@ -295,7 +295,7 @@ func pathIsHexSlash(input string) bool {
 func pathEscape(input string, mode pathEncoding) string {
 	// Count the number of characters that possibly escaping.
 	hexCount := 0
-	for i := range len(input) {
+	for i := 0; i < len(input); i++ {
 		if pathShouldEscape(input[i], mode) {
 			hexCount++
 		}

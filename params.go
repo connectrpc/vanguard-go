@@ -67,7 +67,7 @@ func isWKTWithScalarJSONMapping(field protoreflect.FieldDescriptor) bool {
 func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescriptor, param string) error {
 	// Traverse the message to the last field.
 	leaf := msg
-	for i := range len(fields) - 1 {
+	for i := 0; i < len(fields)-1; i++ {
 		leaf = leaf.Mutable(fields[i]).Message()
 	}
 	field := fields[len(fields)-1]
@@ -255,7 +255,7 @@ func isNullValue(field protoreflect.FieldDescriptor) bool {
 func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescriptor, index int) (string, error) {
 	// Traverse the message to the last field.
 	leaf := msg
-	for i := range len(fields) - 1 {
+	for i := 0; i < len(fields)-1; i++ {
 		leaf = leaf.Mutable(fields[i]).Message()
 	}
 	field := fields[len(fields)-1]

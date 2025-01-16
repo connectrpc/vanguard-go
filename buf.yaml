@@ -4,7 +4,7 @@ modules:
   - path: internal/examples/pets/internal/proto
     lint:
       use:
-        - STANDARD
+        - DEFAULT
       except:
         - ENUM_VALUE_PREFIX
         - ENUM_VALUE_UPPER_SNAKE_CASE
@@ -16,7 +16,7 @@ deps:
   - buf.build/googleapis/googleapis
 lint:
   use:
-    - STANDARD
+    - DEFAULT
   except:
     - RPC_REQUEST_RESPONSE_UNIQUE
     - RPC_RESPONSE_STANDARD_NAME
