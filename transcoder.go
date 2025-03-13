@@ -875,16 +875,11 @@ func (r *envelopingReader) prepareNext() error {
 			// Oof. We have to buffer entire request in order to measure it.
 			limit := int64(r.rw.op.methodConf.maxMsgBufferBytes)
 			buf := r.rw.op.bufferPool.Get()
-			written, err := io.Copy(buf, &hardLimitReader{r: r.r, rw: r.rw, limit: limit + 1})
+			_, err := io.Copy(buf, &hardLimitReader{r: r.r, rw: r.rw, limit: limit + 1})
 			if err != nil {
 				r.rw.op.bufferPool.Put(buf)
 				r.err = err
 				return err
-			}
-			if written > limit {
-				r.rw.op.bufferPool.Put(buf)
-				r.err = bufferLimitError(limit)
-				return r.err
 			}
 			r.current = buf
 			r.mustReleaseCurrent = true
