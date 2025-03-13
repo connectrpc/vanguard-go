@@ -865,24 +865,30 @@ func (r *envelopingReader) prepareNext() error {
 		env.compressed = r.rw.op.client.reqCompression != nil
 		if r.rw.op.contentLen != -1 {
 			limit := int64(r.rw.op.methodConf.maxMsgBufferBytes)
-			if r.rw.op.contentLen > limit {
+			length := r.rw.op.contentLen
+			if length > limit {
 				return bufferLimitError(limit)
 			}
 			r.current = &hardLimitReader{r: r.r, rw: r.rw, limit: r.rw.op.contentLen, makeError: contentLengthError}
-			env.length = uint32(r.rw.op.contentLen)
+			env.length = uint32(length) //nolint:gosec // Length is validated above.
 		} else {
 			// Oof. We have to buffer entire request in order to measure it.
 			limit := int64(r.rw.op.methodConf.maxMsgBufferBytes)
 			buf := r.rw.op.bufferPool.Get()
-			_, err := io.Copy(buf, &hardLimitReader{r: r.r, rw: r.rw, limit: limit})
+			written, err := io.Copy(buf, &hardLimitReader{r: r.r, rw: r.rw, limit: limit + 1})
 			if err != nil {
 				r.rw.op.bufferPool.Put(buf)
 				r.err = err
 				return err
 			}
+			if written > limit {
+				r.rw.op.bufferPool.Put(buf)
+				r.err = bufferLimitError(limit)
+				return r.err
+			}
 			r.current = buf
 			r.mustReleaseCurrent = true
-			env.length = uint32(buf.Len())
+			env.length = uint32(buf.Len()) //nolint:gosec // Length is validated above.
 		}
 	default: // clientEnveloper != nil
 		var envBytes envelopeBytes
@@ -994,10 +1000,14 @@ func (r *transformingReader) prepareMessage() error {
 		r.envRemain = 0
 		return nil
 	}
+	length := r.buffer.Len()
+	if limit := int(r.rw.op.methodConf.maxMsgBufferBytes); length > limit {
+		return bufferLimitError(int64(limit))
+	}
 	// Need to prefix the buffer with an envelope
 	env := envelope{
 		compressed: r.msg.wasCompressed && r.rw.op.server.reqCompression != nil,
-		length:     uint32(r.buffer.Len()),
+		length:     uint32(length), //nolint:gosec // Length is validated above.
 	}
 	r.env = r.rw.op.serverEnveloper.encodeEnvelope(env)
 	r.envRemain = envelopeLen
@@ -1438,9 +1448,17 @@ func (w *envelopingWriter) Close() error {
 		defer w.rw.op.bufferPool.Put(buf)
 	}
 	if w.remainingBytes == -1 && w.mustReleaseCurrent && w.err == nil {
+		length := buf.Len()
+		if limit := int(w.rw.op.methodConf.maxMsgBufferBytes); length > limit {
+			w.err = bufferLimitError(int64(limit))
+			return w.err
+		}
 		// We were buffering in order to measure size and create envelope,
 		// so do that now.
-		env := envelope{compressed: w.rw.op.client.respCompression != nil, length: uint32(buf.Len())}
+		env := envelope{
+			compressed: w.rw.op.client.respCompression != nil,
+			length:     uint32(buf.Len()), //nolint:gosec // Length is validated above.
+		}
 		envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
 		_, err := w.w.Write(envBytes[:])
 		if err != nil {
@@ -1498,9 +1516,13 @@ func (w *envelopingWriter) maybeInit() {
 		return
 	}
 	// synthesize envelope
+	if limit := int(w.rw.op.methodConf.maxMsgBufferBytes); w.rw.contentLen > limit {
+		w.err = bufferLimitError(int64(limit))
+		return
+	}
 	var env envelope
 	env.compressed = w.rw.op.client.respCompression != nil
-	env.length = uint32(w.rw.contentLen)
+	env.length = uint32(w.rw.contentLen) //nolint:gosec // Length is validated above.
 	envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
 	_, err := w.w.Write(envBytes[:])
 	if err != nil {
@@ -1673,9 +1695,13 @@ func (w *transformingWriter) flushMessage() error {
 	}
 	buffer := w.msg.sendBuffer()
 	if enveloper := w.rw.op.clientEnveloper; enveloper != nil {
+		length := buffer.Len()
+		if limit := int(w.rw.op.methodConf.maxMsgBufferBytes); length > limit {
+			return bufferLimitError(int64(limit))
+		}
 		env := envelope{
 			compressed: w.msg.wasCompressed && w.rw.op.client.respCompression != nil,
-			length:     uint32(buffer.Len()),
+			length:     uint32(length), //nolint:gosec // Length is validated above.
 		}
 		envBytes := enveloper.encodeEnvelope(env)
 		if _, err := w.w.Write(envBytes[:]); err != nil {
@@ -1773,7 +1799,8 @@ type limitWriter struct {
 }
 
 func (l *limitWriter) Write(data []byte) (n int, err error) {
-	if uint32(l.buf.Len()+len(data)) > l.limit {
+	length := l.buf.Len() + len(data)
+	if length > int(l.limit) {
 		err := bufferLimitError(int64(l.limit))
 		l.rw.reportError(err)
 		return 0, err

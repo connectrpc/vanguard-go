@@ -119,12 +119,11 @@ func httpErrorFromResponse(statusCode int, contentType string, src *bytes.Buffer
 			return connect.NewError(connect.CodeInternal, err)
 		}
 		stat.Details = append(stat.Details, body)
-		stat.Code = int32(httpStatusCodeToRPC(statusCode))
+		stat.Code = int32(httpStatusCodeToRPC(statusCode)) //nolint:gosec
 		stat.Message = http.StatusText(statusCode)
 	}
-
 	connectErr := connect.NewWireError(
-		connect.Code(stat.GetCode()),
+		connect.Code(stat.GetCode()), //nolint:gosec // No information loss.
 		errors.New(stat.GetMessage()),
 	)
 	for _, msg := range stat.GetDetails() {

@@ -71,7 +71,6 @@ func TestJSONStabilize(t *testing.T) {
 		},
 	}
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			result, err := jsonStabilize(([]byte)(testCase.input))
@@ -409,7 +408,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			target := msg.NewField(field)
 			listVal := target.List()
 			source := reflect.ValueOf(val)
-			for i := 0; i < source.Len(); i++ {
+			for i := range source.Len() {
 				listVal.Append(asSingularValue(source.Index(i).Interface()))
 			}
 			return target
@@ -464,9 +463,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 		t.Run(marshalOpt.name, func(t *testing.T) {
 			t.Parallel()
 			for _, testCase := range testCases {
-				testCase := testCase
 				for _, fieldName := range testCase.fieldNames {
-					fieldName := fieldName
 					t.Run(fieldName, func(t *testing.T) {
 						t.Parallel()
 						msg := (&testv1.AllTypes{}).ProtoReflect()

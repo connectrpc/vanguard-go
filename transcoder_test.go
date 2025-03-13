@@ -488,15 +488,12 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			for i := range testCase.reqs {
-				testReq := &testCase.reqs[i]
+			for _, testReq := range testCase.reqs {
 				t.Run(testReq.name, func(t *testing.T) {
 					t.Parallel()
 					for _, mode := range muxTestModes {
-						mode := mode
 						t.Run(mode.name, func(t *testing.T) {
 							t.Parallel()
 
@@ -511,7 +508,7 @@ func TestTranscoder_BufferTooLargeFails(t *testing.T) {
 							if mode.optsOnService {
 								svcOpts = testReq.svcOpts
 							}
-							handler, err := mode.makeMux(testReq, []*Service{
+							handler, err := mode.makeMux(&testReq, []*Service{
 								NewService(testv1connect.LibraryServiceName, rpcHandler, svcOpts...),
 								NewService(testv1connect.ContentServiceName, rpcHandler, svcOpts...),
 							})
@@ -598,7 +595,6 @@ func TestTranscoder_ConnectGetUsesPostIfRequestTooLarge(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -987,7 +983,6 @@ func TestTranscoder_Errors(t *testing.T) {
 	}
 
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1316,19 +1311,15 @@ func TestTranscoder_PassThrough(t *testing.T) {
 	}
 
 	for _, protocolCase := range protocolOptions {
-		protocolCase := protocolCase
 		t.Run(protocolCase.name, func(t *testing.T) {
 			t.Parallel()
 			for _, encodingCase := range encodingOptions {
-				encodingCase := encodingCase
 				t.Run(encodingCase.name, func(t *testing.T) {
 					t.Parallel()
 					for _, compressionCase := range compressionOptions {
-						compressionCase := compressionCase
 						t.Run(compressionCase.name, func(t *testing.T) {
 							t.Parallel()
 							for _, testReq := range testRequests {
-								testReq := testReq
 								t.Run(testReq.name, func(t *testing.T) {
 									t.Parallel()
 
@@ -1499,15 +1490,12 @@ func TestMessage_AdvanceStage(t *testing.T) {
 	}
 
 	for _, compressed := range []bool{true, false} {
-		compressed := compressed
 		t.Run(fmt.Sprintf("compressed:%v", compressed), func(t *testing.T) {
 			t.Parallel()
 			for _, isRequest := range []bool{true, false} {
-				isRequest := isRequest
 				t.Run(fmt.Sprintf("request:%v", isRequest), func(t *testing.T) {
 					t.Parallel()
 					for _, testCase := range testCases {
-						testCase := testCase
 						t.Run(testCase.name, func(t *testing.T) {
 							t.Parallel()
 
@@ -1609,7 +1597,8 @@ func checkStageRead(t *testing.T, msg *message, compressed bool) {
 func checkStageDecoded(t *testing.T, msg *message) {
 	t.Helper()
 	require.Equal(t, stageDecoded, msg.stage)
-	require.Equal(t, testDataString, msg.msg.(*wrapperspb.StringValue).GetValue())
+	stringValue, _ := msg.msg.(*wrapperspb.StringValue)
+	require.Equal(t, testDataString, stringValue.GetValue())
 	// Should not be possible to go backwards.
 	require.Error(t, msg.advanceToStage(nil, stageRead))
 	require.Error(t, msg.advanceToStage(nil, stageEmpty))
@@ -1645,15 +1634,23 @@ func (f *fakeCodec) Name() string {
 	return f.name
 }
 
-func (f *fakeCodec) MarshalAppend(b []byte, msg proto.Message) ([]byte, error) {
+func (f *fakeCodec) MarshalAppend(dst []byte, msg proto.Message) ([]byte, error) {
 	f.marshalCalls++
-	val := msg.(*wrapperspb.StringValue).GetValue()
-	return append(b, ([]byte)(val)...), nil
+	stringValue, ok := msg.(*wrapperspb.StringValue)
+	if !ok {
+		return nil, fmt.Errorf("expected *wrapperspb.StringValue, got %T", msg)
+	}
+	val := stringValue.GetValue()
+	return append(dst, ([]byte)(val)...), nil
 }
 
-func (f *fakeCodec) Unmarshal(b []byte, msg proto.Message) error {
+func (f *fakeCodec) Unmarshal(src []byte, msg proto.Message) error {
 	f.unmarshalCalls++
-	msg.(*wrapperspb.StringValue).Value = string(b)
+	stringValue, ok := msg.(*wrapperspb.StringValue)
+	if !ok {
+		return fmt.Errorf("expected *wrapperspb.StringValue, got %T", msg)
+	}
+	stringValue.Value = string(src)
 	return nil
 }
 
