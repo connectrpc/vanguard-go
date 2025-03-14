@@ -57,8 +57,10 @@ func TestIssue148(t *testing.T) {
 	proxy.FlushInterval = -1 // shouldn't be necessary
 	schema, err := protoregistry.GlobalFiles.FindDescriptorByName("connectrpc.eliza.v1.ElizaService")
 	require.NoError(t, err)
+	schemaService, ok := schema.(protoreflect.ServiceDescriptor)
+	require.True(t, ok)
 	transcoder, err := vanguard.NewTranscoder(
-		[]*vanguard.Service{vanguard.NewServiceWithSchema(schema.(protoreflect.ServiceDescriptor), proxy)},
+		[]*vanguard.Service{vanguard.NewServiceWithSchema(schemaService, proxy)},
 		vanguard.WithDefaultServiceOptions(
 			vanguard.WithTargetProtocols(vanguard.ProtocolGRPCWeb),
 			vanguard.WithTargetCodecs(vanguard.CodecProto),
@@ -81,7 +83,6 @@ func TestIssue148(t *testing.T) {
 		"json":  {connect.WithGRPC(), connect.WithProtoJSON()},
 	}
 	for caseName := range clientCases {
-		caseName := caseName
 		clientOpts := clientCases[caseName]
 		t.Run(caseName, func(t *testing.T) {
 			t.Parallel()

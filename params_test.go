@@ -59,7 +59,6 @@ func TestIsParameter(t *testing.T) {
 		isParam:   false,
 	}}
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.fieldPath, func(t *testing.T) {
 			t.Parallel()
 			fields, err := resolvePathToFieldDescriptors(desc, testCase.fieldPath, true)
@@ -401,7 +400,6 @@ func TestSetParameter(t *testing.T) {
 		wantErr: "unknown field in field path \"unknownField\": element \"unknownField\" does not correspond to any field of type vanguard.test.v1.ParameterValues",
 	}}
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.fields+"="+testCase.value, func(t *testing.T) {
 			t.Parallel()
 
@@ -701,7 +699,6 @@ func TestGetParameter(t *testing.T) {
 		want: "2021-01-01T00:00:00Z",
 	}}
 	for _, testCase := range testCases {
-		testCase := testCase
 		t.Run(testCase.fields+"="+testCase.want, func(t *testing.T) {
 			t.Parallel()
 

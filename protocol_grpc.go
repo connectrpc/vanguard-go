@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/textproto"
 	"strconv"
@@ -185,7 +186,11 @@ func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer
 	defer op.bufferPool.Put(buffer)
 	_ = trailers.Write(buffer)
 	// TODO: Send envelope compressed if possible.
-	env := envelope{trailer: true, length: uint32(buffer.Len())}
+	length := len(buffer.Bytes())
+	if length > math.MaxUint32 {
+		return nil
+	}
+	env := envelope{trailer: true, length: uint32(length)}
 	envBytes := g.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
 	_, _ = buffer.WriteTo(writer)
@@ -394,7 +399,7 @@ func grpcWriteEndToTrailers(respEnd *responseEnd, trailers http.Header) {
 
 func grpcStatusFromError(err *connect.Error) *status.Status {
 	stat := &status.Status{
-		Code:    int32(err.Code()),
+		Code:    int32(err.Code()), //nolint:gosec // No information loss.
 		Message: err.Message(),
 	}
 	if details := err.Details(); len(details) > 0 {
@@ -423,7 +428,7 @@ func grpcStatusFromError(err *connect.Error) *status.Status {
 //	https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
 func grpcPercentEncode(msg string) string {
 	var hexCount int
-	for i := 0; i < len(msg); i++ {
+	for i := range len(msg) {
 		if grpcShouldEscape(msg[i]) {
 			hexCount++
 		}
@@ -434,7 +439,7 @@ func grpcPercentEncode(msg string) string {
 	// We need to escape some characters, so we'll need to allocate a new string.
 	var out strings.Builder
 	out.Grow(len(msg) + 2*hexCount)
-	for i := 0; i < len(msg); i++ {
+	for i := range len(msg) {
 		switch char := msg[i]; {
 		case grpcShouldEscape(char):
 			out.WriteByte('%')
@@ -518,7 +523,6 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 	if code == 0 {
 		return nil
 	}
-
 	if len(grpcDetails) == 0 {
 		message, err := grpcPercentDecode(grpcMsg)
 		if err != nil {
@@ -545,7 +549,10 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 			protocolError("invalid protobuf for error details: %w", err),
 		)
 	}
-	trailerErr := connect.NewWireError(connect.Code(stat.GetCode()), errors.New(stat.GetMessage()))
+	trailerErr := connect.NewWireError(
+		connect.Code(stat.GetCode()), //nolint:gosec // No information loss.
+		errors.New(stat.GetMessage()),
+	)
 	for _, msg := range stat.GetDetails() {
 		errDetail, err := connect.NewErrorDetail(msg)
 		if err != nil {

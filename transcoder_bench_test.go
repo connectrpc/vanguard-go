@@ -54,7 +54,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 	envelopePayload := func(flags uint8, msg []byte) []byte {
 		head := [5]byte{}
 		head[0] = flags
-		binary.BigEndian.PutUint32(head[1:5], uint32(len(msg)))
+		binary.BigEndian.PutUint32(head[1:5], uint32(len(msg))) //nolint:gosec // Safe for testing
 		body := &bytes.Buffer{}
 		body.Write(head[:])
 		body.Write(msg)
@@ -206,7 +206,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 				data := rsp.Body.Bytes()
 				rsp.Body.Reset()
 				require.NoError(b, json.Compact(rsp.Body, data))
-				assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
+				assert.JSONEq(b, string(rspMsgJSON), rsp.Body.String(), "response body")
 			}
 		})
 		b.StopTimer()
@@ -283,7 +283,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 
 		b.StartTimer()
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			req := req.Clone(ctx)
 			req.Body = io.NopCloser(bytes.NewReader(reqMsgJSON))
 			rsp := httptest.NewRecorder()
@@ -294,7 +294,7 @@ func BenchmarkServeHTTP(b *testing.B) {
 			data := rsp.Body.Bytes()
 			rsp.Body.Reset()
 			require.NoError(b, json.Compact(rsp.Body, data))
-			assert.Equal(b, rspMsgJSON, rsp.Body.Bytes(), "response body")
+			assert.JSONEq(b, string(rspMsgJSON), rsp.Body.String(), "response body")
 		}
 		b.StopTimer()
 	})
