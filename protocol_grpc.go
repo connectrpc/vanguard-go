@@ -513,18 +513,16 @@ func grpcExtractErrorFromTrailer(trailers http.Header) *connect.Error {
 		return nil
 	}
 
-	code64, err := strconv.ParseUint(codeHeader, 10 /* base */, 32 /* bitsize */)
+	code, err := strconv.ParseUint(codeHeader, 10 /* base */, 32 /* bitsize */)
 	if err != nil {
 		return connect.NewError(
 			connect.CodeInternal,
 			protocolError("invalid error code %q: %w", codeHeader, err),
 		)
 	}
-	if code64 == 0 {
+	if code == 0 {
 		return nil
 	}
-	code := uint32(code64)
-
 	if len(grpcDetails) == 0 {
 		message, err := grpcPercentDecode(grpcMsg)
 		if err != nil {
