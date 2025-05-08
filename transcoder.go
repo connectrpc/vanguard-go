@@ -1103,12 +1103,6 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		w.op.client.respCompression = respCompression
 		w.op.server.respCompression = respCompression
 	}
-	if respMeta.codec != "" && respMeta.codec != w.op.server.codec.Name() &&
-		!restHTTPBodyResponse(w.op) {
-		// unexpected content-type for reply
-		w.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", w.op.server.codec.Name(), respMeta.codec))
-		return
-	}
 
 	if respMeta.end != nil {
 		// RPC failed immediately.
@@ -1125,6 +1119,13 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		// We can send back error response immediately.
 		w.flushHeaders()
 		w.w = noResponseBodyWriter{}
+		return
+	}
+
+	if respMeta.codec != "" && respMeta.codec != w.op.server.codec.Name() &&
+		!restHTTPBodyResponse(w.op) {
+		// unexpected content-type for reply
+		w.reportError(fmt.Errorf("response uses incorrect codec: expecting %q but instead got %q", w.op.server.codec.Name(), respMeta.codec))
 		return
 	}
 
