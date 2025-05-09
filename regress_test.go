@@ -29,6 +29,7 @@ import (
 	elizav1 "buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
 	"connectrpc.com/connect"
 	"connectrpc.com/vanguard"
+	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -133,4 +134,28 @@ func (h *handler) Introduce(_ context.Context, req *connect.Request[elizav1.Intr
 	_ = resp.Send(&elizav1.IntroduceResponse{Sentence: "hi"})
 	_ = resp.Send(&elizav1.IntroduceResponse{Sentence: "hi again"})
 	return nil
+}
+
+func TestPanicOnProxyError(t *testing.T) {
+	t.Parallel()
+	rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	service := vanguard.NewService(testv1connect.LibraryServiceName, rpcHandler, vanguard.WithTargetProtocols(vanguard.ProtocolGRPC),
+		vanguard.WithTargetCodecs(vanguard.CodecProto))
+	handler, err := vanguard.NewTranscoder([]*vanguard.Service{service})
+	require.NoError(t, err)
+
+	expectedCode := http.StatusServiceUnavailable
+	req := httptest.NewRequest(http.MethodPost, "/vanguard.test.v1.LibraryService/GetBook", http.NoBody)
+	req.Proto = "HTTP/1.1"
+	req.ProtoMajor, req.ProtoMinor = 1, 1
+	req.Header.Add("Content-Type", "application/proto")
+	req.Header.Add("Connect-Protocol-Version", "1")
+	respWriter := httptest.NewRecorder()
+	handler.ServeHTTP(respWriter, req)
+	resp := respWriter.Result()
+	err = resp.Body.Close()
+	require.NoError(t, err)
+	require.Equal(t, expectedCode, resp.StatusCode)
 }
