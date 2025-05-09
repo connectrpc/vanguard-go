@@ -186,10 +186,11 @@ func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer
 	defer op.bufferPool.Put(buffer)
 	_ = trailers.Write(buffer)
 	// TODO: Send envelope compressed if possible.
-	length := len(buffer.Bytes())
+	length := int64(len(buffer.Bytes()))
 	if length > math.MaxUint32 {
 		return nil
 	}
+	//nolint:gosec // gosec gives a false positive for int64
 	env := envelope{trailer: true, length: uint32(length)}
 	envBytes := g.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
