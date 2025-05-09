@@ -9,7 +9,7 @@ MAKEFLAGS += --no-print-directory
 BIN := .tmp/bin
 COPYRIGHT_YEARS := 2023-2025
 LICENSE_IGNORE := -e testdata/
-BUF_VERSION ?= 1.50.1
+BUF_VERSION ?= 1.52.1
 # Set to use a different compiler. For example, `GO=go1.18rc1 make test`.
 GO ?= go
 
