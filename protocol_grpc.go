@@ -334,6 +334,8 @@ func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 			// no need to report "?" codec if no content-type on a trailers-only response
 			respMeta.codec = ""
 		}
+		// Capture any trailers that aren't part of the gRPC spec.
+		respMeta.end.trailers = httpExtractTrailers(headers, nil)
 	}
 	if statusCode != http.StatusOK {
 		if respMeta.end == nil {
@@ -343,6 +345,7 @@ func grpcExtractResponseMeta(contentTypeShort, contentTypePrefix string, statusC
 			code := httpStatusCodeToRPC(statusCode)
 			respMeta.end.err = connect.NewError(code, fmt.Errorf("unexpected HTTP error: %d %s", statusCode, http.StatusText(statusCode)))
 		}
+		respMeta.end.trailers = httpExtractTrailers(headers, nil)
 	}
 	return respMeta
 }

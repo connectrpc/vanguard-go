@@ -210,13 +210,17 @@ func TestMux_RPCxRPC(t *testing.T) {
 			stream: testStream{
 				method:    testv1connect.LibraryServiceGetBookProcedure,
 				reqHeader: http.Header{"Message": []string{"hello"}},
-				rspHeader: http.Header{"Message": []string{"world"}},
+				rspHeader: http.Header{"Message": []string{"world"}, "Meta": []string{"value"}},
 				msgs: []testMsg{
 					{in: &testMsgIn{
 						msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
 					}},
 					{out: &testMsgOut{
-						err: newConnectError(connect.CodeFailedPrecondition, "foo"),
+						err: func() *connect.Error {
+							cerr := newConnectError(connect.CodeFailedPrecondition, "foo")
+							cerr.Meta().Set("Meta", "value")
+							return cerr
+						}(),
 					}},
 				},
 			},
