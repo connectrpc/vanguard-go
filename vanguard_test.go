@@ -434,6 +434,9 @@ func (i *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 				for key, values := range stream.rspHeader {
 					err.Meta()[key] = values
 				}
+				for key, values := range out.err.Meta() {
+					err.Meta()[key] = values
+				}
 			}
 			return nil, err
 		}
