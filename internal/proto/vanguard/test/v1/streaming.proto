@@ -1,0 +1,97 @@
+// Copyright 2023-2025 Buf Technologies, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package vanguard.test.v1;
+
+import "google/api/annotations.proto";
+import "google/api/httpbody.proto";
+import "google/protobuf/timestamp.proto";
+
+// StreamingService demonstrates server-side streaming with SSE support.
+service StreamingService {
+  // WatchBooks streams updates about books in a shelf.
+  // This is a server-streaming RPC that can use SSE when accessed via REST.
+  rpc WatchBooks(WatchBooksRequest) returns (stream BookUpdate) {
+    option (google.api.http) = {
+      get: "/v1/{parent=shelves/*}/books:watch"
+    };
+  }
+
+  // CountToTen is a simple server-streaming RPC for demonstration.
+  rpc CountToTen(CountRequest) returns (stream CountResponse) {
+    option (google.api.http) = {
+      get: "/v1/count"
+    };
+  }
+
+  // StreamVideo demonstrates streaming HttpBody (binary data).
+  // This uses HttpBody streaming which works without SSE.
+  rpc StreamVideo(StreamVideoRequest) returns (stream google.api.HttpBody) {
+    option (google.api.http) = {
+      get: "/v1/videos/{video_id}:stream"
+    };
+  }
+
+  // GetStatus is a standard unary GET request for comparison.
+  // This demonstrates that non-streaming methods work normally.
+  rpc GetStatus(GetStatusRequest) returns (StatusResponse) {
+    option (google.api.http) = {
+      get: "/v1/status"
+    };
+  }
+}
+
+message WatchBooksRequest {
+  // The parent resource name, for example, "shelves/shelf1".
+  string parent = 1;
+}
+
+message BookUpdate {
+  enum UpdateType {
+    UPDATE_TYPE_UNSPECIFIED = 0;
+    CREATED = 1;
+    UPDATED = 2;
+    DELETED = 3;
+  }
+
+  UpdateType type = 1;
+  string book_name = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message CountRequest {
+  // Optional delay between counts in milliseconds
+  int32 delay_ms = 1;
+}
+
+message CountResponse {
+  int32 number = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message StreamVideoRequest {
+  string video_id = 1;
+}
+
+message GetStatusRequest {
+  // Empty request for status check
+}
+
+message StatusResponse {
+  string status = 1;
+  int32 active_streams = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}

@@ -31,9 +31,18 @@ import (
 
 const (
 	contentRestPrefix = "application/"
+	contentTypeSSE    = "text/event-stream"
+	sseDataPrefix     = "data: "
+	sseEventPrefix    = "event: "
+	sseNewline        = "\n"
+	sseDoubleNL       = "\n\n"
 )
 
-type restClientProtocol struct{}
+type restClientProtocol struct {
+	// useSSE indicates whether to use Server-Sent Events for server streaming.
+	// This is set based on the Accept header and service configuration.
+	useSSE bool
+}
 
 var _ clientProtocolHandler = restClientProtocol{}
 var _ clientBodyPreparer = restClientProtocol{}
@@ -52,7 +61,10 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 	case connect.StreamTypeClient:
 		return restHTTPBodyRequest(op)
 	case connect.StreamTypeServer:
-		return restHTTPBodyResponse(op)
+		// Server streaming is supported if:
+		// 1. The response is google.api.HttpBody (streamed bytes), OR
+		// 2. SSE is enabled (both via Accept header and service config)
+		return restHTTPBodyResponse(op) || (r.useSSE && op.methodConf.restEnableSSE)
 	case connect.StreamTypeBidi:
 		return false
 	default:
@@ -61,9 +73,8 @@ func (r restClientProtocol) acceptsStreamType(op *operation, streamType connect.
 }
 
 func (r restClientProtocol) endMustBeInHeaders() bool {
-	// TODO: when we support server streams over REST, this should return
-	// false when streaming
-	return true
+	// For SSE streaming, end is sent in the event stream, not headers
+	return !r.useSSE
 }
 
 func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
@@ -101,6 +112,16 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 
 func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, headers http.Header) int {
 	isErr := meta.end != nil && meta.end.err != nil
+
+	// For SSE streaming responses with no immediate error, use SSE content type
+	if r.useSSE && !isErr {
+		headers["Content-Type"] = []string{contentTypeSSE}
+		headers["Cache-Control"] = []string{"no-cache"}
+		headers["Connection"] = []string{"keep-alive"}
+		// SSE doesn't support compression at the protocol level
+		return http.StatusOK
+	}
+
 	// Only JSON is supported for now unless using google.api.HttpBody
 	// payloads which override the content-type.
 	if headers["Content-Type"] == nil {
@@ -120,6 +141,50 @@ func (r restClientProtocol) addProtocolResponseHeaders(meta responseMeta, header
 
 func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io.Writer, wasInHeaders bool) http.Header {
 	cerr := end.err
+
+	// For SSE, encode the end as an event
+	if r.useSSE && !wasInHeaders {
+		if cerr != nil {
+			// Send error as an "error" event
+			stat := grpcStatusFromError(cerr)
+			bin, err := op.client.codec.MarshalAppend(nil, stat)
+			if err != nil {
+				bin = []byte(`{"code":13,"message":"failed to marshal end error"}`)
+			}
+			_, _ = writer.Write([]byte(sseEventPrefix + "error" + sseNewline))
+			_, _ = writer.Write([]byte(sseDataPrefix))
+			_, _ = writer.Write(bin)
+			_, _ = writer.Write([]byte(sseDoubleNL))
+			return nil
+		}
+
+		// Send completion event with trailers if any
+		if len(end.trailers) > 0 {
+			_, _ = writer.Write([]byte(sseEventPrefix + "complete" + sseNewline))
+			_, _ = writer.Write([]byte(sseDataPrefix))
+			buf := &bytes.Buffer{}
+			buf.WriteString("{")
+			first := true
+			for k, vals := range end.trailers {
+				for _, v := range vals {
+					if !first {
+						buf.WriteString(",")
+					}
+					first = false
+					buf.WriteString(`"` + k + `":"` + v + `"`)
+				}
+			}
+			buf.WriteString("}")
+			_, _ = writer.Write(buf.Bytes())
+			_, _ = writer.Write([]byte(sseDoubleNL))
+		} else {
+			_, _ = writer.Write([]byte(sseEventPrefix + "complete" + sseNewline))
+			_, _ = writer.Write([]byte(sseDataPrefix + "{}" + sseDoubleNL))
+		}
+		return nil
+	}
+
+	// Regular REST error handling
 	if cerr != nil && !wasInHeaders {
 		// TODO: Uh oh. We already flushed headers and started writing body. What can we do?
 		//       Should this log? If we are using http/2, is there some way we could send
@@ -261,12 +326,18 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 }
 
 func (r restClientProtocol) String() string {
+	if r.useSSE {
+		return r.protocol().String() + " (SSE)"
+	}
 	return r.protocol().String()
 }
 
 // restServerProtocol implements the REST protocol for
 // sending RPCs to the server handler.
-type restServerProtocol struct{}
+type restServerProtocol struct {
+	// useSSE indicates whether to use Server-Sent Events for server streaming.
+	useSSE bool
+}
 
 var _ serverProtocolHandler = restServerProtocol{}
 var _ requestLineBuilder = restServerProtocol{}
@@ -293,6 +364,18 @@ func (r restServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers 
 
 func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
 	contentType := headers.Get("Content-Type")
+
+	// Check if this is an SSE stream
+	if r.useSSE && contentType == contentTypeSSE {
+		var meta responseMeta
+		meta.codec = CodecJSON
+		headers.Del("Content-Type")
+		headers.Del("Cache-Control")
+		headers.Del("Connection")
+		// For SSE, we don't extract end from headers - it comes in the stream
+		return meta, nil, nil
+	}
+
 	if statusCode/100 != 2 {
 		return responseMeta{
 				end: &responseEnd{httpCode: statusCode},

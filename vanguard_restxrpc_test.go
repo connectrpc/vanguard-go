@@ -675,3 +675,193 @@ func TestMux_RESTxRPC(t *testing.T) {
 		})
 	}
 }
+
+// testStreamingServiceHandler implements StreamingService for testing SSE.
+type testStreamingServiceHandler struct {
+	testv1connect.UnimplementedStreamingServiceHandler
+}
+
+func (h *testStreamingServiceHandler) CountToTen(
+	_ context.Context,
+	req *connect.Request[testv1.CountRequest],
+	stream *connect.ServerStream[testv1.CountResponse],
+) error {
+	for i := int32(1); i <= 10; i++ {
+		if err := stream.Send(&testv1.CountResponse{
+			Number: i,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *testStreamingServiceHandler) WatchBooks(
+	_ context.Context,
+	req *connect.Request[testv1.WatchBooksRequest],
+	stream *connect.ServerStream[testv1.BookUpdate],
+) error {
+	parent := req.Msg.Parent
+	if parent == "" {
+		parent = "shelves/default"
+	}
+
+	updates := []struct {
+		updateType testv1.BookUpdate_UpdateType
+		bookName   string
+	}{
+		{testv1.BookUpdate_CREATED, parent + "/books/book-1"},
+		{testv1.BookUpdate_UPDATED, parent + "/books/book-1"},
+		{testv1.BookUpdate_DELETED, parent + "/books/book-1"},
+	}
+
+	for _, upd := range updates {
+		if err := stream.Send(&testv1.BookUpdate{
+			Type:     upd.updateType,
+			BookName: upd.bookName,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestMux_RESTxRPC_SSE(t *testing.T) {
+	t.Parallel()
+
+	// Test server-streaming with SSE enabled
+	protocols := []Protocol{
+		ProtocolGRPC,
+		ProtocolGRPCWeb,
+		ProtocolConnect,
+	}
+
+	for _, protocol := range protocols {
+		protocol := protocol
+		t.Run(protocol.String(), func(t *testing.T) {
+			t.Parallel()
+
+			// Set up backend RPC server
+			serveMux := http.NewServeMux()
+			serveMux.Handle(testv1connect.NewStreamingServiceHandler(
+				&testStreamingServiceHandler{},
+			))
+
+			server := httptest.NewServer(serveMux)
+			t.Cleanup(server.Close)
+			serverURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+			proxy := httputil.NewSingleHostReverseProxy(serverURL)
+			proxy.Transport = server.Client().Transport
+
+			// Create transcoder with SSE enabled
+			handler := protocolAssertMiddleware(protocol, CodecJSON, CompressionIdentity, proxy)
+			svcHandler := NewService(
+				testv1connect.StreamingServiceName,
+				handler,
+				WithTargetProtocols(protocol),
+				WithTargetCodecs(CodecJSON),
+				WithNoTargetCompression(),
+				WithRESTServerSentEvents(), // Enable SSE
+			)
+			services := []*Service{svcHandler}
+			transcoder, err := NewTranscoder(services)
+			require.NoError(t, err)
+
+			t.Run("CountToTen_WithSSE", func(t *testing.T) {
+				t.Parallel()
+
+				req := httptest.NewRequest(http.MethodGet, "/v1/count?delay_ms=10", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				transcoder.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				// Verify SSE response headers
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+				assert.Equal(t, "text/event-stream", result.Header.Get("Content-Type"))
+				assert.Equal(t, "no-cache", result.Header.Get("Cache-Control"))
+				assert.Equal(t, "keep-alive", result.Header.Get("Connection"))
+
+				// Read and parse SSE events
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				// Verify SSE format
+				bodyStr := string(body)
+				t.Log("SSE response:", bodyStr)
+
+				// Should have open event at the beginning
+				assert.Contains(t, bodyStr, "event: open")
+
+				// Should have 10 message events
+				assert.Contains(t, bodyStr, "event: message")
+				assert.Contains(t, bodyStr, `"number":1`)
+				assert.Contains(t, bodyStr, `"number":10`)
+
+				// Should have completion event
+				assert.Contains(t, bodyStr, "event: complete")
+
+				// Verify sequential IDs
+				assert.Contains(t, bodyStr, "id: 1")
+				assert.Contains(t, bodyStr, "id: 10")
+			})
+
+			t.Run("WatchBooks_WithSSE", func(t *testing.T) {
+				t.Parallel()
+
+				req := httptest.NewRequest(http.MethodGet, "/v1/shelves/test-shelf/books:watch", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				transcoder.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				// Verify SSE response
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+				assert.Equal(t, "text/event-stream", result.Header.Get("Content-Type"))
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				bodyStr := string(body)
+				t.Log("SSE response:", bodyStr)
+
+				// Verify open event
+				assert.Contains(t, bodyStr, "event: open")
+
+				// Verify book events
+				assert.Contains(t, bodyStr, "event: message")
+				assert.Contains(t, bodyStr, `"type":"CREATED"`)
+				assert.Contains(t, bodyStr, `"bookName":"shelves/test-shelf/books/`)
+				assert.Contains(t, bodyStr, "event: complete")
+			})
+
+			t.Run("CountToTen_WithoutSSE", func(t *testing.T) {
+				t.Parallel()
+
+				// Without Accept: text/event-stream, should fail
+				req := httptest.NewRequest(http.MethodGet, "/v1/count", nil)
+
+				rsp := httptest.NewRecorder()
+				transcoder.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				// Should return 415 Unsupported Media Type
+				assert.Equal(t, http.StatusUnsupportedMediaType, result.StatusCode)
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				assert.Contains(t, string(body), "stream type server not supported")
+			})
+		})
+	}
+}

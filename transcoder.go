@@ -297,7 +297,9 @@ func classifyRequest(req *http.Request) (clientProtocolHandler, url.Values) {
 			}
 			return connectUnaryGetClientProtocol{}, values
 		}
-		return restClientProtocol{}, values
+		// Check if client accepts SSE (text/event-stream)
+		accept := req.Header.Get("Accept")
+		return restClientProtocol{useSSE: strings.Contains(accept, "text/event-stream")}, values
 	}
 
 	if len(contentTypes) > 1 {
@@ -331,7 +333,8 @@ func classifyRequest(req *http.Request) (clientProtocolHandler, url.Values) {
 		// also use *any* content-type.
 		fallthrough
 	default:
-		return restClientProtocol{}, values
+		accept := req.Header.Get("Accept")
+		return restClientProtocol{useSSE: strings.Contains(accept, "text/event-stream")}, values
 	}
 }
 
@@ -1100,8 +1103,15 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 			w.reportError(fmt.Errorf("response indicates unsupported compression encoding %q", respMeta.compression))
 			return
 		}
-		w.op.client.respCompression = respCompression
-		w.op.server.respCompression = respCompression
+		// For SSE, we never use compression on the client side (SSE is text-based)
+		// but we still need to decompress server responses
+		if w.shouldUseSSE() {
+			w.op.server.respCompression = respCompression
+			w.op.client.respCompression = nil
+		} else {
+			w.op.client.respCompression = respCompression
+			w.op.server.respCompression = respCompression
+		}
 	}
 
 	if respMeta.end != nil {
@@ -1165,13 +1175,43 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		delegate = w.delegate
 	}
 
+	// Check if we need SSE wrapping for server streaming
+	var actualDelegate io.Writer = delegate
+	if w.shouldUseSSE() {
+		sseWriter := &sseStreamWriter{
+			delegate:  delegate,
+			codec:     w.op.client.codec,
+			messageID: 0,
+			openSent:  false,
+		}
+		// Send the "open" event immediately after headers are flushed
+		// to signal that the connection is established
+		openEvent := []byte("event: open\n\n")
+		if _, err := delegate.Write(openEvent); err == nil {
+			// Flush to ensure the open event is sent immediately
+			if flusher, ok := delegate.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			sseWriter.openSent = true
+		}
+		actualDelegate = sseWriter
+	}
+
 	// Now we can define the transformed response body.
 	if sameResponseCodec && !mustDecodeResponse {
 		// we do not need to decompress or decode
-		w.w = &envelopingWriter{rw: w, w: delegate}
+		w.w = &envelopingWriter{rw: w, w: actualDelegate}
 	} else {
-		w.w = &transformingWriter{rw: w, msg: &respMsg, w: delegate}
+		w.w = &transformingWriter{rw: w, msg: &respMsg, w: actualDelegate}
 	}
+}
+
+// shouldUseSSE returns true if this response should use SSE formatting.
+func (w *responseWriter) shouldUseSSE() bool {
+	if restClient, ok := w.op.client.protocol.(restClientProtocol); ok {
+		return restClient.useSSE
+	}
+	return false
 }
 
 // Unwrap provides access to the underlying response writer. This plays nicely
@@ -1241,7 +1281,11 @@ func (w *responseWriter) flushHeaders() {
 	}
 	cliRespMeta := *w.respMeta
 	cliRespMeta.codec = w.op.client.codec.Name()
-	cliRespMeta.compression = w.op.client.respCompression.Name()
+	if w.op.client.respCompression != nil {
+		cliRespMeta.compression = w.op.client.respCompression.Name()
+	} else {
+		cliRespMeta.compression = ""
+	}
 	cliRespMeta.acceptCompression = w.op.compressors.intersection(w.respMeta.acceptCompression)
 	statusCode := w.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, w.Header())
 	hasErr := w.respMeta.end != nil && w.respMeta.end.err != nil
@@ -2221,4 +2265,60 @@ func (l *requestLine) fromRequest(req *http.Request) {
 	l.path = req.URL.Path
 	l.queryString = req.URL.RawQuery
 	l.httpVersion = req.Proto
+}
+
+// sseStreamWriter wraps messages as Server-Sent Events for server streaming.
+// It intercepts writes that contain complete protobuf messages and formats them
+// as SSE events with proper event: and data: fields.
+type sseStreamWriter struct {
+	delegate  io.Writer
+	codec     Codec
+	messageID int64
+	openSent  bool
+}
+
+func (s *sseStreamWriter) Write(data []byte) (int, error) {
+	// Skip empty writes (e.g., envelope bytes for REST protocol)
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	// Each write from the transformingWriter contains one complete message.
+	// We need to wrap it as an SSE event.
+	s.messageID++
+
+	// Build SSE event with message ID
+	var buf bytes.Buffer
+	buf.WriteString("id: ")
+	buf.WriteString(strconv.FormatInt(s.messageID, 10))
+	buf.WriteString("\n")
+	buf.WriteString("event: message\n")
+
+	// Write data field(s) - handle multiline by splitting
+	// SSE spec supports three line ending types: LF (\n), CRLF (\r\n), and CR (\r)
+	// First normalize CRLF to LF, then split on both LF and CR
+	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	// Split on both \n and \r to handle all three cases
+	lines := bytes.FieldsFunc(normalized, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	})
+	for _, line := range lines {
+		if len(line) > 0 {
+			buf.WriteString("data: ")
+			buf.Write(line)
+			buf.WriteString("\n")
+		}
+	}
+
+	// End of event
+	buf.WriteString("\n")
+
+	// Write to delegate
+	_, err := s.delegate.Write(buf.Bytes())
+	if err != nil {
+		return 0, err
+	}
+
+	// Return original data length so caller thinks all data was written
+	return len(data), nil
 }
