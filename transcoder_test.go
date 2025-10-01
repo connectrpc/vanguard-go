@@ -1723,3 +1723,86 @@ func rot13(data []byte) {
 		data[index] = char
 	}
 }
+
+func TestSSEStreamWriter_Write_WithCustomIDAndEventField(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	writer := &sseStreamWriter{
+		delegate:     buf,
+		eventField:   "type",
+		eventIDField: "sequence",
+		messageID:    5, // Start at 5 to show it uses custom ID
+	}
+
+	jsonData := []byte(`{"sequence":"42","type":"UPDATE","data":"test"}`)
+	n, err := writer.Write(jsonData)
+	require.NoError(t, err)
+	assert.Equal(t, len(jsonData), n)
+
+	output := buf.String()
+	t.Log("SSE output:", output)
+
+	// Should use custom ID and event type from message
+	assert.Contains(t, output, "id: 42\n")
+	assert.Contains(t, output, "event: UPDATE\n")
+	assert.NotContains(t, output, "id: 5\n")
+	assert.NotContains(t, output, "event: message\n")
+}
+
+func TestSSEStreamWriter_Write_WithMissingCustomIDEventFields(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	writer := &sseStreamWriter{
+		delegate:     buf,
+		eventIDField: "id",
+		eventField:   "type",
+		messageID:    3, // Fallback to this
+	}
+
+	jsonData := []byte(`{"data":"test"}`) // Missing "id" field
+	n, err := writer.Write(jsonData)
+	require.NoError(t, err)
+	assert.Equal(t, len(jsonData), n)
+
+	output := buf.String()
+	t.Log("SSE output:", output)
+
+	// Should fall back to sequential ID
+	assert.Contains(t, output, "id: 3\n")
+	assert.Contains(t, output, "event: message\n")
+}
+
+func TestSSEStreamWriter_Write_WithOmitExtractedFields(t *testing.T) {
+	t.Parallel()
+
+	buf := &bytes.Buffer{}
+	writer := &sseStreamWriter{
+		delegate:            buf,
+		eventField:          "type",
+		eventIDField:        "sequence",
+		omitExtractedFields: true,
+		messageID:           1,
+	}
+
+	jsonData := []byte(`{"sequence":"99","type":"CREATED","name":"test-book","timestamp":"2025-01-01T00:00:00Z"}`)
+	n, err := writer.Write(jsonData)
+	require.NoError(t, err)
+	assert.Equal(t, len(jsonData), n)
+
+	output := buf.String()
+	t.Log("SSE output:", output)
+
+	// Should use extracted values in metadata
+	assert.Contains(t, output, "id: 99\n")
+	assert.Contains(t, output, "event: CREATED\n")
+
+	// Should NOT contain extracted fields in data payload
+	assert.NotContains(t, output, `"sequence"`)
+	assert.NotContains(t, output, `"type"`)
+
+	// Should still contain non-extracted fields
+	assert.Contains(t, output, `"name":"test-book"`)
+	assert.Contains(t, output, `"timestamp":"2025-01-01T00:00:00Z"`)
+}

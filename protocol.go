@@ -99,7 +99,9 @@ func (p Protocol) serverHandler(op *operation) serverProtocolHandler {
 	case ProtocolREST:
 		// Use SSE for server streaming when enabled
 		useSSE := op.methodConf.streamType == connect.StreamTypeServer && op.methodConf.restEnableSSE
-		return restServerProtocol{useSSE: useSSE}
+		return restServerProtocol{
+			useSSE: useSSE,
+		}
 	default:
 		return nil
 	}

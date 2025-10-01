@@ -39,12 +39,14 @@ func main() {
 	// Create Connect handler for the streaming service.
 	serviceHandler := &StreamingServiceHandler{}
 
-	// Wrap it with Vanguard and enable SSE for REST requests.
+	// Wrap it with Vanguard and enable REST streaming with SSE.
+	// Field-specific configuration (event names, IDs, omission) is specified
+	// per-RPC in the protobuf annotations using response_body directives.
 	path, handler := testv1connect.NewStreamingServiceHandler(serviceHandler)
 	service := vanguard.NewService(
 		path,
 		handler,
-		vanguard.WithRESTServerSentEvents(), // Enable SSE!
+		vanguard.WithRESTServerSentEvents(),
 	)
 
 	transcoder, err := vanguard.NewTranscoder([]*vanguard.Service{service})

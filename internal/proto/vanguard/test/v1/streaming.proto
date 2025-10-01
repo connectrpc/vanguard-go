@@ -27,6 +27,7 @@ service StreamingService {
   rpc WatchBooks(WatchBooksRequest) returns (stream BookUpdate) {
     option (google.api.http) = {
       get: "/v1/{parent=shelves/*}/books:watch"
+      response_body: "SSE_EVENT=type,SSE_OMIT"
     };
   }
 

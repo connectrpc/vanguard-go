@@ -17,6 +17,7 @@ package vanguard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,12 @@ import (
 
 var (
 	errFinalDataAlreadyWritten = fmt.Errorf("final RPC response data already written: %w", context.Canceled)
+)
+
+const (
+	sseDataPrefix  = "data: "
+	sseEventPrefix = "event: "
+	sseNewline     = "\n"
 )
 
 // Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
@@ -1169,40 +1176,20 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		// buffer the entire response.
 		w.buf = w.op.bufferPool.Get()
 		delegate = &limitWriter{buf: w.buf, limit: w.op.methodConf.maxMsgBufferBytes, rw: w}
+	} else if w.shouldUseSSE() {
+		delegate = newSSEStreamWriter(w)
 	} else {
 		// We can go ahead and flush headers now.
 		w.flushHeaders()
 		delegate = w.delegate
 	}
 
-	// Check if we need SSE wrapping for server streaming
-	var actualDelegate io.Writer = delegate
-	if w.shouldUseSSE() {
-		sseWriter := &sseStreamWriter{
-			delegate:  delegate,
-			codec:     w.op.client.codec,
-			messageID: 0,
-			openSent:  false,
-		}
-		// Send the "open" event immediately after headers are flushed
-		// to signal that the connection is established
-		openEvent := []byte("event: open\n\n")
-		if _, err := delegate.Write(openEvent); err == nil {
-			// Flush to ensure the open event is sent immediately
-			if flusher, ok := delegate.(http.Flusher); ok {
-				flusher.Flush()
-			}
-			sseWriter.openSent = true
-		}
-		actualDelegate = sseWriter
-	}
-
 	// Now we can define the transformed response body.
 	if sameResponseCodec && !mustDecodeResponse {
 		// we do not need to decompress or decode
-		w.w = &envelopingWriter{rw: w, w: actualDelegate}
+		w.w = &envelopingWriter{rw: w, w: delegate}
 	} else {
-		w.w = &transformingWriter{rw: w, msg: &respMsg, w: actualDelegate}
+		w.w = &transformingWriter{rw: w, msg: &respMsg, w: delegate}
 	}
 }
 
@@ -2270,11 +2257,60 @@ func (l *requestLine) fromRequest(req *http.Request) {
 // sseStreamWriter wraps messages as Server-Sent Events for server streaming.
 // It intercepts writes that contain complete protobuf messages and formats them
 // as SSE events with proper event: and data: fields.
+//
+// Message IDs start at 1 and increment for each data message. The 'open' event
+// (sent on connection establishment) does not have an ID. Error and completion
+// events also do not have IDs as they are control events rather than data events.
+//
+// If eventIDField is configured, the writer will extract the ID value from that field
+// in each message. This allows services to provide their own IDs for reconnection scenarios.
+// If the field doesn't exist or is empty, falls back to the auto-generated sequential ID.
+//
+// Note: Vanguard does not automatically handle the Last-Event-ID header for reconnection.
+// Services that provide custom IDs via eventIDField are responsible for implementing
+// replay/resume logic in their handlers by reading the Last-Event-ID from the request headers.
 type sseStreamWriter struct {
-	delegate  io.Writer
-	codec     Codec
-	messageID int64
-	openSent  bool
+	delegate            io.Writer
+	codec               Codec
+	messageID           int64
+	eventField          string // Field name to extract from message for event type
+	eventIDField        string // Field name to extract from message for event ID
+	omitExtractedFields bool   // Whether to remove extracted fields from data payload
+	responseType        protoreflect.MessageType
+}
+
+func newSSEStreamWriter(w *responseWriter) *sseStreamWriter {
+	// Immediately flush the headers and send the initial "open" event
+	// to establish the SSE stream.
+	w.flushHeaders()
+	_, err := w.delegate.Write([]byte("event: open\n\n"))
+	if err != nil {
+		w.reportError(err)
+	}
+	if flusher, ok := w.delegate.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	// Use per-RPC SSE config from response_body directives in HTTP annotations
+	var eventField, eventIDField string
+	var omitExtracted bool
+
+	if w.op.restTarget != nil && w.op.restTarget.restSSEOpts != nil {
+		opts := w.op.restTarget.restSSEOpts
+		eventField = opts.EventField
+		eventIDField = opts.IdField
+		omitExtracted = opts.OmitExtractedFields
+	}
+
+	return &sseStreamWriter{
+		delegate:            w.delegate,
+		codec:               w.op.client.codec,
+		messageID:           1, // message IDs start at 1 since open event already sent
+		eventField:          eventField,
+		eventIDField:        eventIDField,
+		omitExtractedFields: omitExtracted,
+		responseType:        w.op.methodConf.responseType,
+	}
 }
 
 func (s *sseStreamWriter) Write(data []byte) (int, error) {
@@ -2283,35 +2319,74 @@ func (s *sseStreamWriter) Write(data []byte) (int, error) {
 		return 0, nil
 	}
 
-	// Each write from the transformingWriter contains one complete message.
-	// We need to wrap it as an SSE event.
-	s.messageID++
+	// Determine the event name and ID, and optionally filter the data
+	eventName := "message"
+	eventID := strconv.FormatInt(s.messageID, 10)
+	dataToWrite := data
+	if s.eventField != "" || s.eventIDField != "" {
+		// Extract field values and optionally remove them from data
+		var jsonData map[string]interface{}
+		needsFiltering := s.omitExtractedFields && (s.eventField != "" || s.eventIDField != "")
+		err := json.Unmarshal(data, &jsonData)
+		if err != nil {
+			return 0, err
+		}
+
+		// Extract event name
+		if s.eventField != "" {
+			if value, ok := jsonData[s.eventField]; ok {
+				if extracted := convertFieldValue(value); extracted != "" {
+					eventName = extracted
+				}
+			}
+		}
+		// Extract event ID
+		if s.eventIDField != "" {
+			if value, ok := jsonData[s.eventIDField]; ok {
+				if extracted := convertFieldValue(value); extracted != "" {
+					eventID = extracted
+				}
+			}
+		}
+
+		// Remove extracted fields if requested
+		if needsFiltering {
+			if s.eventField != "" {
+				delete(jsonData, s.eventField)
+			}
+			if s.eventIDField != "" {
+				delete(jsonData, s.eventIDField)
+			}
+			// Re-marshal the filtered data
+			if filtered, err := json.Marshal(jsonData); err == nil {
+				dataToWrite = filtered
+			}
+		}
+	}
 
 	// Build SSE event with message ID
 	var buf bytes.Buffer
-	buf.WriteString("id: ")
-	buf.WriteString(strconv.FormatInt(s.messageID, 10))
-	buf.WriteString("\n")
-	buf.WriteString("event: message\n")
+	buf.WriteString("id: " + eventID + sseNewline)
+	buf.WriteString(sseEventPrefix + eventName + sseNewline)
 
 	// Write data field(s) - handle multiline by splitting
 	// SSE spec supports three line ending types: LF (\n), CRLF (\r\n), and CR (\r)
 	// First normalize CRLF to LF, then split on both LF and CR
-	normalized := bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	normalized := bytes.ReplaceAll(dataToWrite, []byte("\r\n"), []byte("\n"))
 	// Split on both \n and \r to handle all three cases
 	lines := bytes.FieldsFunc(normalized, func(r rune) bool {
 		return r == '\n' || r == '\r'
 	})
 	for _, line := range lines {
 		if len(line) > 0 {
-			buf.WriteString("data: ")
+			buf.WriteString(sseDataPrefix)
 			buf.Write(line)
-			buf.WriteString("\n")
+			buf.WriteString(sseNewline)
 		}
 	}
 
 	// End of event
-	buf.WriteString("\n")
+	buf.WriteString(sseNewline)
 
 	// Write to delegate
 	_, err := s.delegate.Write(buf.Bytes())
@@ -2319,6 +2394,25 @@ func (s *sseStreamWriter) Write(data []byte) (int, error) {
 		return 0, err
 	}
 
+	// Increment message ID for the next event
+	s.messageID++
+
 	// Return original data length so caller thinks all data was written
 	return len(data), nil
+}
+
+// convertFieldValue converts a JSON field value (from map[string]interface{}) to a string.
+func convertFieldValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		// JSON numbers are float64
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		// For complex types, just use their string representation
+		return fmt.Sprintf("%v", v)
+	}
 }

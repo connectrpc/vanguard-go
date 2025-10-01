@@ -32,10 +32,6 @@ import (
 const (
 	contentRestPrefix = "application/"
 	contentTypeSSE    = "text/event-stream"
-	sseDataPrefix     = "data: "
-	sseEventPrefix    = "event: "
-	sseNewline        = "\n"
-	sseDoubleNL       = "\n\n"
 )
 
 type restClientProtocol struct {
@@ -154,7 +150,7 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 			_, _ = writer.Write([]byte(sseEventPrefix + "error" + sseNewline))
 			_, _ = writer.Write([]byte(sseDataPrefix))
 			_, _ = writer.Write(bin)
-			_, _ = writer.Write([]byte(sseDoubleNL))
+			_, _ = writer.Write([]byte(sseNewline + sseNewline))
 			return nil
 		}
 
@@ -176,10 +172,11 @@ func (r restClientProtocol) encodeEnd(op *operation, end *responseEnd, writer io
 			}
 			buf.WriteString("}")
 			_, _ = writer.Write(buf.Bytes())
-			_, _ = writer.Write([]byte(sseDoubleNL))
+			_, _ = writer.Write([]byte(sseNewline + sseNewline))
 		} else {
 			_, _ = writer.Write([]byte(sseEventPrefix + "complete" + sseNewline))
-			_, _ = writer.Write([]byte(sseDataPrefix + "{}" + sseDoubleNL))
+			_, _ = writer.Write([]byte(sseDataPrefix + "{}" + sseNewline))
+			_, _ = writer.Write([]byte(sseNewline))
 		}
 		return nil
 	}
@@ -326,9 +323,6 @@ func (r restClientProtocol) prepareMarshalledResponse(op *operation, base []byte
 }
 
 func (r restClientProtocol) String() string {
-	if r.useSSE {
-		return r.protocol().String() + " (SSE)"
-	}
 	return r.protocol().String()
 }
 

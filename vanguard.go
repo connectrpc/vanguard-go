@@ -407,19 +407,18 @@ type RESTUnmarshalOptions struct {
 	DiscardUnknownQueryParams bool
 }
 
-// WithRESTServerSentEvents returns a service option that enables Server-Sent Events (SSE)
-// for server-streaming methods when using the REST protocol. When enabled, server-streaming
-// methods will use the text/event-stream content type and send messages as SSE events.
+// WithRESTServerSentEvents returns a service option that configures streaming behavior for
+// the REST protocol. This includes Server-Sent Events (SSE) configuration.
 //
-// This is opt-in because SSE is not a standard part of the REST protocol and some clients
-// may not expect or support it. By default, server-streaming with REST is only supported
-// when the response type is google.api.HttpBody.
+// Example:
 //
-// When enabled, messages are sent as SSE "message" events, errors as "error" events,
-// and stream completion as "complete" events. Binary data is automatically base64-encoded.
+//	vanguard.WithRESTServerSentEvents(vanguard.restSSEOpts{
+//	    ServerSentEvents: true,
+//	    EventField: "type",
+//	})
 func WithRESTServerSentEvents() ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.restEnableSSE = true
+	return serviceOptionFunc(func(o *serviceOptions) {
+		o.restEnableSSE = true
 	})
 }
 
@@ -451,7 +450,7 @@ type serviceOptions struct {
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
 	restUnmarshalOptions        RESTUnmarshalOptions
-	restEnableSSE               bool
+	restEnableSSE               bool // Enable SSE for server-streaming RPCs
 }
 
 type methodConfig struct {

@@ -461,10 +461,10 @@ const file_vanguard_test_v1_streaming_proto_rawDesc = "" +
 	"\x0eStatusResponse\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12%\n" +
 	"\x0eactive_streams\x18\x02 \x01(\x05R\ractiveStreams\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp2\xcf\x03\n" +
-	"\x10StreamingService\x12}\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp2\xe9\x03\n" +
+	"\x10StreamingService\x12\x96\x01\n" +
 	"\n" +
-	"WatchBooks\x12#.vanguard.test.v1.WatchBooksRequest\x1a\x1c.vanguard.test.v1.BookUpdate\"*\x82\xd3\xe4\x93\x02$\x12\"/v1/{parent=shelves/*}/books:watch0\x01\x12b\n" +
+	"WatchBooks\x12#.vanguard.test.v1.WatchBooksRequest\x1a\x1c.vanguard.test.v1.BookUpdate\"C\x82\xd3\xe4\x93\x02=b\x17SSE_EVENT=type,SSE_OMIT\x12\"/v1/{parent=shelves/*}/books:watch0\x01\x12b\n" +
 	"\n" +
 	"CountToTen\x12\x1e.vanguard.test.v1.CountRequest\x1a\x1f.vanguard.test.v1.CountResponse\"\x11\x82\xd3\xe4\x93\x02\v\x12\t/v1/count0\x01\x12q\n" +
 	"\vStreamVideo\x12$.vanguard.test.v1.StreamVideoRequest\x1a\x14.google.api.HttpBody\"$\x82\xd3\xe4\x93\x02\x1e\x12\x1c/v1/videos/{video_id}:stream0\x01\x12e\n" +

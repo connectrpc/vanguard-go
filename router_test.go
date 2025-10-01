@@ -327,3 +327,117 @@ func (f *fakeFieldDescriptor) Message() protoreflect.MessageDescriptor {
 func (f *fakeFieldDescriptor) IsList() bool {
 	return false
 }
+
+func TestParseSSEDirectives(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                  string
+		responseBody          string
+		expectedEventField    string
+		expectedIDField       string
+		expectedOmit          bool
+		expectedRemainingBody string
+	}{
+		{
+			name:                  "empty string",
+			responseBody:          "",
+			expectedEventField:    "",
+			expectedIDField:       "",
+			expectedOmit:          false,
+			expectedRemainingBody: "",
+		},
+		{
+			name:                  "only SSE_EVENT",
+			responseBody:          "SSE_EVENT=type",
+			expectedEventField:    "type",
+			expectedIDField:       "",
+			expectedOmit:          false,
+			expectedRemainingBody: "",
+		},
+		{
+			name:                  "only SSE_ID",
+			responseBody:          "SSE_ID=sequence",
+			expectedEventField:    "",
+			expectedIDField:       "sequence",
+			expectedOmit:          false,
+			expectedRemainingBody: "",
+		},
+		{
+			name:                  "only SSE_OMIT",
+			responseBody:          "SSE_OMIT",
+			expectedEventField:    "",
+			expectedIDField:       "",
+			expectedOmit:          true,
+			expectedRemainingBody: "",
+		},
+		{
+			name:                  "all SSE directives",
+			responseBody:          "SSE_EVENT=type,SSE_ID=sequence,SSE_OMIT",
+			expectedEventField:    "type",
+			expectedIDField:       "sequence",
+			expectedOmit:          true,
+			expectedRemainingBody: "",
+		},
+		{
+			name:                  "SSE directives with normal field",
+			responseBody:          "SSE_EVENT=type,data,SSE_ID=sequence",
+			expectedEventField:    "type",
+			expectedIDField:       "sequence",
+			expectedOmit:          false,
+			expectedRemainingBody: "data",
+		},
+		{
+			name:                  "normal field only",
+			responseBody:          "data",
+			expectedEventField:    "",
+			expectedIDField:       "",
+			expectedOmit:          false,
+			expectedRemainingBody: "data",
+		},
+		{
+			name:                  "multiple normal fields with SSE",
+			responseBody:          "field1,SSE_EVENT=type,field2,SSE_OMIT",
+			expectedEventField:    "type",
+			expectedIDField:       "",
+			expectedOmit:          true,
+			expectedRemainingBody: "field1,field2",
+		},
+		{
+			name:                  "with spaces",
+			responseBody:          " SSE_EVENT=type , SSE_ID=sequence , SSE_OMIT ",
+			expectedEventField:    "type",
+			expectedIDField:       "sequence",
+			expectedOmit:          true,
+			expectedRemainingBody: "",
+		},
+		{
+			name:                  "wildcard with SSE",
+			responseBody:          "*,SSE_EVENT=type",
+			expectedEventField:    "type",
+			expectedIDField:       "",
+			expectedOmit:          false,
+			expectedRemainingBody: "*",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts, remaining := parseSSEDirectives(tt.responseBody)
+
+			if tt.expectedEventField != "" || tt.expectedIDField != "" || tt.expectedOmit {
+				// Should have returned options
+				require.NotNil(t, opts, "expected options but got nil")
+				assert.Equal(t, tt.expectedEventField, opts.EventField, "event field mismatch")
+				assert.Equal(t, tt.expectedIDField, opts.IdField, "ID field mismatch")
+				assert.Equal(t, tt.expectedOmit, opts.OmitExtractedFields, "omit flag mismatch")
+			} else {
+				// Should have returned nil
+				assert.Nil(t, opts, "expected nil options but got non-nil")
+			}
+			assert.Equal(t, tt.expectedRemainingBody, remaining, "remaining body mismatch")
+		})
+	}
+}

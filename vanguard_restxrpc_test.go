@@ -762,8 +762,7 @@ func TestMux_RESTxRPC_SSE(t *testing.T) {
 				WithTargetProtocols(protocol),
 				WithTargetCodecs(CodecJSON),
 				WithNoTargetCompression(),
-				WithRESTServerSentEvents(), // Enable SSE
-			)
+				WithRESTServerSentEvents())
 			services := []*Service{svcHandler}
 			transcoder, err := NewTranscoder(services)
 			require.NoError(t, err)
@@ -835,9 +834,12 @@ func TestMux_RESTxRPC_SSE(t *testing.T) {
 				// Verify open event
 				assert.Contains(t, bodyStr, "event: open")
 
-				// Verify book events
-				assert.Contains(t, bodyStr, "event: message")
-				assert.Contains(t, bodyStr, `"type":"CREATED"`)
+				// WatchBooks uses custom event names, and omits fields from response_body: SSE_EVENT=type,SSE_OMIT
+				// So we should see event: CREATED, event: UPDATED, etc. instead of event: message
+				// and the field type should NOT be in the data.
+				assert.Contains(t, bodyStr, "event: CREATED")
+				assert.NotContains(t, bodyStr, "event: message")
+				assert.NotContains(t, bodyStr, `"type":"`)
 				assert.Contains(t, bodyStr, `"bookName":"shelves/test-shelf/books/`)
 				assert.Contains(t, bodyStr, "event: complete")
 			})
@@ -864,4 +866,193 @@ func TestMux_RESTxRPC_SSE(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestMux_RESTxRPC_SSE_CustomEventField(t *testing.T) {
+	t.Parallel()
+
+	protocols := []Protocol{ProtocolConnect, ProtocolGRPC, ProtocolGRPCWeb}
+	for _, protocol := range protocols {
+		protocol := protocol
+		t.Run(protocol.String(), func(t *testing.T) {
+			t.Parallel()
+
+			// Create handler
+			handler := &testStreamingServiceHandler{}
+			connectPath, connectHandler := testv1connect.NewStreamingServiceHandler(handler)
+			serveMux := http.NewServeMux()
+			serveMux.Handle(connectPath, connectHandler)
+			server := httptest.NewServer(serveMux)
+			t.Cleanup(server.Close)
+			serverURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+			proxy := httputil.NewSingleHostReverseProxy(serverURL)
+			proxy.Transport = server.Client().Transport
+
+			// Create transcoder with SSE enabled
+			// Event field configuration is now per-RPC via response_body directives
+			handler2 := protocolAssertMiddleware(protocol, CodecJSON, CompressionIdentity, proxy)
+			svcHandler := NewService(
+				testv1connect.StreamingServiceName,
+				handler2,
+				WithTargetProtocols(protocol),
+				WithTargetCodecs(CodecJSON),
+				WithNoTargetCompression(),
+				WithRESTServerSentEvents(), // SSE enabled, field config comes from proto annotations
+			)
+			services := []*Service{svcHandler}
+			transcoder, err := NewTranscoder(services)
+			require.NoError(t, err)
+
+			t.Run("WatchBooks_WithCustomEventField", func(t *testing.T) {
+				t.Parallel()
+
+				req := httptest.NewRequest(http.MethodGet, "/v1/shelves/test-shelf/books:watch", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				transcoder.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				// Verify SSE response
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+				assert.Equal(t, "text/event-stream", result.Header.Get("Content-Type"))
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				bodyStr := string(body)
+				t.Log("SSE response with custom event field:", bodyStr)
+
+				// Verify open event
+				assert.Contains(t, bodyStr, "event: open")
+
+				// Verify custom event names from "type" field
+				assert.Contains(t, bodyStr, "event: CREATED")
+				assert.Contains(t, bodyStr, "event: UPDATED")
+				assert.Contains(t, bodyStr, "event: DELETED")
+
+				// Should NOT contain generic "message" events (except if fallback is needed)
+				// Since all BookUpdate messages have a "type" field, we shouldn't see "event: message"
+				assert.NotContains(t, bodyStr, "event: message")
+
+				// Verify completion event
+				assert.Contains(t, bodyStr, "event: complete")
+
+				// Verify book names are still in data
+				assert.Contains(t, bodyStr, `"bookName":"shelves/test-shelf/books/`)
+			})
+
+			t.Run("CountToTen_WithCustomEventField_Fallback", func(t *testing.T) {
+				t.Parallel()
+
+				// CountToTen response doesn't have a "type" field,
+				// so it should fall back to "message" event name
+				req := httptest.NewRequest(http.MethodGet, "/v1/count?delay_ms=10", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				transcoder.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				bodyStr := string(body)
+				t.Log("SSE response with fallback:", bodyStr)
+
+				// Should fall back to "message" since CountResponse doesn't have "type" field
+				assert.Contains(t, bodyStr, "event: message")
+				assert.Contains(t, bodyStr, `"number":1`)
+			})
+		})
+	}
+}
+
+func TestMux_RESTxRPC_SSE_WithRESTStreaming(t *testing.T) {
+	t.Parallel()
+
+	// Test the new WithRESTServerSentEvents API
+	handler := &testStreamingServiceHandler{}
+	connectPath, connectHandler := testv1connect.NewStreamingServiceHandler(handler)
+	serveMux := http.NewServeMux()
+	serveMux.Handle(connectPath, connectHandler)
+	server := httptest.NewServer(serveMux)
+	t.Cleanup(server.Close)
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(serverURL)
+	proxy.Transport = server.Client().Transport
+
+	// Create transcoder using the WithRESTServerSentEvents API
+	// Field-specific config comes from proto response_body directives
+	handler2 := protocolAssertMiddleware(ProtocolConnect, CodecJSON, CompressionIdentity, proxy)
+	svcHandler := NewService(
+		testv1connect.StreamingServiceName,
+		handler2,
+		WithTargetProtocols(ProtocolConnect),
+		WithTargetCodecs(CodecJSON),
+		WithNoTargetCompression(),
+		WithRESTServerSentEvents(),
+	)
+	services := []*Service{svcHandler}
+	transcoder, err := NewTranscoder(services)
+	require.NoError(t, err)
+
+	t.Run("WatchBooks_WithNewAPI", func(t *testing.T) {
+		t.Parallel()
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/shelves/test-shelf/books:watch", nil)
+		req.Header.Set("Accept", "text/event-stream")
+
+		rsp := httptest.NewRecorder()
+		transcoder.ServeHTTP(rsp, req)
+
+		result := rsp.Result()
+		defer result.Body.Close()
+
+		assert.Equal(t, http.StatusOK, result.StatusCode)
+		assert.Equal(t, "text/event-stream", result.Header.Get("Content-Type"))
+
+		body, err := io.ReadAll(result.Body)
+		require.NoError(t, err)
+
+		bodyStr := string(body)
+
+		// Verify custom event names work with new API
+		assert.Contains(t, bodyStr, "event: CREATED")
+		assert.Contains(t, bodyStr, "event: UPDATED")
+		assert.Contains(t, bodyStr, "event: DELETED")
+		assert.Contains(t, bodyStr, "event: complete")
+	})
+
+	t.Run("CountToTen_WithNewAPI", func(t *testing.T) {
+		t.Parallel()
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/count?delay_ms=10", nil)
+		req.Header.Set("Accept", "text/event-stream")
+
+		rsp := httptest.NewRecorder()
+		transcoder.ServeHTTP(rsp, req)
+
+		result := rsp.Result()
+		defer result.Body.Close()
+
+		assert.Equal(t, http.StatusOK, result.StatusCode)
+
+		body, err := io.ReadAll(result.Body)
+		require.NoError(t, err)
+
+		bodyStr := string(body)
+
+		// Should fallback to "message" when field doesn't exist
+		assert.Contains(t, bodyStr, "event: message")
+		assert.Contains(t, bodyStr, `"number":10`)
+	})
 }
