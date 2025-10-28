@@ -34,6 +34,7 @@ var (
 type restSSEOptions struct {
 	EventField          string
 	IdField             string
+	RetryField          string
 	OmitExtractedFields bool
 }
 
@@ -48,7 +49,7 @@ func parseSSEDirectives(responseBody string) (opts *restSSEOptions, remaining st
 
 	parts := strings.Split(responseBody, ",")
 	var normalParts []string
-	var eventField, idField string
+	var eventField, idField, retryField string
 	var omit bool
 	hasDirectives := false
 
@@ -60,6 +61,9 @@ func parseSSEDirectives(responseBody string) (opts *restSSEOptions, remaining st
 			hasDirectives = true
 		} else if strings.HasPrefix(part, "SSE_ID=") {
 			idField = strings.TrimPrefix(part, "SSE_ID=")
+			hasDirectives = true
+		} else if strings.HasPrefix(part, "SSE_RETRY=") {
+			retryField = strings.TrimPrefix(part, "SSE_RETRY=")
 			hasDirectives = true
 		} else if part == "SSE_OMIT" {
 			omit = true
@@ -79,6 +83,7 @@ func parseSSEDirectives(responseBody string) (opts *restSSEOptions, remaining st
 	return &restSSEOptions{
 		EventField:          eventField,
 		IdField:             idField,
+		RetryField:          retryField,
 		OmitExtractedFields: omit,
 	}, remaining
 }

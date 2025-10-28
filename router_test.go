@@ -336,6 +336,7 @@ func TestParseSSEDirectives(t *testing.T) {
 		responseBody          string
 		expectedEventField    string
 		expectedIDField       string
+		expectedRetryField    string
 		expectedOmit          bool
 		expectedRemainingBody string
 	}{
@@ -344,6 +345,7 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "",
 			expectedEventField:    "",
 			expectedIDField:       "",
+			expectedRetryField:    "",
 			expectedOmit:          false,
 			expectedRemainingBody: "",
 		},
@@ -352,6 +354,7 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "SSE_EVENT=type",
 			expectedEventField:    "type",
 			expectedIDField:       "",
+			expectedRetryField:    "",
 			expectedOmit:          false,
 			expectedRemainingBody: "",
 		},
@@ -360,6 +363,16 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "SSE_ID=sequence",
 			expectedEventField:    "",
 			expectedIDField:       "sequence",
+			expectedRetryField:    "",
+			expectedOmit:          false,
+			expectedRemainingBody: "",
+		},
+		{
+			name:                  "only SSE_RETRY",
+			responseBody:          "SSE_RETRY=retry_ms",
+			expectedEventField:    "",
+			expectedIDField:       "",
+			expectedRetryField:    "retry_ms",
 			expectedOmit:          false,
 			expectedRemainingBody: "",
 		},
@@ -368,14 +381,16 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "SSE_OMIT",
 			expectedEventField:    "",
 			expectedIDField:       "",
+			expectedRetryField:    "",
 			expectedOmit:          true,
 			expectedRemainingBody: "",
 		},
 		{
 			name:                  "all SSE directives",
-			responseBody:          "SSE_EVENT=type,SSE_ID=sequence,SSE_OMIT",
+			responseBody:          "SSE_EVENT=type,SSE_ID=sequence,SSE_RETRY=retry_ms,SSE_OMIT",
 			expectedEventField:    "type",
 			expectedIDField:       "sequence",
+			expectedRetryField:    "retry_ms",
 			expectedOmit:          true,
 			expectedRemainingBody: "",
 		},
@@ -384,6 +399,7 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "SSE_EVENT=type,data,SSE_ID=sequence",
 			expectedEventField:    "type",
 			expectedIDField:       "sequence",
+			expectedRetryField:    "",
 			expectedOmit:          false,
 			expectedRemainingBody: "data",
 		},
@@ -392,6 +408,7 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "data",
 			expectedEventField:    "",
 			expectedIDField:       "",
+			expectedRetryField:    "",
 			expectedOmit:          false,
 			expectedRemainingBody: "data",
 		},
@@ -400,14 +417,16 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "field1,SSE_EVENT=type,field2,SSE_OMIT",
 			expectedEventField:    "type",
 			expectedIDField:       "",
+			expectedRetryField:    "",
 			expectedOmit:          true,
 			expectedRemainingBody: "field1,field2",
 		},
 		{
 			name:                  "with spaces",
-			responseBody:          " SSE_EVENT=type , SSE_ID=sequence , SSE_OMIT ",
+			responseBody:          " SSE_EVENT=type , SSE_ID=sequence , SSE_RETRY=retry_ms , SSE_OMIT ",
 			expectedEventField:    "type",
 			expectedIDField:       "sequence",
+			expectedRetryField:    "retry_ms",
 			expectedOmit:          true,
 			expectedRemainingBody: "",
 		},
@@ -416,8 +435,18 @@ func TestParseSSEDirectives(t *testing.T) {
 			responseBody:          "*,SSE_EVENT=type",
 			expectedEventField:    "type",
 			expectedIDField:       "",
+			expectedRetryField:    "",
 			expectedOmit:          false,
 			expectedRemainingBody: "*",
+		},
+		{
+			name:                  "retry with normal field",
+			responseBody:          "SSE_RETRY=delay,payload",
+			expectedEventField:    "",
+			expectedIDField:       "",
+			expectedRetryField:    "delay",
+			expectedOmit:          false,
+			expectedRemainingBody: "payload",
 		},
 	}
 
@@ -427,11 +456,12 @@ func TestParseSSEDirectives(t *testing.T) {
 
 			opts, remaining := parseSSEDirectives(tt.responseBody)
 
-			if tt.expectedEventField != "" || tt.expectedIDField != "" || tt.expectedOmit {
+			if tt.expectedEventField != "" || tt.expectedIDField != "" || tt.expectedRetryField != "" || tt.expectedOmit {
 				// Should have returned options
 				require.NotNil(t, opts, "expected options but got nil")
 				assert.Equal(t, tt.expectedEventField, opts.EventField, "event field mismatch")
 				assert.Equal(t, tt.expectedIDField, opts.IdField, "ID field mismatch")
+				assert.Equal(t, tt.expectedRetryField, opts.RetryField, "retry field mismatch")
 				assert.Equal(t, tt.expectedOmit, opts.OmitExtractedFields, "omit flag mismatch")
 			} else {
 				// Should have returned nil

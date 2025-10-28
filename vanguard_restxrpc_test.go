@@ -797,16 +797,16 @@ func TestMux_RESTxRPC_SSE(t *testing.T) {
 				assert.Contains(t, bodyStr, "event: open")
 
 				// Should have 10 message events
-				assert.Contains(t, bodyStr, "event: message")
-				assert.Contains(t, bodyStr, `"number":1`)
-				assert.Contains(t, bodyStr, `"number":10`)
+				assert.Contains(t, bodyStr, `data: {"number":1}`)
+				assert.Contains(t, bodyStr, `data: {"number":10}`)
 
 				// Should have completion event
 				assert.Contains(t, bodyStr, "event: complete")
 
-				// Verify sequential IDs
-				assert.Contains(t, bodyStr, "id: 1")
-				assert.Contains(t, bodyStr, "id: 10")
+				// There is no id field specified on this service, so it shouldn't appear
+				assert.NotContains(t, bodyStr, "id:")
+				// Message is the default event type, is inferable does not need to be included
+				assert.NotContains(t, bodyStr, `event: message`)
 			})
 
 			t.Run("WatchBooks_WithSSE", func(t *testing.T) {
@@ -934,42 +934,11 @@ func TestMux_RESTxRPC_SSE_CustomEventField(t *testing.T) {
 				assert.Contains(t, bodyStr, "event: UPDATED")
 				assert.Contains(t, bodyStr, "event: DELETED")
 
-				// Should NOT contain generic "message" events (except if fallback is needed)
-				// Since all BookUpdate messages have a "type" field, we shouldn't see "event: message"
-				assert.NotContains(t, bodyStr, "event: message")
-
 				// Verify completion event
 				assert.Contains(t, bodyStr, "event: complete")
 
 				// Verify book names are still in data
 				assert.Contains(t, bodyStr, `"bookName":"shelves/test-shelf/books/`)
-			})
-
-			t.Run("CountToTen_WithCustomEventField_Fallback", func(t *testing.T) {
-				t.Parallel()
-
-				// CountToTen response doesn't have a "type" field,
-				// so it should fall back to "message" event name
-				req := httptest.NewRequest(http.MethodGet, "/v1/count?delay_ms=10", nil)
-				req.Header.Set("Accept", "text/event-stream")
-
-				rsp := httptest.NewRecorder()
-				transcoder.ServeHTTP(rsp, req)
-
-				result := rsp.Result()
-				defer result.Body.Close()
-
-				assert.Equal(t, http.StatusOK, result.StatusCode)
-
-				body, err := io.ReadAll(result.Body)
-				require.NoError(t, err)
-
-				bodyStr := string(body)
-				t.Log("SSE response with fallback:", bodyStr)
-
-				// Should fall back to "message" since CountResponse doesn't have "type" field
-				assert.Contains(t, bodyStr, "event: message")
-				assert.Contains(t, bodyStr, `"number":1`)
 			})
 		})
 	}
@@ -1052,7 +1021,6 @@ func TestMux_RESTxRPC_SSE_WithRESTStreaming(t *testing.T) {
 		bodyStr := string(body)
 
 		// Should fallback to "message" when field doesn't exist
-		assert.Contains(t, bodyStr, "event: message")
 		assert.Contains(t, bodyStr, `"number":10`)
 	})
 }

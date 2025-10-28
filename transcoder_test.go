@@ -1724,69 +1724,19 @@ func rot13(data []byte) {
 	}
 }
 
-func TestSSEStreamWriter_Write_WithCustomIDAndEventField(t *testing.T) {
-	t.Parallel()
-
-	buf := &bytes.Buffer{}
-	writer := &sseStreamWriter{
-		delegate:     buf,
-		eventField:   "type",
-		eventIDField: "sequence",
-		messageID:    5, // Start at 5 to show it uses custom ID
-	}
-
-	jsonData := []byte(`{"sequence":"42","type":"UPDATE","data":"test"}`)
-	n, err := writer.Write(jsonData)
-	require.NoError(t, err)
-	assert.Equal(t, len(jsonData), n)
-
-	output := buf.String()
-	t.Log("SSE output:", output)
-
-	// Should use custom ID and event type from message
-	assert.Contains(t, output, "id: 42\n")
-	assert.Contains(t, output, "event: UPDATE\n")
-	assert.NotContains(t, output, "id: 5\n")
-	assert.NotContains(t, output, "event: message\n")
-}
-
-func TestSSEStreamWriter_Write_WithMissingCustomIDEventFields(t *testing.T) {
-	t.Parallel()
-
-	buf := &bytes.Buffer{}
-	writer := &sseStreamWriter{
-		delegate:     buf,
-		eventIDField: "id",
-		eventField:   "type",
-		messageID:    3, // Fallback to this
-	}
-
-	jsonData := []byte(`{"data":"test"}`) // Missing "id" field
-	n, err := writer.Write(jsonData)
-	require.NoError(t, err)
-	assert.Equal(t, len(jsonData), n)
-
-	output := buf.String()
-	t.Log("SSE output:", output)
-
-	// Should fall back to sequential ID
-	assert.Contains(t, output, "id: 3\n")
-	assert.Contains(t, output, "event: message\n")
-}
-
 func TestSSEStreamWriter_Write_WithOmitExtractedFields(t *testing.T) {
 	t.Parallel()
 
 	buf := &bytes.Buffer{}
 	writer := &sseStreamWriter{
 		delegate:            buf,
-		eventField:          "type",
-		eventIDField:        "sequence",
+		eventField:          "event_type",
+		eventIDField:        "msg_id",
+		retryField:          "reconnect_time",
 		omitExtractedFields: true,
-		messageID:           1,
 	}
 
-	jsonData := []byte(`{"sequence":"99","type":"CREATED","name":"test-book","timestamp":"2025-01-01T00:00:00Z"}`)
+	jsonData := []byte(`{"msg_id":"xyz-123","event_type":"UPDATE","reconnect_time":"5000","payload":"test data"}`)
 	n, err := writer.Write(jsonData)
 	require.NoError(t, err)
 	assert.Equal(t, len(jsonData), n)
@@ -1794,15 +1744,183 @@ func TestSSEStreamWriter_Write_WithOmitExtractedFields(t *testing.T) {
 	output := buf.String()
 	t.Log("SSE output:", output)
 
-	// Should use extracted values in metadata
-	assert.Contains(t, output, "id: 99\n")
-	assert.Contains(t, output, "event: CREATED\n")
+	// Should use extracted values in SSE metadata
+	assert.Contains(t, output, "id: xyz-123\n")
+	assert.Contains(t, output, "retry: 5000\n")
+	assert.Contains(t, output, "event: UPDATE\n")
 
 	// Should NOT contain extracted fields in data payload
-	assert.NotContains(t, output, `"sequence"`)
-	assert.NotContains(t, output, `"type"`)
+	assert.NotContains(t, output, `"msg_id"`)
+	assert.NotContains(t, output, `"event_type"`)
+	assert.NotContains(t, output, `"reconnect_time"`)
 
 	// Should still contain non-extracted fields
-	assert.Contains(t, output, `"name":"test-book"`)
-	assert.Contains(t, output, `"timestamp":"2025-01-01T00:00:00Z"`)
+	assert.Contains(t, output, `"payload":"test data"`)
+}
+
+func TestSSEStreamWriter_Write_IDFieldBehavior(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NotConfigured_NoIDField", func(t *testing.T) {
+		t.Parallel()
+		buf := &bytes.Buffer{}
+		writer := &sseStreamWriter{
+			delegate: buf,
+			// eventIDField NOT configured
+		}
+
+		jsonData := []byte(`{"id":"123","data":"test"}`)
+		_, err := writer.Write(jsonData)
+		require.NoError(t, err)
+
+		output := buf.String()
+		t.Log("SSE output:", output)
+
+		// No id: field in output (saves bandwidth)
+		assert.NotContains(t, output, "id:")
+	})
+
+	t.Run("Configured_WithValue", func(t *testing.T) {
+		t.Parallel()
+		buf := &bytes.Buffer{}
+		writer := &sseStreamWriter{
+			delegate:     buf,
+			eventIDField: "msg_id",
+		}
+
+		jsonData := []byte(`{"msg_id":"abc-123","data":"test"}`)
+		_, err := writer.Write(jsonData)
+		require.NoError(t, err)
+
+		output := buf.String()
+		t.Log("SSE output:", output)
+
+		// Includes id: with the extracted value
+		assert.Contains(t, output, "id: abc-123\n")
+	})
+
+	t.Run("Configured_WithoutValue", func(t *testing.T) {
+		t.Parallel()
+		buf := &bytes.Buffer{}
+		writer := &sseStreamWriter{
+			delegate:     buf,
+			eventIDField: "msg_id",
+		}
+
+		jsonData := []byte(`{"data":"test"}`) // No msg_id field
+		_, err := writer.Write(jsonData)
+		require.NoError(t, err)
+
+		output := buf.String()
+		t.Log("SSE output:", output)
+
+		// Includes empty id: to reset last event ID counter
+		// Per SSE spec: empty id resets the counter
+		assert.Contains(t, output, "id: \n")
+	})
+
+	t.Run("Configured_WithEmptyString", func(t *testing.T) {
+		t.Parallel()
+		buf := &bytes.Buffer{}
+		writer := &sseStreamWriter{
+			delegate:     buf,
+			eventIDField: "msg_id",
+		}
+
+		jsonData := []byte(`{"msg_id":"","data":"test"}`)
+		_, err := writer.Write(jsonData)
+		require.NoError(t, err)
+
+		output := buf.String()
+		t.Log("SSE output:", output)
+
+		// Includes empty id: to reset last event ID counter
+		assert.Contains(t, output, "id: \n")
+	})
+}
+
+func TestSSEStreamWriter_Write_RetryFieldBehavior(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NotConfigured", func(t *testing.T) {
+		t.Parallel()
+		buf := &bytes.Buffer{}
+		writer := &sseStreamWriter{
+			delegate: buf,
+		}
+
+		jsonData := []byte(`{"retry_ms":"3000","data":"test"}`)
+		_, err := writer.Write(jsonData)
+		require.NoError(t, err)
+
+		output := buf.String()
+		// No retry field when not configured
+		assert.NotContains(t, output, "retry:")
+	})
+
+	t.Run("Configured_ValidDigits", func(t *testing.T) {
+		t.Parallel()
+		buf := &bytes.Buffer{}
+		writer := &sseStreamWriter{
+			delegate:   buf,
+			retryField: "retry_ms",
+		}
+
+		jsonData := []byte(`{"retry_ms":"3000","data":"test"}`)
+		_, err := writer.Write(jsonData)
+		require.NoError(t, err)
+
+		output := buf.String()
+		// Includes retry field with valid digits
+		assert.Contains(t, output, "retry: 3000\n")
+	})
+
+	t.Run("Configured_InvalidChars", func(t *testing.T) {
+		t.Parallel()
+		tests := []struct {
+			name  string
+			value string
+		}{
+			{"with_letters", "3000ms"},
+			{"negative", "-3000"},
+			{"decimal", "3.5"},
+			{"empty", ""},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				buf := &bytes.Buffer{}
+				writer := &sseStreamWriter{
+					delegate:   buf,
+					retryField: "retry_ms",
+				}
+
+				jsonData := []byte(fmt.Sprintf(`{"retry_ms":"%s","data":"test"}`, tt.value))
+				_, err := writer.Write(jsonData)
+				require.NoError(t, err)
+
+				output := buf.String()
+				// Invalid values are silently omitted per SSE spec
+				assert.NotContains(t, output, "retry:")
+			})
+		}
+	})
+
+	t.Run("Configured_MissingField", func(t *testing.T) {
+		t.Parallel()
+		buf := &bytes.Buffer{}
+		writer := &sseStreamWriter{
+			delegate:   buf,
+			retryField: "retry_ms",
+		}
+
+		jsonData := []byte(`{"data":"test"}`) // No retry_ms field
+		_, err := writer.Write(jsonData)
+		require.NoError(t, err)
+
+		output := buf.String()
+		// No retry field when missing from message
+		assert.NotContains(t, output, "retry:")
+	})
 }

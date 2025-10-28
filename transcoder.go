@@ -41,6 +41,7 @@ var (
 )
 
 const (
+	sseIDPrefix    = "id: "
 	sseDataPrefix  = "data: "
 	sseEventPrefix = "event: "
 	sseNewline     = "\n"
@@ -2258,23 +2259,19 @@ func (l *requestLine) fromRequest(req *http.Request) {
 // It intercepts writes that contain complete protobuf messages and formats them
 // as SSE events with proper event: and data: fields.
 //
-// Message IDs start at 1 and increment for each data message. The 'open' event
-// (sent on connection establishment) does not have an ID. Error and completion
-// events also do not have IDs as they are control events rather than data events.
-//
 // If eventIDField is configured, the writer will extract the ID value from that field
 // in each message. This allows services to provide their own IDs for reconnection scenarios.
-// If the field doesn't exist or is empty, falls back to the auto-generated sequential ID.
+// If the field doesn't exist or is empty, nil string is used.
 //
 // Note: Vanguard does not automatically handle the Last-Event-ID header for reconnection.
-// Services that provide custom IDs via eventIDField are responsible for implementing
+// Services that provide IDs via eventIDField are responsible for implementing
 // replay/resume logic in their handlers by reading the Last-Event-ID from the request headers.
 type sseStreamWriter struct {
 	delegate            io.Writer
 	codec               Codec
-	messageID           int64
 	eventField          string // Field name to extract from message for event type
 	eventIDField        string // Field name to extract from message for event ID
+	retryField          string // Field name to extract from message for retry interval
 	omitExtractedFields bool   // Whether to remove extracted fields from data payload
 	responseType        protoreflect.MessageType
 }
@@ -2292,22 +2289,23 @@ func newSSEStreamWriter(w *responseWriter) *sseStreamWriter {
 	}
 
 	// Use per-RPC SSE config from response_body directives in HTTP annotations
-	var eventField, eventIDField string
+	var eventField, eventIDField, retryField string
 	var omitExtracted bool
 
 	if w.op.restTarget != nil && w.op.restTarget.restSSEOpts != nil {
 		opts := w.op.restTarget.restSSEOpts
 		eventField = opts.EventField
 		eventIDField = opts.IdField
+		retryField = opts.RetryField
 		omitExtracted = opts.OmitExtractedFields
 	}
 
 	return &sseStreamWriter{
 		delegate:            w.delegate,
 		codec:               w.op.client.codec,
-		messageID:           1, // message IDs start at 1 since open event already sent
 		eventField:          eventField,
 		eventIDField:        eventIDField,
+		retryField:          retryField,
 		omitExtractedFields: omitExtracted,
 		responseType:        w.op.methodConf.responseType,
 	}
@@ -2320,13 +2318,14 @@ func (s *sseStreamWriter) Write(data []byte) (int, error) {
 	}
 
 	// Determine the event name and ID, and optionally filter the data
-	eventName := "message"
-	eventID := strconv.FormatInt(s.messageID, 10)
+	eventName := ""
+	eventID := ""
+	retryField := ""
 	dataToWrite := data
-	if s.eventField != "" || s.eventIDField != "" {
+	if s.eventField != "" || s.eventIDField != "" || s.retryField != "" {
 		// Extract field values and optionally remove them from data
 		var jsonData map[string]interface{}
-		needsFiltering := s.omitExtractedFields && (s.eventField != "" || s.eventIDField != "")
+		needsFiltering := s.omitExtractedFields && (s.eventField != "" || s.eventIDField != "" || s.retryField != "")
 		err := json.Unmarshal(data, &jsonData)
 		if err != nil {
 			return 0, err
@@ -2348,6 +2347,16 @@ func (s *sseStreamWriter) Write(data []byte) (int, error) {
 				}
 			}
 		}
+		// Extract retry field
+		// Per SSE spec, retry field ignored if contains non ASCII digits. Don't waste wire
+		// bandwidth sending invalid values.
+		if s.retryField != "" {
+			if value, ok := jsonData[s.retryField]; ok {
+				if extracted := convertFieldValue(value); extracted != "" && isASCIIDigits(extracted) {
+					retryField = extracted
+				}
+			}
+		}
 
 		// Remove extracted fields if requested
 		if needsFiltering {
@@ -2357,6 +2366,9 @@ func (s *sseStreamWriter) Write(data []byte) (int, error) {
 			if s.eventIDField != "" {
 				delete(jsonData, s.eventIDField)
 			}
+			if s.retryField != "" {
+				delete(jsonData, s.retryField)
+			}
 			// Re-marshal the filtered data
 			if filtered, err := json.Marshal(jsonData); err == nil {
 				dataToWrite = filtered
@@ -2364,10 +2376,20 @@ func (s *sseStreamWriter) Write(data []byte) (int, error) {
 		}
 	}
 
-	// Build SSE event with message ID
+	// Build SSE event with optional id and retry fields
 	var buf bytes.Buffer
-	buf.WriteString("id: " + eventID + sseNewline)
-	buf.WriteString(sseEventPrefix + eventName + sseNewline)
+	// If eventIDField is configured, always include id: field (even if empty)
+	// Per SSE spec, an empty id: resets the last event ID counter
+	if s.eventIDField != "" {
+		buf.WriteString(sseIDPrefix + eventID + sseNewline)
+	}
+	// Only include the retry and event name fields if they have a value
+	if retryField != "" {
+		buf.WriteString("retry: " + retryField + sseNewline)
+	}
+	if eventName != "" {
+		buf.WriteString(sseEventPrefix + eventName + sseNewline)
+	}
 
 	// Write data field(s) - handle multiline by splitting
 	// SSE spec supports three line ending types: LF (\n), CRLF (\r\n), and CR (\r)
@@ -2394,9 +2416,6 @@ func (s *sseStreamWriter) Write(data []byte) (int, error) {
 		return 0, err
 	}
 
-	// Increment message ID for the next event
-	s.messageID++
-
 	// Return original data length so caller thinks all data was written
 	return len(data), nil
 }
@@ -2415,4 +2434,17 @@ func convertFieldValue(value interface{}) string {
 		// For complex types, just use their string representation
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// isASCIIDigits checks if a string contains only ASCII digits (0-9).
+func isASCIIDigits(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
