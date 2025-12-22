@@ -139,6 +139,41 @@ otherService := vanguard.NewService(
 )
 ```
 
+#### Server-Sent Events (SSE) for REST Streaming
+
+Vanguard supports Server-Sent Events (SSE) for server-streaming RPCs accessed via REST. This allows
+browser clients and other HTTP clients to consume streaming RPCs using the standard `text/event-stream`
+content type.
+
+To enable SSE for a service, use the `WithRESTServerSentEvents` option:
+
+```go
+service := vanguard.NewService(
+	path,
+	handler,
+	vanguard.WithRESTServerSentEvents(),
+)
+```
+
+Field-specific SSE configuration (event names, IDs, field omission) is specified per-RPC using
+`response_body` directives in `google.api.http` annotations:
+
+```protobuf
+rpc WatchBooks(WatchBooksRequest) returns (stream BookUpdate) {
+  option (google.api.http) = {
+    get: "/v1/{parent=shelves/*}/books:watch"
+    response_body: "SSE_EVENT=type,SSE_ID=sequence,SSE_OMIT"
+  };
+}
+```
+
+**Available directives:**
+- `SSE_EVENT=field_name` - Extract `field_name` from each message to use as the SSE event type
+- `SSE_ID=field_name` - Extract `field_name` from each message to use as the SSE event ID
+- `SSE_OMIT` - Remove the extracted fields from the JSON data payload
+
+See the [SSE streaming example](internal/examples/sse-streaming) for a complete demonstration.
+
 ### Building the Transcoder
 
 The thing that does all of the work in Vanguard is a `*vanguard.Transcoder`. When the
