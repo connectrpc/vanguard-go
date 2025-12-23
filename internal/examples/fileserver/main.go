@@ -18,19 +18,23 @@ import (
 	"bytes"
 	"context"
 	"flag"
+	"fmt"
 	"html/template"
-	"io/fs"
+	"io"
 	"log"
 	"mime"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 
 	"connectrpc.com/connect"
 	"connectrpc.com/vanguard"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
+	"github.com/spf13/afero"
 	"google.golang.org/genproto/googleapis/api/httpbody"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func main() {
@@ -40,10 +44,13 @@ func main() {
 	if err := flagset.Parse(os.Args[1:]); err != nil {
 		log.Fatal(err)
 	}
-
+	fs := afero.NewOsFs()
 	// Create Connect handler.
 	serviceHandler := &ContentService{
-		FS: os.DirFS(*directory),
+		Fs: &prefixFS{
+			Fs:     fs,
+			prefix: *directory,
+		},
 	}
 	// And wrap it with Vanguard.
 	service := vanguard.NewService(testv1connect.NewContentServiceHandler(serviceHandler))
@@ -55,6 +62,21 @@ func main() {
 	// using the HTTP annotations on the ContentService definition.
 	log.Printf("Serving %s on HTTP port: %s\n", *directory, *port)
 	log.Fatal(http.ListenAndServe(":"+*port, handler))
+}
+
+// PrefixFS is something like os.DirFS()
+// but now only wraps Create and Open
+type prefixFS struct {
+	afero.Fs
+	prefix string
+}
+
+func (pf *prefixFS) Create(name string) (afero.File, error) {
+	return os.Create(path.Join(pf.prefix, name))
+}
+
+func (pf *prefixFS) Open(name string) (afero.File, error) {
+	return os.Open(path.Join(pf.prefix, name))
 }
 
 var indexHTMLTemplate = template.Must(template.New("http").Parse(`
@@ -78,7 +100,9 @@ var indexHTMLTemplate = template.Must(template.New("http").Parse(`
 
 type ContentService struct {
 	testv1connect.UnimplementedContentServiceHandler
-	fs.FS
+	// Since std io fs.Fs is a read-only fs abstraction
+	// For some ops like uploading , we need to modify the user file system
+	afero.Fs
 }
 
 func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.IndexRequest]) (*connect.Response[httpbody.HttpBody], error) {
@@ -101,7 +125,7 @@ func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.In
 	var data []byte
 	if !stat.IsDir() {
 		contentType = mime.TypeByExtension(filepath.Ext(name))
-		data, err = fs.ReadFile(c.FS, name)
+		data, err = afero.ReadFile(c.Fs, name)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +137,7 @@ func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.In
 			Title: name,
 			Files: make(map[string]string),
 		}
-		entries, err := fs.ReadDir(c.FS, name)
+		entries, err := afero.ReadDir(c.Fs, name)
 		if err != nil {
 			return nil, err
 		}
@@ -131,4 +155,81 @@ func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.In
 		ContentType: contentType,
 		Data:        data,
 	}), nil
+}
+
+// Upload impls the connect RPC stream upload mechanism
+// Common Usage(curl):
+//
+//	```bash
+//		echo "hello from nace" > hello.txt
+//		curl -X POST --data-binary "@hello.txt" -H "Content-Type: application/octet-stream" localhost:8100/upload_hello.txt:upload
+//	```
+func (c *ContentService) Upload(
+	ctx context.Context,
+	stream *connect.ClientStream[testv1.UploadRequest],
+) (*connect.Response[emptypb.Empty], error) {
+	if !stream.Receive() {
+		if err := stream.Err(); err != nil {
+			return nil, err
+		}
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no upload message received"))
+	}
+	msg := stream.Msg()
+	log.Printf("Upload: filename=%q contentType=%q size=%d",
+		msg.GetFilename(),
+		msg.GetFile().GetContentType(),
+		len(msg.GetFile().GetData()),
+	)
+
+	// Write file.
+	file, err := c.Fs.Create(msg.GetFilename())
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if _, err := file.Write(msg.GetFile().GetData()); err != nil {
+		return nil, err
+	}
+
+	// Ensure the client didn’t send more than one message (optional guard).
+	if stream.Receive() {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unexpected extra message in upload stream"))
+	}
+	if err := stream.Err(); err != nil {
+		return nil, err
+	}
+
+	return connect.NewResponse(&emptypb.Empty{}), nil
+}
+
+// Download impls the connect RPC stream download stream
+// Common Usage(curl):
+//
+//	```bash
+//	curl -X GET -H "Content-Type: application/json" http://localhost:8100/upload_hello.txt:download > download_hello.txt
+//	```
+func (c *ContentService) Download(
+	ctx context.Context,
+	req *connect.Request[testv1.DownloadRequest],
+	stream *connect.ServerStream[testv1.DownloadResponse],
+) error {
+	file, err := c.Fs.Open(req.Msg.Filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return err
+	}
+	if err := stream.Send(&testv1.DownloadResponse{
+		File: &httpbody.HttpBody{
+			ContentType: "application/octet-stream",
+			Data:        data,
+		},
+	}); err != nil {
+		return err
+	}
+	return nil
 }
