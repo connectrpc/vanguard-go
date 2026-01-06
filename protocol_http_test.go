@@ -25,13 +25,21 @@ import (
 
 	"connectrpc.com/connect"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/genproto/googleapis/rpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protodesc"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/reflect/protoregistry"
+	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/descriptorpb"
+	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/anypb"
 )
 
@@ -273,6 +281,121 @@ func TestHTTPEncodePathValues(t *testing.T) {
 
 			assert.Equal(t, testCase.wantPath, path)
 			assert.Equal(t, testCase.wantQuery, query)
+		})
+	}
+}
+
+func TestGetHTTPRuleExtension(t *testing.T) {
+	t.Parallel()
+
+	expectedRule := &annotations.HttpRule{
+		Pattern: &annotations.HttpRule_Get{
+			Get: "/foo/bar/",
+		},
+	}
+
+	staticRule := proto.CloneOf(expectedRule)
+
+	dynamicRule := dynamicpb.NewMessage(staticRule.ProtoReflect().Descriptor())
+	proto.Merge(dynamicRule, staticRule)
+	dynamicExt := dynamicpb.NewExtensionType(annotations.E_Http.TypeDescriptor().Descriptor())
+
+	// Create a clone of the descriptor hierarchy, so we can test a message that
+	// actually uses a different message descriptor instance.
+	descriptorProto := proto.CloneOf(protodesc.ToFileDescriptorProto(descriptorpb.File_google_protobuf_descriptor_proto))
+	httpProto := proto.CloneOf(protodesc.ToFileDescriptorProto(annotations.File_google_api_http_proto))
+	annotationsProto := proto.CloneOf(protodesc.ToFileDescriptorProto(annotations.File_google_api_annotations_proto))
+	var registry protoregistry.Files
+	descriptorDesc, err := protodesc.NewFile(descriptorProto, &registry)
+	require.NoError(t, err)
+	require.NoError(t, registry.RegisterFile(descriptorDesc))
+	httpDesc, err := protodesc.NewFile(httpProto, &registry)
+	require.NoError(t, err)
+	require.NoError(t, registry.RegisterFile(httpDesc))
+	annotationsDesc, err := protodesc.NewFile(annotationsProto, &registry)
+	require.NoError(t, err)
+	require.NoError(t, registry.RegisterFile(annotationsDesc))
+	ruleDesc := httpDesc.Messages().ByName("HttpRule")
+	require.NotNil(t, ruleDesc)
+	extDesc := annotationsDesc.Extensions().ByName("http")
+	require.NotNil(t, extDesc)
+
+	dynamicDescRule := dynamicpb.NewMessage(ruleDesc)
+	dynamicDescExt := dynamicpb.NewExtensionType(extDesc)
+	ruleBytes, err := proto.Marshal(staticRule)
+	require.NoError(t, err)
+	require.NoError(t, proto.Unmarshal(ruleBytes, dynamicDescRule))
+
+	testCases := []struct {
+		name string
+		rule proto.Message
+		ext  protoreflect.ExtensionType
+	}{
+		{
+			name: "nothing",
+		},
+		{
+			name: "static",
+			rule: staticRule,
+			ext:  annotations.E_Http,
+		},
+		{
+			name: "dynamic-same-descriptor",
+			rule: dynamicRule,
+			ext:  dynamicExt,
+		},
+		{
+			name: "dynamic-different-descriptor",
+			rule: dynamicDescRule,
+			ext:  dynamicDescExt,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			baseMethodProto := &descriptorpb.MethodDescriptorProto{
+				Name:       proto.String("Bar"),
+				InputType:  proto.String(".Foo"),
+				OutputType: proto.String(".Bar"),
+				Options:    &descriptorpb.MethodOptions{},
+			}
+			if testCase.rule != nil {
+				baseMethodProto.GetOptions().ProtoReflect().Set(
+					testCase.ext.TypeDescriptor(),
+					protoreflect.ValueOfMessage(testCase.rule.ProtoReflect()),
+				)
+			}
+
+			baseFileProto := &descriptorpb.FileDescriptorProto{
+				Name: proto.String("foo/bar.proto"),
+				MessageType: []*descriptorpb.DescriptorProto{
+					{
+						Name: proto.String("Foo"),
+					},
+					{
+						Name: proto.String("Bar"),
+					},
+				},
+				Service: []*descriptorpb.ServiceDescriptorProto{
+					{
+						Name:   proto.String("FooService"),
+						Method: []*descriptorpb.MethodDescriptorProto{baseMethodProto},
+					},
+				},
+			}
+			baseFileDesc, err := protodesc.NewFile(baseFileProto, nil)
+			require.NoError(t, err)
+			methodDesc := baseFileDesc.Services().Get(0).Methods().Get(0)
+
+			rule, ok := getHTTPRuleExtension(methodDesc)
+			if testCase.rule == nil {
+				require.False(t, ok)
+			} else {
+				require.True(t, ok)
+				require.Empty(t, cmp.Diff(expectedRule, rule, protocmp.Transform()))
+			}
 		})
 	}
 }
