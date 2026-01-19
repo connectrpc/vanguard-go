@@ -50,7 +50,7 @@ import (
 //		UnmarshalOptions: protojson.UnmarshalOptions{
 //			DiscardUnknown: true,
 //		},
-//	})
+//	}))
 func NewTranscoder(server *grpc.Server, opts ...vanguard.TranscoderOption) (*vanguard.Transcoder, error) {
 	codecs := make([]string, 1, 2)
 	codecs[0] = vanguard.CodecProto
