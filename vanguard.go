@@ -407,6 +407,21 @@ type RESTUnmarshalOptions struct {
 	DiscardUnknownQueryParams bool
 }
 
+// WithRESTServerSentEvents returns a service option that configures streaming behavior for
+// the REST protocol. This includes Server-Sent Events (SSE) configuration.
+//
+// Example:
+//
+//	vanguard.WithRESTServerSentEvents(vanguard.restSSEOpts{
+//	    ServerSentEvents: true,
+//	    EventField: "type",
+//	})
+func WithRESTServerSentEvents() ServiceOption {
+	return serviceOptionFunc(func(o *serviceOptions) {
+		o.restEnableSSE = true
+	})
+}
+
 type transcoderOptions struct {
 	defaultServiceOptions []ServiceOption
 	rules                 []*annotations.HttpRule
@@ -435,6 +450,7 @@ type serviceOptions struct {
 	maxMsgBufferBytes           uint32
 	maxGetURLBytes              uint32
 	restUnmarshalOptions        RESTUnmarshalOptions
+	restEnableSSE               bool // Enable SSE for server-streaming RPCs
 }
 
 type methodConfig struct {

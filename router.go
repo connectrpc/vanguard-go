@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strings"
 
+	"connectrpc.com/connect"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -27,6 +28,65 @@ import (
 var (
 	errUnknownField = errors.New("unknown field")
 )
+
+// restSSEOptions configures streaming behavior for a given RPC method when using
+// Server-Sent Events (SSE) over the REST protocol.
+type restSSEOptions struct {
+	EventField          string
+	IdField             string
+	RetryField          string
+	OmitExtractedFields bool
+}
+
+// parseSSEDirectives parses SSE configuration directives from a response_body string.
+// It supports the syntax: "SSE_EVENT=field_name,SSE_ID=field_name,SSE_OMIT"
+// Returns the parsed config and the remaining response_body string (without SSE directives).
+// If no SSE directives are found, returns nil for options.
+func parseSSEDirectives(responseBody string) (opts *restSSEOptions, remaining string) {
+	if responseBody == "" {
+		return nil, ""
+	}
+
+	parts := strings.Split(responseBody, ",")
+	var normalParts []string
+	var eventField, idField, retryField string
+	var omit bool
+	hasDirectives := false
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+
+		if strings.HasPrefix(part, "SSE_EVENT=") {
+			eventField = strings.TrimPrefix(part, "SSE_EVENT=")
+			hasDirectives = true
+		} else if strings.HasPrefix(part, "SSE_ID=") {
+			idField = strings.TrimPrefix(part, "SSE_ID=")
+			hasDirectives = true
+		} else if strings.HasPrefix(part, "SSE_RETRY=") {
+			retryField = strings.TrimPrefix(part, "SSE_RETRY=")
+			hasDirectives = true
+		} else if part == "SSE_OMIT" {
+			omit = true
+			hasDirectives = true
+		} else {
+			// Not an SSE directive, keep it for normal processing
+			normalParts = append(normalParts, part)
+		}
+	}
+
+	remaining = strings.Join(normalParts, ",")
+
+	if !hasDirectives {
+		return nil, remaining
+	}
+
+	return &restSSEOptions{
+		EventField:          eventField,
+		IdField:             idField,
+		RetryField:          retryField,
+		OmitExtractedFields: omit,
+	}, remaining
+}
 
 // routeTrie is a prefix trie of valid REST URI paths to route targets.
 // It supports evaluation of variables as the path is matched, for
@@ -212,6 +272,7 @@ type routeTarget struct {
 	responseBodyFieldPath string
 	responseBodyFields    []protoreflect.FieldDescriptor
 	vars                  []routeTargetVar
+	restSSEOpts           *restSSEOptions
 }
 
 func makeTarget(
@@ -220,6 +281,18 @@ func makeTarget(
 	segments pathSegments,
 	variables []pathVariable,
 ) (*routeTarget, error) {
+	// Parse SSE directives from response_body
+	restSSEOpts, responseBody := parseSSEDirectives(responseBody)
+
+	// Validate that SSE directives are only used with server-streaming RPCs
+	if restSSEOpts != nil && config.streamType != connect.StreamTypeServer {
+		return nil, fmt.Errorf(
+			"SSE directives (SSE_EVENT, SSE_ID, SSE_OMIT) can only be used with server-streaming RPCs, but %q has stream type %s",
+			config.descriptor.FullName(),
+			config.streamType.String(),
+		)
+	}
+
 	var requestBodyFields []protoreflect.FieldDescriptor
 	if requestBody == "*" {
 		// non-nil, empty slice means use the whole thing
@@ -287,6 +360,7 @@ func makeTarget(
 		responseBodyFieldPath: responseBody,
 		responseBodyFields:    responseBodyFields,
 		vars:                  routeTargetVars,
+		restSSEOpts:           restSSEOpts,
 	}, nil
 }
 

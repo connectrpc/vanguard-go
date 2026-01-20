@@ -17,6 +17,7 @@ package vanguard
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -455,6 +456,312 @@ func TestMux_RPCxREST(t *testing.T) {
 					}
 				})
 			}
+		})
+	}
+}
+
+func TestMux_RPCxREST_SSE(t *testing.T) {
+	t.Parallel()
+
+	// Test that RPC calls can be transcoded to REST+SSE
+	protocols := []Protocol{
+		ProtocolGRPC,
+		ProtocolGRPCWeb,
+		ProtocolConnect,
+	}
+
+	for _, protocol := range protocols {
+		protocol := protocol
+		t.Run(protocol.String(), func(t *testing.T) {
+			t.Parallel()
+
+			// Set up Vanguard transcoder with SSE enabled
+			svcHandler := NewService(
+				testv1connect.StreamingServiceName,
+				http.NotFoundHandler(), // not used for RPC->REST
+				WithTargetProtocols(ProtocolREST),
+				WithTargetCodecs(CodecJSON),
+				WithNoTargetCompression(),
+				WithRESTServerSentEvents(), // Enable SSE
+			)
+			transcoder, err := NewTranscoder([]*Service{svcHandler})
+			require.NoError(t, err)
+
+			// Backend REST+SSE server
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Verify SSE request headers
+				if r.Header.Get("Accept") != "text/event-stream" {
+					t.Errorf("Expected Accept header to be text/event-stream, got %q", r.Header.Get("Accept"))
+					http.Error(w, "missing SSE accept header", http.StatusBadRequest)
+					return
+				}
+
+				// Send SSE response
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+				w.WriteHeader(http.StatusOK)
+
+				if r.URL.Path == "/v1/count" {
+					for i := 1; i <= 5; i++ {
+						fmt.Fprintf(w, "id: %d\n", i)
+						fmt.Fprintf(w, "event: message\n")
+						fmt.Fprintf(w, "data: {\"number\":%d}\n\n", i)
+						if flusher, ok := w.(http.Flusher); ok {
+							flusher.Flush()
+						}
+					}
+				} else if r.URL.Path == "/v1/shelves/test/books:watch" {
+					fmt.Fprintf(w, "id: 1\n")
+					fmt.Fprintf(w, "event: message\n")
+					fmt.Fprintf(w, "data: {\"type\":\"CREATED\",\"bookName\":\"shelves/test/books/book-1\"}\n\n")
+				}
+
+				// Send completion
+				fmt.Fprintf(w, "event: complete\n")
+				fmt.Fprintf(w, "data: {}\n\n")
+			}))
+			t.Cleanup(backend.Close)
+
+			// Configure transcoder to use backend
+			serverURL, err := url.Parse(backend.URL)
+			require.NoError(t, err)
+			proxy := httputil.NewSingleHostReverseProxy(serverURL)
+			proxy.Transport = backend.Client().Transport
+
+			// Wrap transcoder with proxy
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// First go through transcoder
+				rec := httptest.NewRecorder()
+				transcoder.ServeHTTP(rec, r)
+
+				// If transcoder handled it, use that response
+				if rec.Code != http.StatusNotFound {
+					for k, v := range rec.Header() {
+						w.Header()[k] = v
+					}
+					w.WriteHeader(rec.Code)
+					w.Write(rec.Body.Bytes())
+					return
+				}
+
+				// Otherwise proxy to backend
+				proxy.ServeHTTP(w, r)
+			})
+
+			t.Run("CountToTen_SSEResponse", func(t *testing.T) {
+				t.Parallel()
+
+				// Verify REST+SSE response format
+				req := httptest.NewRequest(http.MethodGet, "/v1/count", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				handler.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+				assert.Equal(t, "text/event-stream", result.Header.Get("Content-Type"))
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				bodyStr := string(body)
+				// Should have 5 message events
+				assert.Contains(t, bodyStr, "event: message")
+				assert.Contains(t, bodyStr, `"number":1`)
+				assert.Contains(t, bodyStr, `"number":5`)
+				assert.Contains(t, bodyStr, "event: complete")
+				// Note: Open event not tested here as this uses a mock backend
+			})
+
+			t.Run("WatchBooks_SSEResponse", func(t *testing.T) {
+				t.Parallel()
+
+				// Verify REST+SSE response format
+				req := httptest.NewRequest(http.MethodGet, "/v1/shelves/test/books:watch", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				handler.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+				assert.Equal(t, "text/event-stream", result.Header.Get("Content-Type"))
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				bodyStr := string(body)
+				assert.Contains(t, bodyStr, "event: message")
+				assert.Contains(t, bodyStr, `"type":"CREATED"`)
+				assert.Contains(t, bodyStr, "event: complete")
+				// Note: Open event not tested here as this uses a mock backend
+			})
+		})
+	}
+}
+
+func TestMux_RPCxREST_SSE_CustomEventField(t *testing.T) {
+	t.Parallel()
+
+	// Test that RPC calls can be transcoded to REST+SSE with custom event field
+	protocols := []Protocol{
+		ProtocolGRPC,
+		ProtocolGRPCWeb,
+		ProtocolConnect,
+	}
+
+	for _, protocol := range protocols {
+		protocol := protocol
+		t.Run(protocol.String(), func(t *testing.T) {
+			t.Parallel()
+
+			// Set up Vanguard transcoder with SSE and custom event field enabled
+			svcHandler := NewService(
+				testv1connect.StreamingServiceName,
+				http.NotFoundHandler(), // not used for RPC->REST
+				WithTargetProtocols(ProtocolREST),
+				WithTargetCodecs(CodecJSON),
+				WithNoTargetCompression(),
+				WithRESTServerSentEvents(),
+			)
+			transcoder, err := NewTranscoder([]*Service{svcHandler})
+			require.NoError(t, err)
+
+			// Backend REST+SSE server that sends events with custom event names
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// Verify SSE request headers
+				if r.Header.Get("Accept") != "text/event-stream" {
+					t.Errorf("Expected Accept header to be text/event-stream, got %q", r.Header.Get("Accept"))
+					http.Error(w, "missing SSE accept header", http.StatusBadRequest)
+					return
+				}
+
+				// Send SSE response with custom event names
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				w.Header().Set("Connection", "keep-alive")
+				w.WriteHeader(http.StatusOK)
+
+				if r.URL.Path == "/v1/shelves/test/books:watch" {
+					// Send events with "type" field that should be used as event name
+					fmt.Fprintf(w, "id: 1\n")
+					fmt.Fprintf(w, "event: CREATED\n")
+					fmt.Fprintf(w, "data: {\"type\":\"CREATED\",\"bookName\":\"shelves/test/books/book-1\"}\n\n")
+
+					fmt.Fprintf(w, "id: 2\n")
+					fmt.Fprintf(w, "event: UPDATED\n")
+					fmt.Fprintf(w, "data: {\"type\":\"UPDATED\",\"bookName\":\"shelves/test/books/book-1\"}\n\n")
+
+					fmt.Fprintf(w, "id: 3\n")
+					fmt.Fprintf(w, "event: DELETED\n")
+					fmt.Fprintf(w, "data: {\"type\":\"DELETED\",\"bookName\":\"shelves/test/books/book-1\"}\n\n")
+				} else if r.URL.Path == "/v1/count" {
+					// CountResponse doesn't have "type" field, should fallback to "message"
+					for i := 1; i <= 3; i++ {
+						fmt.Fprintf(w, "id: %d\n", i)
+						fmt.Fprintf(w, "event: message\n")
+						fmt.Fprintf(w, "data: {\"number\":%d}\n\n", i)
+					}
+				}
+
+				// Send completion
+				fmt.Fprintf(w, "event: complete\n")
+				fmt.Fprintf(w, "data: {}\n\n")
+			}))
+			t.Cleanup(backend.Close)
+
+			// Configure transcoder to use backend
+			serverURL, err := url.Parse(backend.URL)
+			require.NoError(t, err)
+			proxy := httputil.NewSingleHostReverseProxy(serverURL)
+			proxy.Transport = backend.Client().Transport
+
+			// Wrap transcoder with proxy
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// First go through transcoder
+				rec := httptest.NewRecorder()
+				transcoder.ServeHTTP(rec, r)
+
+				// If transcoder handled it, use that response
+				if rec.Code != http.StatusNotFound {
+					for k, v := range rec.Header() {
+						w.Header()[k] = v
+					}
+					w.WriteHeader(rec.Code)
+					w.Write(rec.Body.Bytes())
+					return
+				}
+
+				// Otherwise proxy to backend
+				proxy.ServeHTTP(w, r)
+			})
+
+			t.Run("WatchBooks_WithCustomEventNames", func(t *testing.T) {
+				t.Parallel()
+
+				// Verify REST+SSE response with custom event names
+				req := httptest.NewRequest(http.MethodGet, "/v1/shelves/test/books:watch", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				handler.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+				assert.Equal(t, "text/event-stream", result.Header.Get("Content-Type"))
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				bodyStr := string(body)
+				t.Log("SSE response:", bodyStr)
+
+				// Should have custom event names from "type" field
+				assert.Contains(t, bodyStr, "event: CREATED")
+				assert.Contains(t, bodyStr, "event: UPDATED")
+				assert.Contains(t, bodyStr, "event: DELETED")
+
+				// Should still have the data
+				assert.Contains(t, bodyStr, `"type":"CREATED"`)
+				assert.Contains(t, bodyStr, `"bookName":"shelves/test/books/book-1"`)
+
+				// Should have completion event
+				assert.Contains(t, bodyStr, "event: complete")
+			})
+
+			t.Run("CountToTen_FallbackToMessage", func(t *testing.T) {
+				t.Parallel()
+
+				// Verify fallback to "message" when field doesn't exist
+				req := httptest.NewRequest(http.MethodGet, "/v1/count", nil)
+				req.Header.Set("Accept", "text/event-stream")
+
+				rsp := httptest.NewRecorder()
+				handler.ServeHTTP(rsp, req)
+
+				result := rsp.Result()
+				defer result.Body.Close()
+
+				assert.Equal(t, http.StatusOK, result.StatusCode)
+
+				body, err := io.ReadAll(result.Body)
+				require.NoError(t, err)
+
+				bodyStr := string(body)
+				t.Log("SSE response:", bodyStr)
+
+				// Should fallback to "message" since CountResponse doesn't have "type" field
+				assert.Contains(t, bodyStr, "event: message")
+				assert.Contains(t, bodyStr, `"number":1`)
+			})
 		})
 	}
 }

@@ -17,6 +17,7 @@ package vanguard
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,13 @@ import (
 
 var (
 	errFinalDataAlreadyWritten = fmt.Errorf("final RPC response data already written: %w", context.Canceled)
+)
+
+const (
+	sseIDPrefix    = "id: "
+	sseDataPrefix  = "data: "
+	sseEventPrefix = "event: "
+	sseNewline     = "\n"
 )
 
 // Transcoder is a Vanguard handler which acts like a router and a middleware. It transforms
@@ -297,7 +305,9 @@ func classifyRequest(req *http.Request) (clientProtocolHandler, url.Values) {
 			}
 			return connectUnaryGetClientProtocol{}, values
 		}
-		return restClientProtocol{}, values
+		// Check if client accepts SSE (text/event-stream)
+		accept := req.Header.Get("Accept")
+		return restClientProtocol{useSSE: strings.Contains(accept, "text/event-stream")}, values
 	}
 
 	if len(contentTypes) > 1 {
@@ -331,7 +341,8 @@ func classifyRequest(req *http.Request) (clientProtocolHandler, url.Values) {
 		// also use *any* content-type.
 		fallthrough
 	default:
-		return restClientProtocol{}, values
+		accept := req.Header.Get("Accept")
+		return restClientProtocol{useSSE: strings.Contains(accept, "text/event-stream")}, values
 	}
 }
 
@@ -1100,8 +1111,15 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 			w.reportError(fmt.Errorf("response indicates unsupported compression encoding %q", respMeta.compression))
 			return
 		}
-		w.op.client.respCompression = respCompression
-		w.op.server.respCompression = respCompression
+		// For SSE, we never use compression on the client side (SSE is text-based)
+		// but we still need to decompress server responses
+		if w.shouldUseSSE() {
+			w.op.server.respCompression = respCompression
+			w.op.client.respCompression = nil
+		} else {
+			w.op.client.respCompression = respCompression
+			w.op.server.respCompression = respCompression
+		}
 	}
 
 	if respMeta.end != nil {
@@ -1159,6 +1177,8 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 		// buffer the entire response.
 		w.buf = w.op.bufferPool.Get()
 		delegate = &limitWriter{buf: w.buf, limit: w.op.methodConf.maxMsgBufferBytes, rw: w}
+	} else if w.shouldUseSSE() {
+		delegate = newSSEStreamWriter(w)
 	} else {
 		// We can go ahead and flush headers now.
 		w.flushHeaders()
@@ -1172,6 +1192,14 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 	} else {
 		w.w = &transformingWriter{rw: w, msg: &respMsg, w: delegate}
 	}
+}
+
+// shouldUseSSE returns true if this response should use SSE formatting.
+func (w *responseWriter) shouldUseSSE() bool {
+	if restClient, ok := w.op.client.protocol.(restClientProtocol); ok {
+		return restClient.useSSE
+	}
+	return false
 }
 
 // Unwrap provides access to the underlying response writer. This plays nicely
@@ -1241,7 +1269,11 @@ func (w *responseWriter) flushHeaders() {
 	}
 	cliRespMeta := *w.respMeta
 	cliRespMeta.codec = w.op.client.codec.Name()
-	cliRespMeta.compression = w.op.client.respCompression.Name()
+	if w.op.client.respCompression != nil {
+		cliRespMeta.compression = w.op.client.respCompression.Name()
+	} else {
+		cliRespMeta.compression = ""
+	}
 	cliRespMeta.acceptCompression = w.op.compressors.intersection(w.respMeta.acceptCompression)
 	statusCode := w.op.client.protocol.addProtocolResponseHeaders(cliRespMeta, w.Header())
 	hasErr := w.respMeta.end != nil && w.respMeta.end.err != nil
@@ -2221,4 +2253,198 @@ func (l *requestLine) fromRequest(req *http.Request) {
 	l.path = req.URL.Path
 	l.queryString = req.URL.RawQuery
 	l.httpVersion = req.Proto
+}
+
+// sseStreamWriter wraps messages as Server-Sent Events for server streaming.
+// It intercepts writes that contain complete protobuf messages and formats them
+// as SSE events with proper event: and data: fields.
+//
+// If eventIDField is configured, the writer will extract the ID value from that field
+// in each message. This allows services to provide their own IDs for reconnection scenarios.
+// If the field doesn't exist or is empty, nil string is used.
+//
+// Note: Vanguard does not automatically handle the Last-Event-ID header for reconnection.
+// Services that provide IDs via eventIDField are responsible for implementing
+// replay/resume logic in their handlers by reading the Last-Event-ID from the request headers.
+type sseStreamWriter struct {
+	delegate            io.Writer
+	codec               Codec
+	eventField          string // Field name to extract from message for event type
+	eventIDField        string // Field name to extract from message for event ID
+	retryField          string // Field name to extract from message for retry interval
+	omitExtractedFields bool   // Whether to remove extracted fields from data payload
+	responseType        protoreflect.MessageType
+}
+
+func newSSEStreamWriter(w *responseWriter) *sseStreamWriter {
+	// Immediately flush the headers and send the initial "open" event
+	// to establish the SSE stream.
+	w.flushHeaders()
+	_, err := w.delegate.Write([]byte("event: open\n\n"))
+	if err != nil {
+		w.reportError(err)
+	}
+	if flusher, ok := w.delegate.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	// Use per-RPC SSE config from response_body directives in HTTP annotations
+	var eventField, eventIDField, retryField string
+	var omitExtracted bool
+
+	if w.op.restTarget != nil && w.op.restTarget.restSSEOpts != nil {
+		opts := w.op.restTarget.restSSEOpts
+		eventField = opts.EventField
+		eventIDField = opts.IdField
+		retryField = opts.RetryField
+		omitExtracted = opts.OmitExtractedFields
+	}
+
+	return &sseStreamWriter{
+		delegate:            w.delegate,
+		codec:               w.op.client.codec,
+		eventField:          eventField,
+		eventIDField:        eventIDField,
+		retryField:          retryField,
+		omitExtractedFields: omitExtracted,
+		responseType:        w.op.methodConf.responseType,
+	}
+}
+
+func (s *sseStreamWriter) Write(data []byte) (int, error) {
+	// Skip empty writes (e.g., envelope bytes for REST protocol)
+	if len(data) == 0 {
+		return 0, nil
+	}
+
+	// Determine the event name and ID, and optionally filter the data
+	eventName := ""
+	eventID := ""
+	retryField := ""
+	dataToWrite := data
+	if s.eventField != "" || s.eventIDField != "" || s.retryField != "" {
+		// Extract field values and optionally remove them from data
+		var jsonData map[string]interface{}
+		needsFiltering := s.omitExtractedFields && (s.eventField != "" || s.eventIDField != "" || s.retryField != "")
+		err := json.Unmarshal(data, &jsonData)
+		if err != nil {
+			return 0, err
+		}
+
+		// Extract event name
+		if s.eventField != "" {
+			if value, ok := jsonData[s.eventField]; ok {
+				if extracted := convertFieldValue(value); extracted != "" {
+					eventName = extracted
+				}
+			}
+		}
+		// Extract event ID
+		if s.eventIDField != "" {
+			if value, ok := jsonData[s.eventIDField]; ok {
+				if extracted := convertFieldValue(value); extracted != "" {
+					eventID = extracted
+				}
+			}
+		}
+		// Extract retry field
+		// Per SSE spec, retry field ignored if contains non ASCII digits. Don't waste wire
+		// bandwidth sending invalid values.
+		if s.retryField != "" {
+			if value, ok := jsonData[s.retryField]; ok {
+				if extracted := convertFieldValue(value); extracted != "" && isASCIIDigits(extracted) {
+					retryField = extracted
+				}
+			}
+		}
+
+		// Remove extracted fields if requested
+		if needsFiltering {
+			if s.eventField != "" {
+				delete(jsonData, s.eventField)
+			}
+			if s.eventIDField != "" {
+				delete(jsonData, s.eventIDField)
+			}
+			if s.retryField != "" {
+				delete(jsonData, s.retryField)
+			}
+			// Re-marshal the filtered data
+			if filtered, err := json.Marshal(jsonData); err == nil {
+				dataToWrite = filtered
+			}
+		}
+	}
+
+	// Build SSE event with optional id and retry fields
+	var buf bytes.Buffer
+	// If eventIDField is configured, always include id: field (even if empty)
+	// Per SSE spec, an empty id: resets the last event ID counter
+	if s.eventIDField != "" {
+		buf.WriteString(sseIDPrefix + eventID + sseNewline)
+	}
+	// Only include the retry and event name fields if they have a value
+	if retryField != "" {
+		buf.WriteString("retry: " + retryField + sseNewline)
+	}
+	if eventName != "" {
+		buf.WriteString(sseEventPrefix + eventName + sseNewline)
+	}
+
+	// Write data field(s) - handle multiline by splitting
+	// SSE spec supports three line ending types: LF (\n), CRLF (\r\n), and CR (\r)
+	// First normalize CRLF to LF, then split on both LF and CR
+	normalized := bytes.ReplaceAll(dataToWrite, []byte("\r\n"), []byte("\n"))
+	// Split on both \n and \r to handle all three cases
+	lines := bytes.FieldsFunc(normalized, func(r rune) bool {
+		return r == '\n' || r == '\r'
+	})
+	for _, line := range lines {
+		if len(line) > 0 {
+			buf.WriteString(sseDataPrefix)
+			buf.Write(line)
+			buf.WriteString(sseNewline)
+		}
+	}
+
+	// End of event
+	buf.WriteString(sseNewline)
+
+	// Write to delegate
+	_, err := s.delegate.Write(buf.Bytes())
+	if err != nil {
+		return 0, err
+	}
+
+	// Return original data length so caller thinks all data was written
+	return len(data), nil
+}
+
+// convertFieldValue converts a JSON field value (from map[string]interface{}) to a string.
+func convertFieldValue(value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		// JSON numbers are float64
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		// For complex types, just use their string representation
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+// isASCIIDigits checks if a string contains only ASCII digits (0-9).
+func isASCIIDigits(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
