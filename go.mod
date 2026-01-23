@@ -9,7 +9,6 @@ require (
 	connectrpc.com/connect v1.18.1
 	connectrpc.com/grpcreflect v1.2.0
 	github.com/google/go-cmp v0.6.0
-	github.com/spf13/afero v1.15.0
 	github.com/stretchr/testify v1.8.4
 	golang.org/x/net v0.38.0
 	golang.org/x/sync v0.16.0

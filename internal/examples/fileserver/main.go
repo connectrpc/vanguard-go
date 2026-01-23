@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/fs"
 	"log"
 	"mime"
 	"net/http"
@@ -32,7 +33,6 @@ import (
 	"connectrpc.com/vanguard"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
-	"github.com/spf13/afero"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -44,11 +44,11 @@ func main() {
 	if err := flagset.Parse(os.Args[1:]); err != nil {
 		log.Fatal(err)
 	}
-	fs := afero.NewOsFs()
+	fs := os.DirFS(*directory)
 	// Create Connect handler.
 	serviceHandler := &ContentService{
-		Fs: &prefixFS{
-			Fs:     fs,
+		RWFS: &prefixFS{
+			FS:     fs,
 			prefix: *directory,
 		},
 	}
@@ -64,18 +64,28 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+*port, handler))
 }
 
+type RWFS interface {
+	fs.FS
+	Create(name string) (RWFile, error)
+}
+
+type RWFile interface {
+	fs.File
+	Write([]byte) (int, error)
+}
+
 // PrefixFS is something like os.DirFS()
 // but now only wraps Create and Open
 type prefixFS struct {
-	afero.Fs
+	fs.FS
 	prefix string
 }
 
-func (pf *prefixFS) Create(name string) (afero.File, error) {
+func (pf *prefixFS) Create(name string) (RWFile, error) {
 	return os.Create(path.Join(pf.prefix, name))
 }
 
-func (pf *prefixFS) Open(name string) (afero.File, error) {
+func (pf *prefixFS) Open(name string) (fs.File, error) {
 	return os.Open(path.Join(pf.prefix, name))
 }
 
@@ -102,7 +112,7 @@ type ContentService struct {
 	testv1connect.UnimplementedContentServiceHandler
 	// Since std io fs.Fs is a read-only fs abstraction
 	// For some ops like uploading , we need to modify the user file system
-	afero.Fs
+	RWFS
 }
 
 func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.IndexRequest]) (*connect.Response[httpbody.HttpBody], error) {
@@ -125,7 +135,7 @@ func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.In
 	var data []byte
 	if !stat.IsDir() {
 		contentType = mime.TypeByExtension(filepath.Ext(name))
-		data, err = afero.ReadFile(c.Fs, name)
+		data, err = fs.ReadFile(c.RWFS, name)
 		if err != nil {
 			return nil, err
 		}
@@ -137,7 +147,7 @@ func (c *ContentService) Index(_ context.Context, req *connect.Request[testv1.In
 			Title: name,
 			Files: make(map[string]string),
 		}
-		entries, err := afero.ReadDir(c.Fs, name)
+		entries, err := fs.ReadDir(c.RWFS, name)
 		if err != nil {
 			return nil, err
 		}
@@ -174,27 +184,39 @@ func (c *ContentService) Upload(
 		}
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no upload message received"))
 	}
-	msg := stream.Msg()
-	log.Printf("Upload: filename=%q contentType=%q size=%d",
-		msg.GetFilename(),
-		msg.GetFile().GetContentType(),
-		len(msg.GetFile().GetData()),
-	)
 
-	// Write file.
-	file, err := c.Fs.Create(msg.GetFilename())
+	msg := stream.Msg()
+	filename := msg.GetFilename()
+
+	// NOTE: we currently will truncate/overwrite the file if it already exists
+	file, err := c.RWFS.Create(filename)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
+
+	// OPEN ME for debugging
+	// log.Printf("Upload: filename=%q contentType=%q size=%d",
+	// 	msg.GetFilename(),
+	// 	msg.GetFile().GetContentType(),
+	// 	len(msg.GetFile().GetData()),
+	// )
+
 	if _, err := file.Write(msg.GetFile().GetData()); err != nil {
 		return nil, err
 	}
 
-	// Ensure the client didn’t send more than one message (optional guard).
-	if stream.Receive() {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unexpected extra message in upload stream"))
+	for stream.Receive() {
+		msg := stream.Msg()
+		// NOTE: The demo currently only impl the same filename uploading
+		if msg.GetFilename() != filename {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("filename changed during upload: %q", msg.GetFilename()))
+		}
+		if _, err := file.Write(msg.GetFile().GetData()); err != nil {
+			return nil, err
+		}
 	}
+
 	if err := stream.Err(); err != nil {
 		return nil, err
 	}
@@ -213,23 +235,32 @@ func (c *ContentService) Download(
 	req *connect.Request[testv1.DownloadRequest],
 	stream *connect.ServerStream[testv1.DownloadResponse],
 ) error {
-	file, err := c.Fs.Open(req.Msg.Filename)
+	file, err := c.RWFS.Open(req.Msg.Filename)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		return err
+	const largeEnoughSize = 42 * 1024
+
+	buf := make([]byte, largeEnoughSize)
+	for {
+		n, readErr := file.Read(buf)
+		if n > 0 {
+			if err := stream.Send(&testv1.DownloadResponse{
+				File: &httpbody.HttpBody{
+					ContentType: "application/octet-stream",
+					Data:        buf[:n],
+				},
+			}); err != nil {
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
 	}
-	if err := stream.Send(&testv1.DownloadResponse{
-		File: &httpbody.HttpBody{
-			ContentType: "application/octet-stream",
-			Data:        data,
-		},
-	}); err != nil {
-		return err
-	}
-	return nil
 }
