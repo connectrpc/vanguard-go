@@ -78,19 +78,6 @@ const (
 	PetServiceFindPetsByStatusProcedure = "/io.swagger.petstore.v2.PetService/FindPetsByStatus"
 )
 
-// These variables are the protoreflect.Descriptor objects for the RPCs defined in this package.
-var (
-	petServiceServiceDescriptor                 = v2.File_io_swagger_petstore_v2_pets_proto.Services().ByName("PetService")
-	petServiceGetPetByIDMethodDescriptor        = petServiceServiceDescriptor.Methods().ByName("GetPetByID")
-	petServiceUpdatePetWithFormMethodDescriptor = petServiceServiceDescriptor.Methods().ByName("UpdatePetWithForm")
-	petServiceDeletePetMethodDescriptor         = petServiceServiceDescriptor.Methods().ByName("DeletePet")
-	petServiceUploadFileMethodDescriptor        = petServiceServiceDescriptor.Methods().ByName("UploadFile")
-	petServiceAddPetMethodDescriptor            = petServiceServiceDescriptor.Methods().ByName("AddPet")
-	petServiceUpdatePetMethodDescriptor         = petServiceServiceDescriptor.Methods().ByName("UpdatePet")
-	petServiceFindPetsByTagMethodDescriptor     = petServiceServiceDescriptor.Methods().ByName("FindPetsByTag")
-	petServiceFindPetsByStatusMethodDescriptor  = petServiceServiceDescriptor.Methods().ByName("FindPetsByStatus")
-)
-
 // PetServiceClient is a client for the io.swagger.petstore.v2.PetService service.
 type PetServiceClient interface {
 	GetPetByID(context.Context, *connect.Request[v2.PetID]) (*connect.Response[v2.Pet], error)
@@ -113,55 +100,56 @@ type PetServiceClient interface {
 // http://api.acme.com or https://acme.com/grpc).
 func NewPetServiceClient(httpClient connect.HTTPClient, baseURL string, opts ...connect.ClientOption) PetServiceClient {
 	baseURL = strings.TrimRight(baseURL, "/")
+	petServiceMethods := v2.File_io_swagger_petstore_v2_pets_proto.Services().ByName("PetService").Methods()
 	return &petServiceClient{
 		getPetByID: connect.NewClient[v2.PetID, v2.Pet](
 			httpClient,
 			baseURL+PetServiceGetPetByIDProcedure,
-			connect.WithSchema(petServiceGetPetByIDMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("GetPetByID")),
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
 		updatePetWithForm: connect.NewClient[v2.UpdatePetWithFormReq, emptypb.Empty](
 			httpClient,
 			baseURL+PetServiceUpdatePetWithFormProcedure,
-			connect.WithSchema(petServiceUpdatePetWithFormMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("UpdatePetWithForm")),
 			connect.WithClientOptions(opts...),
 		),
 		deletePet: connect.NewClient[v2.PetID, emptypb.Empty](
 			httpClient,
 			baseURL+PetServiceDeletePetProcedure,
-			connect.WithSchema(petServiceDeletePetMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("DeletePet")),
 			connect.WithClientOptions(opts...),
 		),
 		uploadFile: connect.NewClient[v2.UploadFileReq, v2.ApiResponse](
 			httpClient,
 			baseURL+PetServiceUploadFileProcedure,
-			connect.WithSchema(petServiceUploadFileMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("UploadFile")),
 			connect.WithClientOptions(opts...),
 		),
 		addPet: connect.NewClient[v2.Pet, v2.Pet](
 			httpClient,
 			baseURL+PetServiceAddPetProcedure,
-			connect.WithSchema(petServiceAddPetMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("AddPet")),
 			connect.WithClientOptions(opts...),
 		),
 		updatePet: connect.NewClient[v2.Pet, v2.Pet](
 			httpClient,
 			baseURL+PetServiceUpdatePetProcedure,
-			connect.WithSchema(petServiceUpdatePetMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("UpdatePet")),
 			connect.WithClientOptions(opts...),
 		),
 		findPetsByTag: connect.NewClient[v2.TagReq, v2.Pets](
 			httpClient,
 			baseURL+PetServiceFindPetsByTagProcedure,
-			connect.WithSchema(petServiceFindPetsByTagMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("FindPetsByTag")),
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
 		findPetsByStatus: connect.NewClient[v2.StatusReq, v2.Pets](
 			httpClient,
 			baseURL+PetServiceFindPetsByStatusProcedure,
-			connect.WithSchema(petServiceFindPetsByStatusMethodDescriptor),
+			connect.WithSchema(petServiceMethods.ByName("FindPetsByStatus")),
 			connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 			connect.WithClientOptions(opts...),
 		),
@@ -241,54 +229,55 @@ type PetServiceHandler interface {
 // By default, handlers support the Connect, gRPC, and gRPC-Web protocols with the binary Protobuf
 // and JSON codecs. They also support gzip compression.
 func NewPetServiceHandler(svc PetServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
+	petServiceMethods := v2.File_io_swagger_petstore_v2_pets_proto.Services().ByName("PetService").Methods()
 	petServiceGetPetByIDHandler := connect.NewUnaryHandler(
 		PetServiceGetPetByIDProcedure,
 		svc.GetPetByID,
-		connect.WithSchema(petServiceGetPetByIDMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("GetPetByID")),
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
 	petServiceUpdatePetWithFormHandler := connect.NewUnaryHandler(
 		PetServiceUpdatePetWithFormProcedure,
 		svc.UpdatePetWithForm,
-		connect.WithSchema(petServiceUpdatePetWithFormMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("UpdatePetWithForm")),
 		connect.WithHandlerOptions(opts...),
 	)
 	petServiceDeletePetHandler := connect.NewUnaryHandler(
 		PetServiceDeletePetProcedure,
 		svc.DeletePet,
-		connect.WithSchema(petServiceDeletePetMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("DeletePet")),
 		connect.WithHandlerOptions(opts...),
 	)
 	petServiceUploadFileHandler := connect.NewUnaryHandler(
 		PetServiceUploadFileProcedure,
 		svc.UploadFile,
-		connect.WithSchema(petServiceUploadFileMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("UploadFile")),
 		connect.WithHandlerOptions(opts...),
 	)
 	petServiceAddPetHandler := connect.NewUnaryHandler(
 		PetServiceAddPetProcedure,
 		svc.AddPet,
-		connect.WithSchema(petServiceAddPetMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("AddPet")),
 		connect.WithHandlerOptions(opts...),
 	)
 	petServiceUpdatePetHandler := connect.NewUnaryHandler(
 		PetServiceUpdatePetProcedure,
 		svc.UpdatePet,
-		connect.WithSchema(petServiceUpdatePetMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("UpdatePet")),
 		connect.WithHandlerOptions(opts...),
 	)
 	petServiceFindPetsByTagHandler := connect.NewUnaryHandler(
 		PetServiceFindPetsByTagProcedure,
 		svc.FindPetsByTag,
-		connect.WithSchema(petServiceFindPetsByTagMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("FindPetsByTag")),
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
 	petServiceFindPetsByStatusHandler := connect.NewUnaryHandler(
 		PetServiceFindPetsByStatusProcedure,
 		svc.FindPetsByStatus,
-		connect.WithSchema(petServiceFindPetsByStatusMethodDescriptor),
+		connect.WithSchema(petServiceMethods.ByName("FindPetsByStatus")),
 		connect.WithIdempotency(connect.IdempotencyNoSideEffects),
 		connect.WithHandlerOptions(opts...),
 	)
