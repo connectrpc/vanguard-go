@@ -41,6 +41,12 @@ func (m compressionMap) intersection(names []string) []string {
 	return intersection
 }
 
+type compressor interface {
+	Name() string
+	compress(dst io.Writer, src *bytes.Buffer) error
+	decompress(dst *bytes.Buffer, src io.Reader) error
+}
+
 type compressionPool struct {
 	name          string
 	decompressors sync.Pool
@@ -70,7 +76,7 @@ func (p *compressionPool) Name() string {
 	return p.name
 }
 
-func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
+func (p *compressionPool) compress(dst io.Writer, src *bytes.Buffer) error {
 	if p == nil {
 		_, err := io.Copy(dst, src)
 		return err
@@ -88,12 +94,15 @@ func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
 	return comp.Close()
 }
 
-func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
+func (p *compressionPool) decompress(dst *bytes.Buffer, src io.Reader) error {
 	if p == nil {
 		_, err := io.Copy(dst, src)
 		return err
 	}
-	if src.Len() == 0 {
+	// Preserve the empty-buffer short-circuit for existing callers that
+	// still pass *bytes.Buffer directly. The full PR (#86) removes this
+	// guard by rewriting callers to never pass empty buffers.
+	if buf, ok := src.(*bytes.Buffer); ok && buf.Len() == 0 {
 		return nil
 	}
 	decomp, _ := p.decompressors.Get().(connect.Decompressor)
