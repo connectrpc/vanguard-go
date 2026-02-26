@@ -117,6 +117,7 @@ func TestIssue148(t *testing.T) {
 
 type handler struct {
 	elizav1connect.UnimplementedElizaServiceHandler
+
 	t testing.TB
 }
 

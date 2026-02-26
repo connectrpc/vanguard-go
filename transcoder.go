@@ -126,7 +126,8 @@ func (t *Transcoder) registerService(svc *Service, svcOpts serviceOptions) error
 	methods := svc.schema.Methods()
 	for i, length := 0, methods.Len(); i < length; i++ {
 		methodDesc := methods.Get(i)
-		if err := t.registerMethod(svc.handler, methodDesc, &svcOpts); err != nil {
+		err := t.registerMethod(svc.handler, methodDesc, &svcOpts)
+		if err != nil {
 			return fmt.Errorf("failed to configure method %s: %w", methodDesc.FullName(), err)
 		}
 	}
@@ -167,7 +168,8 @@ func (t *Transcoder) registerRules(rules []*annotations.HttpRule) error {
 	}
 	for methodConf, rules := range methodRules {
 		for _, rule := range rules {
-			if err := t.addRule(rule, methodConf); err != nil {
+			err := t.addRule(rule, methodConf)
+			if err != nil {
 				// TODO: use the multi-error type errors.Join()
 				return err
 			}
@@ -221,7 +223,8 @@ func (t *Transcoder) registerMethod(handler http.Handler, methodDesc protoreflec
 	}
 
 	if httpRule, ok := getHTTPRuleExtension(methodDesc); ok {
-		if err := t.addRule(httpRule, methodConf); err != nil {
+		err := t.addRule(httpRule, methodConf)
+		if err != nil {
 			return err
 		}
 	}
@@ -538,7 +541,8 @@ func (o *operation) handle() {
 			o.reportError(err)
 			return
 		}
-		if err := reqMsg.advanceToStage(o, stageDecoded); err != nil {
+		err := reqMsg.advanceToStage(o, stageDecoded)
+		if err != nil {
 			o.reportError(err)
 			return
 		}
@@ -596,7 +600,8 @@ func (o *operation) handle() {
 		tw := &transformingReader{rw: rw, msg: &reqMsg, r: o.request.Body}
 		o.request.Body = tw
 		if reqMsg.stage != stageEmpty {
-			if err := tw.prepareMessage(); err != nil {
+			err := tw.prepareMessage()
+			if err != nil {
 				tw.err = err
 			}
 		}
@@ -987,7 +992,8 @@ func (r *transformingReader) Close() error {
 
 func (r *transformingReader) prepareMessage() error {
 	r.consumedFirst = true
-	if err := r.msg.advanceToStage(r.rw.op, stageSend); err != nil {
+	err := r.msg.advanceToStage(r.rw.op, stageSend)
+	if err != nil {
 		return err
 	}
 	r.buffer = r.msg.sendBuffer()
@@ -1358,7 +1364,8 @@ func (w *envelopingWriter) Write(data []byte) (n int, err error) {
 			return written, err
 		}
 		if w.writingEnvelope {
-			if err := w.handleEnvelopeWritten(); err != nil {
+			err := w.handleEnvelopeWritten()
+			if err != nil {
 				return written, err
 			}
 			continue
@@ -1540,7 +1547,8 @@ func (w *envelopingWriter) handleTrailer() error {
 	if w.trailerIsCompressed {
 		uncompressed := w.rw.op.bufferPool.Get()
 		defer w.rw.op.bufferPool.Put(uncompressed)
-		if err := w.rw.op.server.respCompression.decompress(uncompressed, data); err != nil {
+		err := w.rw.op.server.respCompression.decompress(uncompressed, data)
+		if err != nil {
 			return err
 		}
 		data = uncompressed
@@ -1628,7 +1636,8 @@ func (w *transformingWriter) Write(data []byte) (n int, err error) {
 			w.expectingBytes = int(w.latestEnvelope.length)
 			w.writingEnvelope = false
 		} else {
-			if err := w.flushMessage(); err != nil {
+			err := w.flushMessage()
+			if err != nil {
 				w.rw.reportError(err)
 				return written, err
 			}
@@ -1645,7 +1654,8 @@ func (w *transformingWriter) Write(data []byte) (n int, err error) {
 
 func (w *transformingWriter) Close() error {
 	if w.expectingBytes == -1 {
-		if err := w.flushMessage(); err != nil {
+		err := w.flushMessage()
+		if err != nil {
 			w.rw.reportError(err)
 		}
 	} else if w.buffer != nil && w.buffer.Len() > 0 {
@@ -1669,7 +1679,8 @@ func (w *transformingWriter) flushMessage() error {
 		if w.latestEnvelope.compressed {
 			data = w.rw.op.bufferPool.Get()
 			defer w.rw.op.bufferPool.Put(data)
-			if err := w.rw.op.server.respCompression.decompress(data, w.buffer); err != nil {
+			err := w.rw.op.server.respCompression.decompress(data, w.buffer)
+			if err != nil {
 				return err
 			}
 		}
@@ -1686,7 +1697,8 @@ func (w *transformingWriter) flushMessage() error {
 
 	// We've finished reading the message, so we can manually set the stage
 	w.msg.markReady()
-	if err := w.msg.advanceToStage(w.rw.op, stageSend); err != nil {
+	err := w.msg.advanceToStage(w.rw.op, stageSend)
+	if err != nil {
 		return err
 	}
 	buffer := w.msg.sendBuffer()
@@ -1757,7 +1769,8 @@ func (e *errorWriter) Close() error {
 	if compressPool := e.rw.op.server.respCompression; compressPool != nil {
 		uncompressed := bufferPool.Get()
 		defer bufferPool.Put(uncompressed)
-		if err := compressPool.decompress(uncompressed, body); err != nil {
+		err := compressPool.decompress(uncompressed, body)
+		if err != nil {
 			// can't really just return an error; we have to encode the
 			// error into the RPC response, so we populate respMeta.end
 			if e.respMeta.end.httpCode == 0 || e.respMeta.end.httpCode == http.StatusOK {
@@ -1994,7 +2007,8 @@ func (m *message) advanceToStage(op *operation, newStage messageStage) error {
 		if !m.sameCodec {
 			// If the codec is different we have to fully decode the message and
 			// then fully re-encode.
-			if err := m.advanceToStage(op, stageDecoded); err != nil {
+			err := m.advanceToStage(op, stageDecoded)
+			if err != nil {
 				return err
 			}
 			return m.advanceToStage(op, newStage)
@@ -2012,11 +2026,13 @@ func (m *message) advanceToStage(op *operation, newStage messageStage) error {
 
 	case m.stage == stageRead && newStage == stageDecoded:
 		if m.wasCompressed {
-			if err := m.decompress(op, m.sameCompression && m.sameCodec); err != nil {
+			err := m.decompress(op, m.sameCompression && m.sameCodec)
+			if err != nil {
 				return err
 			}
 		}
-		if err := m.decode(op, m.sameCodec); err != nil {
+		err := m.decode(op, m.sameCodec)
+		if err != nil {
 			return err
 		}
 		m.stage = newStage
@@ -2025,13 +2041,15 @@ func (m *message) advanceToStage(op *operation, newStage messageStage) error {
 	case m.stage == stageDecoded && newStage == stageSend:
 		if !m.sameCodec {
 			// re-encode
-			if err := m.encode(op); err != nil {
+			err := m.encode(op)
+			if err != nil {
 				return err
 			}
 		}
 		if m.wasCompressed {
 			// re-compress
-			if err := m.compress(op); err != nil {
+			err := m.compress(op)
+			if err != nil {
 				return err
 			}
 		}
@@ -2077,7 +2095,8 @@ func (m *message) decompress(op *operation, saveBuffer bool) error {
 		src = m.compressed
 	}
 	m.data = op.bufferPool.Get()
-	if err := pool.decompress(m.data, src); err != nil {
+	err := pool.decompress(m.data, src)
+	if err != nil {
 		return err
 	}
 	if !saveBuffer {
@@ -2108,7 +2127,8 @@ func (m *message) compress(op *operation) error {
 	}
 
 	m.compressed = op.bufferPool.Get()
-	if err := pool.compress(m.compressed, m.data); err != nil {
+	err := pool.compress(m.compressed, m.data)
+	if err != nil {
 		return err
 	}
 	op.bufferPool.Put(m.data)
@@ -2139,7 +2159,8 @@ func (m *message) decode(op *operation, saveBuffer bool) error {
 		codec = op.server.codec
 	}
 
-	if err := codec.Unmarshal(m.data.Bytes(), m.msg); err != nil {
+	err := codec.Unmarshal(m.data.Bytes(), m.msg)
+	if err != nil {
 		return err
 	}
 	if !saveBuffer {

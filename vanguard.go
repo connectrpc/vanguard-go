@@ -133,7 +133,8 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		for _, opt := range svc.opts {
 			opt.applyToService(&resolvedOpts)
 		}
-		if err := transcoder.registerService(svc, resolvedOpts); err != nil {
+		err := transcoder.registerService(svc, resolvedOpts)
+		if err != nil {
 			return nil, err
 		}
 		if len(resolvedOpts.protocols) == 1 {
@@ -143,7 +144,8 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 			}
 		}
 	}
-	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
+	err := transcoder.registerRules(transcoderOpts.rules)
+	if err != nil {
 		return nil, err
 	}
 
@@ -439,6 +441,7 @@ type serviceOptions struct {
 
 type methodConfig struct {
 	*serviceOptions
+
 	descriptor                protoreflect.MethodDescriptor
 	requestType, responseType protoreflect.MessageType
 	methodPath                string

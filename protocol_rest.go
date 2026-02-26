@@ -150,20 +150,22 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	if err := r.prepareUnmarshalledRequestFromBody(op, src, target); err != nil {
+	err := r.prepareUnmarshalledRequestFromBody(op, src, target)
+	if err != nil {
 		return err
 	}
 	// Now pull in the fields from the URI path:
 	msg := target.ProtoReflect()
 	for i := len(op.restVars) - 1; i >= 0; i-- {
 		variable := op.restVars[i]
-		if err := setParameter(msg, variable.fields, variable.value); err != nil {
+		err := setParameter(msg, variable.fields, variable.value)
+		if err != nil {
 			return err
 		}
 	}
 
 	// And finally from the query string:
-	discardUnknownQueryParams := op.methodConf.serviceOptions.restUnmarshalOptions.DiscardUnknownQueryParams
+	discardUnknownQueryParams := op.methodConf.restUnmarshalOptions.DiscardUnknownQueryParams
 	for fieldPath, values := range op.queryValues() {
 		fields, err := resolvePathToFieldDescriptors(
 			msg.Descriptor(), fieldPath, true,
@@ -175,7 +177,8 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 			return err
 		}
 		for _, value := range values {
-			if err := setParameter(msg, fields, value); err != nil {
+			err := setParameter(msg, fields, value)
+			if err != nil {
 				return err
 			}
 		}
@@ -297,7 +300,8 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 		return responseMeta{
 				end: &responseEnd{httpCode: statusCode},
 			}, func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
-				if err := httpErrorFromResponse(statusCode, contentType, buf); err != nil {
+				err := httpErrorFromResponse(statusCode, contentType, buf)
+				if err != nil {
 					end.err = err
 					end.httpCode = httpStatusCodeFromRPC(err.Code())
 				}

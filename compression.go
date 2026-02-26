@@ -26,10 +26,7 @@ import (
 type compressionMap map[string]*compressionPool
 
 func (m compressionMap) intersection(names []string) []string {
-	length := len(names)
-	if len(m) < length {
-		length = len(m)
-	}
+	length := min(len(names), len(m))
 	if length == 0 {
 		// If either set is empty, the intersection is empty.
 		// We don't use nil since it is used in places as a sentinel.
@@ -103,7 +100,8 @@ func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
 	decomp, _ := p.decompressors.Get().(connect.Decompressor)
 	defer p.decompressors.Put(decomp)
 
-	if err := decomp.Reset(src); err != nil {
+	err := decomp.Reset(src)
+	if err != nil {
 		return err
 	}
 	if _, err := dst.ReadFrom(decomp); err != nil {

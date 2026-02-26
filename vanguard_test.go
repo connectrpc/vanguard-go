@@ -20,9 +20,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -431,24 +433,16 @@ func (i *testInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
 				for _, detail := range out.err.Details() {
 					err.AddDetail(detail)
 				}
-				for key, values := range stream.rspHeader {
-					err.Meta()[key] = values
-				}
-				for key, values := range out.err.Meta() {
-					err.Meta()[key] = values
-				}
+				maps.Copy(err.Meta(), stream.rspHeader)
+				maps.Copy(err.Meta(), out.err.Meta())
 			}
 			return nil, err
 		}
 
 		// Build response with headers.
 		rsp := &AnyResponse{msg: out.msg}
-		for key, values := range stream.rspHeader {
-			rsp.Header()[key] = values
-		}
-		for key, values := range stream.rspTrailer {
-			rsp.Trailer()[key] = values
-		}
+		maps.Copy(rsp.Header(), stream.rspHeader)
+		maps.Copy(rsp.Trailer(), stream.rspTrailer)
 		return rsp, nil
 	}
 }
@@ -462,7 +456,8 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
 	) (resultError error) {
-		if err := assertTestTimeoutEncoded(ctx); err != nil {
+		err := assertTestTimeoutEncoded(ctx)
+		if err != nil {
 			return err
 		}
 		val := conn.RequestHeader().Get("Test")
@@ -483,9 +478,7 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 		stream.Log("WrapStreamingHandler", val)
 		assert.Subset(stream.T, conn.RequestHeader(), stream.reqHeader)
 
-		for key, vals := range stream.rspHeader {
-			conn.ResponseHeader()[key] = vals
-		}
+		maps.Copy(conn.ResponseHeader(), stream.rspHeader)
 		for _, msg := range stream.msgs {
 			switch msg := msg.get().(type) {
 			case *testMsgIn:
@@ -519,7 +512,8 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 				case msg.err != nil:
 					return msg.err
 				default:
-					if err := conn.Send(msg.msg); err != nil {
+					err := conn.Send(msg.msg)
+					if err != nil {
 						return err
 					}
 				}
@@ -527,9 +521,7 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 				return errors.New("expected message")
 			}
 		}
-		for key, vals := range stream.rspTrailer {
-			conn.ResponseTrailer()[key] = vals
-		}
+		maps.Copy(conn.ResponseTrailer(), stream.rspTrailer)
 		return nil
 	}
 }
@@ -565,7 +557,8 @@ func (i *testInterceptor) restUnaryHandler(
 		if comp != nil && len(body) > 0 && encoding != "" {
 			assert.Equal(stream.T, comp.Name(), encoding, "expected encoding")
 			var dst bytes.Buffer
-			if err := comp.decompress(&dst, bytes.NewBuffer(body)); err != nil {
+			err := comp.decompress(&dst, bytes.NewBuffer(body))
+			if err != nil {
 				return err
 			}
 			body = dst.Bytes()
@@ -582,7 +575,8 @@ func (i *testInterceptor) restUnaryHandler(
 				if !assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match") {
 					return errors.New("codec didn't match")
 				}
-				if err := codec.Unmarshal(body, got); err != nil {
+				err := codec.Unmarshal(body, got)
+				if err != nil {
 					return err
 				}
 			}
@@ -609,7 +603,7 @@ func (i *testInterceptor) restUnaryHandler(
 		if restIsHTTPBody(out.msg.ProtoReflect().Descriptor(), nil) { //nolint:nestif
 			msg, _ := out.msg.(*httpbody.HttpBody)
 			rsp.Header().Set("Content-Type", msg.GetContentType())
-			_, err = rsp.Write(msg.GetData())
+			_, err = rsp.Write(msg.GetData()) //nolint:gosec // writing to test response
 			require.NoError(stream.T, err, "failed to write response")
 		} else {
 			body, err = codec.MarshalAppend(nil, out.msg)
@@ -620,12 +614,13 @@ func (i *testInterceptor) restUnaryHandler(
 				assert.Equal(stream.T, comp.Name(), acceptEncoding, "expected encoding")
 				rsp.Header().Set("Content-Encoding", comp.Name())
 				var dst bytes.Buffer
-				if err := comp.compress(&dst, bytes.NewBuffer(body)); err != nil {
+				err := comp.compress(&dst, bytes.NewBuffer(body))
+				if err != nil {
 					return err
 				}
 				body = dst.Bytes()
 			}
-			_, err = rsp.Write(body)
+			_, err = rsp.Write(body) //nolint:gosec // writing to test response
 			require.NoError(stream.T, err, "failed to write response")
 		}
 
@@ -662,7 +657,7 @@ func (i *testInterceptor) restUnaryHandler(
 		}
 		req = req.WithContext(ctx)
 		if err := handler(stream, rsp, req); err != nil {
-			stream.T.Error(err)
+			stream.Error(err)
 			http.Error(rsp, err.Error(), http.StatusInternalServerError)
 		}
 	}
@@ -672,6 +667,7 @@ type unusedType struct{}
 
 type AnyResponse struct {
 	connect.Response[unusedType]
+
 	msg proto.Message
 }
 
@@ -765,9 +761,7 @@ func appendClientCompressionOptions(t *testing.T, opts []connect.ClientOption, c
 
 func makeRequest[T any](headers http.Header, msg *T) *connect.Request[T] {
 	req := connect.NewRequest(msg)
-	for k, v := range headers {
-		req.Header()[k] = v
-	}
+	maps.Copy(req.Header(), headers)
 	return req
 }
 
@@ -794,7 +788,8 @@ func outputFromUnary[Req, Resp any](
 	resp, err := method(ctx, makeRequest(headers, req))
 	if err != nil {
 		var headers http.Header
-		if connErr := new(connect.Error); errors.As(err, &connErr) {
+		connErr := new(connect.Error)
+		if errors.As(err, &connErr) {
 			headers = connErr.Meta()
 		}
 		return headers, nil, nil, err
@@ -824,7 +819,8 @@ func outputFromServerStream[Req, Resp any](
 	str, err := method(ctx, makeRequest(headers, req))
 	if err != nil {
 		var headers http.Header
-		if connErr := new(connect.Error); errors.As(err, &connErr) {
+		connErr := new(connect.Error)
+		if errors.As(err, &connErr) {
 			headers = connErr.Meta()
 		}
 		return headers, nil, nil, err
@@ -849,9 +845,7 @@ func outputFromClientStream[Req, Resp any](
 	ctx, cancel := context.WithTimeout(ctx, defaultTestTimeout)
 	defer cancel()
 	str := method(ctx)
-	for k, v := range headers {
-		str.RequestHeader()[k] = v
-	}
+	maps.Copy(str.RequestHeader(), headers)
 	for _, msg := range reqs {
 		req, ok := any(msg).(*Req)
 		if !ok {
@@ -866,7 +860,8 @@ func outputFromClientStream[Req, Resp any](
 	resp, err := str.CloseAndReceive()
 	if err != nil {
 		var headers http.Header
-		if connErr := new(connect.Error); errors.As(err, &connErr) {
+		connErr := new(connect.Error)
+		if errors.As(err, &connErr) {
 			headers = connErr.Meta()
 		}
 		return headers, nil, nil, err
@@ -913,9 +908,7 @@ func outputFromBidiStream[Req, Resp any](
 		}
 	}()
 
-	for k, v := range headers {
-		str.RequestHeader()[k] = v
-	}
+	maps.Copy(str.RequestHeader(), headers)
 	for _, msg := range reqs {
 		req, ok := any(msg).(*Req)
 		if !ok {
@@ -983,15 +976,8 @@ func protocolAssertMiddleware(
 			return
 		}
 		for key, vals := range wantHdr {
-			var found bool
 			gotHdr := req.Header.Get(key)
-			for _, val := range vals {
-				if gotHdr == val {
-					found = true
-					break
-				}
-			}
-			if !found {
+			if !slices.Contains(vals, gotHdr) {
 				http.Error(rsp, fmt.Sprintf("header %s is %q; should be one of [%v]", key, gotHdr, vals), http.StatusInternalServerError)
 				return
 			}
@@ -1012,9 +998,7 @@ func runRPCTestCase[Client any](
 	defer interceptor.del(t)
 	reqHeaders := http.Header{}
 	reqHeaders.Set("Test", t.Name()) // test header
-	for k, v := range stream.reqHeader {
-		reqHeaders[k] = v
-	}
+	maps.Copy(reqHeaders, stream.reqHeader)
 	var reqMsgs []proto.Message
 	for _, streamMsg := range stream.msgs {
 		if streamMsg.in != nil {

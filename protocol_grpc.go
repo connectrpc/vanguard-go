@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"net/textproto"
@@ -190,7 +191,6 @@ func (g grpcWebClientProtocol) encodeEnd(op *operation, end *responseEnd, writer
 	if length > math.MaxUint32 {
 		return nil
 	}
-	//nolint:gosec // gosec gives a false positive for int64
 	env := envelope{trailer: true, length: uint32(length)}
 	envBytes := g.encodeEnvelope(env)
 	_, _ = writer.Write(envBytes[:])
@@ -268,11 +268,11 @@ func (g grpcWebServerProtocol) decodeEndFromMessage(_ *operation, buffer *bytes.
 		if len(headerLine) == 0 {
 			continue
 		}
-		pos := bytes.IndexByte(headerLine, ':')
-		if pos == -1 {
+		key, val, ok := bytes.Cut(headerLine, []byte{':'})
+		if !ok {
 			return responseEnd{}, fmt.Errorf("response body included malformed trailer at line %d", i+1)
 		}
-		trailers.Add(string(headerLine[:pos]), strings.TrimSpace(string(headerLine[pos+1:])))
+		trailers.Add(string(key), strings.TrimSpace(string(val)))
 	}
 	return responseEnd{
 		err:      grpcExtractErrorFromTrailer(trailers),
@@ -286,7 +286,8 @@ func (g grpcWebServerProtocol) String() string {
 
 func grpcExtractRequestMeta(contentTypeShort, contentTypePrefix string, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
-	if err := grpcExtractTimeoutFromHeaders(headers, &reqMeta); err != nil {
+	err := grpcExtractTimeoutFromHeaders(headers, &reqMeta)
+	if err != nil {
 		return reqMeta, err
 	}
 	contentType := headers.Get("Content-Type")
@@ -381,9 +382,7 @@ func grpcAddResponseMeta(contentTypePrefix string, meta responseMeta, headers ht
 }
 
 func grpcWriteEndToTrailers(respEnd *responseEnd, trailers http.Header) {
-	for k, v := range respEnd.trailers {
-		trailers[k] = v
-	}
+	maps.Copy(trailers, respEnd.trailers)
 	if respEnd.err == nil {
 		trailers.Set("Grpc-Status", "0")
 		trailers.Set("Grpc-Message", "")
@@ -462,7 +461,8 @@ func grpcPercentDecode(input string) (string, error) {
 		switch input[i] {
 		case '%':
 			percentCount++
-			if err := validateHex(input[i:]); err != nil {
+			err := validateHex(input[i:])
+			if err != nil {
 				return "", err
 			}
 			i += 3

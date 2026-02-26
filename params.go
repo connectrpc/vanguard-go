@@ -78,7 +78,8 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 		// Resolve the field path for the error message in proto format.
 		// The JSON format is not used for consistency with other errors.
 		fieldPath := resolveFieldDescriptorsToPath(fields, false)
-		if jsonErr := (*json.UnmarshalTypeError)(nil); errors.As(err, &jsonErr) ||
+		jsonErr := (*json.UnmarshalTypeError)(nil)
+		if errors.As(err, &jsonErr) ||
 			// protojson errors are not exported, check the error string.
 			strings.HasPrefix(err.Error(), "proto") {
 			return connect.NewError(connect.CodeInvalidArgument,
@@ -107,31 +108,36 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 	switch kind := field.Kind(); kind {
 	case protoreflect.BoolKind:
 		var b bool
-		if err := json.Unmarshal(data, &b); err != nil {
+		err := json.Unmarshal(data, &b)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfBool(b), nil
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
 		var x int32
-		if err := json.Unmarshal(data, &x); err != nil {
+		err := json.Unmarshal(data, &x)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfInt32(x), nil
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
 		var x int64
-		if err := json.Unmarshal(data, &x); err != nil {
+		err := json.Unmarshal(data, &x)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfInt64(x), nil
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
 		var x uint32
-		if err := json.Unmarshal(data, &x); err != nil {
+		err := json.Unmarshal(data, &x)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfUint32(x), nil
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
 		var x uint64
-		if err := json.Unmarshal(data, &x); err != nil {
+		err := json.Unmarshal(data, &x)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfUint64(x), nil
@@ -157,7 +163,8 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 		return protoreflect.ValueOfBytes(dst[:n]), nil
 	case protoreflect.EnumKind:
 		var x protoreflect.EnumNumber
-		if err := json.Unmarshal(data, &x); err == nil {
+		err := json.Unmarshal(data, &x)
+		if err == nil {
 			return protoreflect.ValueOfEnum(x), nil
 		}
 		s := string(data)
@@ -199,7 +206,8 @@ func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescrip
 
 func unmarshalFieldMessage(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
 	value := msg.NewField(field)
-	if err := protojson.Unmarshal(data, value.Message().Interface()); err != nil {
+	err := protojson.Unmarshal(data, value.Message().Interface())
+	if err != nil {
 		return protoreflect.Value{}, err
 	}
 	return value, nil
@@ -217,13 +225,15 @@ func unmarshalFloat(data []byte, bitSize int) (protoreflect.Value, error) {
 	default:
 		if bitSize == 32 {
 			var x float32
-			if err := json.Unmarshal(data, &x); err != nil {
+			err := json.Unmarshal(data, &x)
+			if err != nil {
 				return protoreflect.Value{}, err
 			}
 			return protoreflect.ValueOfFloat32(x), nil
 		}
 		var x float64
-		if err := json.Unmarshal(data, &x); err != nil {
+		err := json.Unmarshal(data, &x)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfFloat64(x), nil

@@ -4,19 +4,23 @@ linters:
   disable:
     - cyclop
     - depguard
+    - funcorder # TODO: re-enable
     - funlen
     - gocognit
+    - gosmopolitan
     - inamedparam
     - ireturn
     - lll
     - maintidx
     - mnd
     - nlreturn
+    - noinlineerr
     - nonamedreturns
     - protogetter
     - testpackage
     - wrapcheck
     - wsl
+    - wsl_v5
   settings:
     errcheck:
       check-type-assertions: true
@@ -55,8 +59,11 @@ linters:
     rules:
       - linters:
           - forbidigo
+          - funcorder
           - gochecknoglobals
           - gosec
+          - noctx
+          - noinlineerr
         path: internal/examples/.*/.*\.go
       - linters:
           - dupl
@@ -77,7 +84,7 @@ linters:
         path: protocol.go
         text: (allProtocols|protocolToString) is a global variable
       - path: (.+)\.go$
-        text: 'do not define dynamic errors, use wrapped static errors instead: .*'
+        text: "do not define dynamic errors, use wrapped static errors instead: .*"
 formatters:
   enable:
     - gci

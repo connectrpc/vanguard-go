@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -107,7 +108,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		require.NoError(t, err)
 		return handler
 	}
-	var muxes []testMux
+	muxes := make([]testMux, 0, 2*len(compressions)*len(codecs)*len(protocols))
 	for _, protocol := range protocols {
 		for _, codec := range codecs {
 			for _, compression := range compressions {
@@ -158,9 +159,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			}
 		}
 		req := httptest.NewRequest(input.method, input.path, body)
-		for key, values := range input.meta {
-			req.Header[key] = values
-		}
+		maps.Copy(req.Header, input.meta)
 		req.Header["X-Server-Timeout"] = []string{"30"}
 		if isCompressed {
 			req.Header["Content-Encoding"] = []string{comp.Name()}
@@ -169,9 +168,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 			req.Header["Content-Type"] = []string{contentType}
 		}
 		query := req.URL.Query()
-		for key, values := range input.values {
-			query[key] = values
-		}
+		maps.Copy(query, input.values)
 		req.URL.RawQuery = query.Encode()
 		return req
 	}
@@ -572,7 +569,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		mux  testMux
 		comp *compressionPool
 	}
-	var testOpts []testOpt
+	testOpts := make([]testOpt, 0, len(muxes)*len(compressions))
 	for _, compression := range compressions {
 		for _, mux := range muxes {
 			var comp *compressionPool

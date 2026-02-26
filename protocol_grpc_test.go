@@ -43,7 +43,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Equal(t, "16", rec.Header().Get("Grpc-Status"))
 	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
 	// if error has no details, no need to generate this response trailer
-	assert.Equal(t, "", rec.Header().Get("Grpc-Status-Details-Bin"))
+	assert.Empty(t, rec.Header().Get("Grpc-Status-Details-Bin"))
 	assert.Empty(t, rec.Body.Bytes())
 
 	got := grpcExtractErrorFromTrailer(rec.Header())
@@ -72,7 +72,8 @@ func TestGRPCEncodeTimeoutQuick(t *testing.T) {
 		v := grpcEncodeTimeout(d)
 		return v != ""
 	}
-	if err := quick.Check(encode, nil); err != nil {
+	err := quick.Check(encode, nil)
+	if err != nil {
 		t.Error(err)
 	}
 }
@@ -87,7 +88,8 @@ func TestGRPCPercentEncodingQuick(t *testing.T) {
 		decoded, _ := grpcPercentDecode(encoded)
 		return decoded == input
 	}
-	if err := quick.Check(roundtrip, nil /* config */); err != nil {
+	err := quick.Check(roundtrip, nil)
+	if err != nil {
 		t.Error(err)
 	}
 }
