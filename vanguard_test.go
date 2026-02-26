@@ -927,6 +927,9 @@ func outputFromBidiStream[Req, Resp any](
 			break
 		}
 	}
+	if err := str.CloseRequest(); err != nil {
+		return nil, nil, nil, err
+	}
 	<-done
 	return str.ResponseHeader(), msgs, str.ResponseTrailer(), err
 }
