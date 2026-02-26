@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	initialBufferSize    = 512
+	initialBufferSize    = bytes.MinRead
 	maxRecycleBufferSize = 8 * 1024 * 1024 // if >8MiB, don't hold onto a buffer
 )
 
