@@ -69,6 +69,7 @@ linters:
           - dupl
           - forcetypeassert
           - nilerr
+          - prealloc
         path: .*_test.go
       - linters:
           - gocritic

@@ -100,7 +100,7 @@ func TestMux_RPCxREST(t *testing.T) {
 		t.Cleanup(server.Close)
 		return testServer{name: name, server: server}
 	}
-	servers := make([]testServer, 0, len(compressions))
+	var servers []testServer
 	for _, compression := range compressions {
 		servers = append(servers, makeServer(compression))
 	}
@@ -122,7 +122,7 @@ func TestMux_RPCxREST(t *testing.T) {
 		server *httptest.Server
 		opts   []connect.ClientOption
 	}
-	testOpts := make([]testOpt, 0, len(compressions)*len(codecs)*len(protocols)*len(servers))
+	var testOpts []testOpt
 	for _, server := range servers {
 		opts := []connect.ClientOption{}
 		for _, protocol := range protocols {

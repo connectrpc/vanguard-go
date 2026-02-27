@@ -108,7 +108,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		require.NoError(t, err)
 		return handler
 	}
-	muxes := make([]testMux, 0, 2*len(compressions)*len(codecs)*len(protocols))
+	var muxes []testMux
 	for _, protocol := range protocols {
 		for _, codec := range codecs {
 			for _, compression := range compressions {
@@ -569,7 +569,7 @@ func TestMux_RESTxRPC(t *testing.T) {
 		mux  testMux
 		comp *compressionPool
 	}
-	testOpts := make([]testOpt, 0, len(muxes)*len(compressions))
+	var testOpts []testOpt
 	for _, compression := range compressions {
 		for _, mux := range muxes {
 			var comp *compressionPool
