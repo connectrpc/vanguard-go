@@ -1340,22 +1340,56 @@ func TestTranscoder_PassThrough(t *testing.T) {
 	}
 }
 
-func TestMessage_Convert(t *testing.T) {
+func TestMessage_AdvanceStage(t *testing.T) {
 	t.Parallel()
-	// Tests the convert, decode, and encode methods of message.
+	// Tests the state machine for message.
 
 	type testEnviron struct {
-		abcCodec, xyzCodec             *fakeCodec
-		abcCompression, xyzCompression *fakeCompression
-		buffers                        *bufferPool
+		abcCodec, xyzCodec                               *fakeCodec
+		abcCompression, xyzCompression, otherCompression *fakeCompression
+		op                                               *operation
 	}
-	newTestEnviron := func() *testEnviron {
+	newTestEnviron := func(isRequest bool) *testEnviron {
+		abcCodec := &fakeCodec{name: "abc"}
+		xyzCodec := &fakeCodec{name: "xyz"}
+		abcCompression := &fakeCompression{name: "abc"}
+		xyzCompression := &fakeCompression{name: "xyz"}
+		otherCompression := &fakeCompression{name: "other"}
+		var clientCodec, serverCodec Codec
+		var clientReqComp, serverReqComp, respComp *compressionPool
+		if isRequest {
+			clientCodec = abcCodec
+			serverCodec = xyzCodec
+			clientReqComp = abcCompression.newPool()
+			serverReqComp = xyzCompression.newPool()
+			respComp = otherCompression.newPool()
+		} else {
+			clientCodec = xyzCodec
+			serverCodec = abcCodec
+			clientReqComp = xyzCompression.newPool()
+			serverReqComp = xyzCompression.newPool()
+			respComp = abcCompression.newPool()
+		}
+		op := &operation{
+			bufferPool: &bufferPool{},
+			client: clientProtocolDetails{
+				codec:           clientCodec,
+				reqCompression:  clientReqComp,
+				respCompression: respComp,
+			},
+			server: serverProtocolDetails{
+				codec:           serverCodec,
+				reqCompression:  serverReqComp,
+				respCompression: respComp,
+			},
+		}
 		return &testEnviron{
-			abcCodec:       &fakeCodec{name: "abc"},
-			xyzCodec:       &fakeCodec{name: "xyz"},
-			abcCompression: &fakeCompression{name: "abc"},
-			xyzCompression: &fakeCompression{name: "xyz"},
-			buffers:        &bufferPool{},
+			abcCodec:         abcCodec,
+			xyzCodec:         xyzCodec,
+			abcCompression:   abcCompression,
+			xyzCompression:   xyzCompression,
+			otherCompression: otherCompression,
+			op:               op,
 		}
 	}
 	resetEnv := func(env *testEnviron) {
@@ -1367,6 +1401,8 @@ func TestMessage_Convert(t *testing.T) {
 		env.abcCompression.decompressorCalls = 0
 		env.xyzCompression.compressorCalls = 0
 		env.xyzCompression.decompressorCalls = 0
+		env.otherCompression.compressorCalls = 0
+		env.otherCompression.decompressorCalls = 0
 	}
 	type expectedCounts struct {
 		abcMarshalCalls    int
@@ -1378,8 +1414,15 @@ func TestMessage_Convert(t *testing.T) {
 		xyzCompressCalls   int
 		xyzDecompressCalls int
 	}
-	checkCounts := func(t *testing.T, env *testEnviron, counts expectedCounts) {
+	checkCounts := func(t *testing.T, isRequest bool, env *testEnviron, counts expectedCounts) {
 		t.Helper()
+		if !isRequest {
+			// for responses, compression for both client and server is the same (abc)
+			counts.abcCompressCalls += counts.xyzCompressCalls
+			counts.abcDecompressCalls += counts.xyzDecompressCalls
+			counts.xyzCompressCalls = 0
+			counts.xyzDecompressCalls = 0
+		}
 		assert.Equal(t, counts.abcMarshalCalls, env.abcCodec.marshalCalls)
 		assert.Equal(t, counts.abcUnmarshalCalls, env.abcCodec.unmarshalCalls)
 		assert.Equal(t, counts.xyzMarshalCalls, env.xyzCodec.marshalCalls)
@@ -1388,59 +1431,61 @@ func TestMessage_Convert(t *testing.T) {
 		assert.Equal(t, counts.abcDecompressCalls, env.abcCompression.decompressorCalls)
 		assert.Equal(t, counts.xyzCompressCalls, env.xyzCompression.compressorCalls)
 		assert.Equal(t, counts.xyzDecompressCalls, env.xyzCompression.decompressorCalls)
+		assert.Zero(t, env.otherCompression.compressorCalls)
+		assert.Zero(t, env.otherCompression.decompressorCalls)
 	}
 
-	// Source always uses abc codec and abc compression.
-	// Destination varies by test case.
 	testCases := []struct {
-		name         string
-		dstCodecName string // "abc" (same) or "xyz" (different)
-		dstCompName  string // "abc" (same) or "xyz" (different)
-		// encode always marshals from decoded state (msg.msg -> buf)
-		encodeFromDecoded     expectedCounts
-		encodeFromDecodedComp *expectedCounts // if compressed (nil = same as above)
-		// convert operates directly on the buffer from read state
-		convertFromRead     expectedCounts
-		convertFromReadComp *expectedCounts // if compressed (nil = same as above)
+		name                      string
+		createMessage             func() *message
+		decodedToSend             expectedCounts
+		decodedToSendIfCompressed *expectedCounts
+		readToSend                expectedCounts
+		readToSendIfCompressed    *expectedCounts
 	}{
 		{
-			name:         "same codec, same compression",
-			dstCodecName: "abc",
-			dstCompName:  "abc",
-			// encode always marshals (+ compresses if compressed)
-			encodeFromDecoded:     expectedCounts{abcMarshalCalls: 1},
-			encodeFromDecodedComp: &expectedCounts{abcMarshalCalls: 1, abcCompressCalls: 1},
-			// convert is no-op when codec and compression names match
-			convertFromRead: expectedCounts{},
+			name:          "same codec, same compression",
+			createMessage: func() *message { return &message{sameCodec: true, sameCompression: true} },
+			// no calls necessary since client payload can be re-used
+			decodedToSend: expectedCounts{},
+			// With one buffer, decompressing to stageDecoded destroys the
+			// compressed data, so decoded->send must re-compress.
+			decodedToSendIfCompressed: &expectedCounts{
+				xyzCompressCalls: 1,
+			},
+			readToSend: expectedCounts{},
 		},
 		{
-			name:         "same codec, different compression",
-			dstCodecName: "abc",
-			dstCompName:  "xyz",
-			// encode always marshals (+ compresses with dst if compressed)
-			encodeFromDecoded:     expectedCounts{abcMarshalCalls: 1},
-			encodeFromDecodedComp: &expectedCounts{abcMarshalCalls: 1, xyzCompressCalls: 1},
-			// convert: uncompressed is no-op (source comp is nil, names both empty)
-			convertFromRead: expectedCounts{},
-			// convert: compressed must decompress abc + recompress xyz
-			convertFromReadComp: &expectedCounts{
+			name:          "same codec, different compression",
+			createMessage: func() *message { return &message{sameCodec: true} },
+			// no calls necessary for uncompressed since payload can be re-used,
+			// but we have to decompress/recompress for compressed payloads
+			decodedToSend: expectedCounts{},
+			decodedToSendIfCompressed: &expectedCounts{
+				xyzCompressCalls: 1,
+			},
+			readToSend: expectedCounts{},
+			readToSendIfCompressed: &expectedCounts{
 				abcDecompressCalls: 1,
 				xyzCompressCalls:   1,
 			},
 		},
 		{
-			name:         "different codec",
-			dstCodecName: "xyz",
-			dstCompName:  "xyz",
-			// encode always marshals with dst codec
-			encodeFromDecoded:     expectedCounts{xyzMarshalCalls: 1},
-			encodeFromDecodedComp: &expectedCounts{xyzMarshalCalls: 1, xyzCompressCalls: 1},
-			// convert: must decode abc + encode xyz
-			convertFromRead: expectedCounts{
+			name:          "different codec",
+			createMessage: func() *message { return &message{} },
+			// we must re-encode and re-compress
+			decodedToSend: expectedCounts{
+				xyzMarshalCalls: 1,
+			},
+			decodedToSendIfCompressed: &expectedCounts{
+				xyzMarshalCalls:  1,
+				xyzCompressCalls: 1,
+			},
+			readToSend: expectedCounts{
 				abcUnmarshalCalls: 1,
 				xyzMarshalCalls:   1,
 			},
-			convertFromReadComp: &expectedCounts{
+			readToSendIfCompressed: &expectedCounts{
 				abcDecompressCalls: 1,
 				abcUnmarshalCalls:  1,
 				xyzMarshalCalls:    1,
@@ -1452,111 +1497,118 @@ func TestMessage_Convert(t *testing.T) {
 	for _, compressed := range []bool{true, false} {
 		t.Run(fmt.Sprintf("compressed:%v", compressed), func(t *testing.T) {
 			t.Parallel()
-			for _, testCase := range testCases {
-				t.Run(testCase.name, func(t *testing.T) {
+			for _, isRequest := range []bool{true, false} {
+				t.Run(fmt.Sprintf("request:%v", isRequest), func(t *testing.T) {
 					t.Parallel()
+					for _, testCase := range testCases {
+						t.Run(testCase.name, func(t *testing.T) {
+							t.Parallel()
 
-					originalData := testDataString
-					if compressed {
-						originalData = testCompressedDataString
-					}
+							originalData := testDataString
+							if compressed {
+								originalData = testCompressedDataString
+							}
 
-					env := newTestEnviron()
+							env := newTestEnviron(isRequest)
+							msg := testCase.createMessage()
+							msg.msg = &wrapperspb.StringValue{}
+							buffer := msg.reset(env.op.bufferPool, isRequest, compressed)
+							checkStageEmpty(t, msg)
 
-					dstCodec := env.abcCodec
-					if testCase.dstCodecName == "xyz" {
-						dstCodec = env.xyzCodec
-					}
-					var dstComp compressor
-					if compressed {
-						if testCase.dstCompName == "abc" {
-							dstComp = env.abcCompression.newPool()
-						} else {
-							dstComp = env.xyzCompression.newPool()
-						}
-					}
+							buffer.WriteString(originalData)
+							msg.stage = stageRead
+							checkStageRead(t, msg, compressed)
 
-					// --- Test decode ---
-					msg := &message{msg: &wrapperspb.StringValue{}}
-					buffer := msg.reset(env.buffers)
-					msg.codec = env.abcCodec
-					if compressed {
-						msg.comp = env.abcCompression.newPool()
-					}
-					buffer.WriteString(originalData)
-					msg.size = buffer.Len()
+							err := msg.advanceToStage(env.op, stageDecoded)
+							require.NoError(t, err)
+							// read -> decoded must always decode (and possibly first decompress)
+							counts := expectedCounts{
+								abcUnmarshalCalls: 1,
+							}
+							if compressed {
+								counts.abcDecompressCalls = 1
+							}
+							checkCounts(t, isRequest, env, counts)
+							checkStageDecoded(t, msg)
 
-					// After reset: buffer is ready, comp/codec are set
-					require.NotNil(t, msg.buf)
+							resetEnv(env)
+							err = msg.advanceToStage(env.op, stageSend)
+							require.NoError(t, err)
+							counts = testCase.decodedToSend
+							if compressed && testCase.decodedToSendIfCompressed != nil {
+								counts = *testCase.decodedToSendIfCompressed
+							}
+							checkCounts(t, isRequest, env, counts)
+							checkStageSend(t, msg, compressed)
 
-					err := msg.decode(env.buffers)
-					require.NoError(t, err)
+							// Re-create message and this time go directly from read to send
+							msg = testCase.createMessage()
+							msg.msg = &wrapperspb.StringValue{}
+							buffer = msg.reset(env.op.bufferPool, isRequest, compressed)
+							buffer.WriteString(originalData)
+							msg.stage = stageRead
 
-					// decode always decompresses (if compressed) and decodes
-					decodeCounts := expectedCounts{abcUnmarshalCalls: 1}
-					if compressed {
-						decodeCounts.abcDecompressCalls = 1
-					}
-					checkCounts(t, env, decodeCounts)
-
-					// Check decoded message
-					require.Nil(t, msg.comp)
-					require.Nil(t, msg.codec)
-					stringValue, _ := msg.msg.(*wrapperspb.StringValue)
-					require.Equal(t, testDataString, stringValue.GetValue())
-
-					// --- Test encode from decoded state ---
-					resetEnv(env)
-					err = msg.encode(env.buffers, dstComp, dstCodec)
-					require.NoError(t, err)
-
-					counts := testCase.encodeFromDecoded
-					if compressed && testCase.encodeFromDecodedComp != nil {
-						counts = *testCase.encodeFromDecodedComp
-					}
-					checkCounts(t, env, counts)
-
-					// Check result buffer
-					if compressed {
-						require.NotNil(t, msg.comp)
-						require.Equal(t, testCompressedDataString, msg.buf.String())
-					} else {
-						require.Nil(t, msg.comp)
-						require.Equal(t, testDataString, msg.buf.String())
-					}
-
-					// --- Test convert from read state ---
-					msg = &message{msg: &wrapperspb.StringValue{}}
-					buffer = msg.reset(env.buffers)
-					msg.codec = env.abcCodec
-					if compressed {
-						msg.comp = env.abcCompression.newPool()
-					}
-					buffer.WriteString(originalData)
-					msg.size = buffer.Len()
-
-					resetEnv(env)
-					err = msg.convert(env.buffers, dstComp, dstCodec)
-					require.NoError(t, err)
-
-					counts = testCase.convertFromRead
-					if compressed && testCase.convertFromReadComp != nil {
-						counts = *testCase.convertFromReadComp
-					}
-					checkCounts(t, env, counts)
-
-					// Check result buffer
-					if compressed {
-						require.NotNil(t, msg.comp)
-						require.Equal(t, testCompressedDataString, msg.buf.String())
-					} else {
-						require.Nil(t, msg.comp)
-						require.Equal(t, testDataString, msg.buf.String())
+							resetEnv(env)
+							err = msg.advanceToStage(env.op, stageSend)
+							require.NoError(t, err)
+							counts = testCase.readToSend
+							if compressed && testCase.readToSendIfCompressed != nil {
+								counts = *testCase.readToSendIfCompressed
+							}
+							checkCounts(t, isRequest, env, counts)
+							checkStageSend(t, msg, compressed)
+						})
 					}
 				})
 			}
 		})
 	}
+}
+
+func checkStageEmpty(t *testing.T, msg *message) {
+	t.Helper()
+	require.Equal(t, stageEmpty, msg.stage)
+	require.NotNil(t, msg.buf)
+	require.Zero(t, msg.buf.Len())
+	require.Error(t, msg.advanceToStage(nil, stageRead))
+	require.Error(t, msg.advanceToStage(nil, stageDecoded))
+	require.Error(t, msg.advanceToStage(nil, stageSend))
+}
+
+func checkStageRead(t *testing.T, msg *message, compressed bool) {
+	t.Helper()
+	require.Equal(t, stageRead, msg.stage)
+	require.NotNil(t, msg.buf)
+	if compressed {
+		require.Equal(t, testCompressedDataString, msg.buf.String())
+	} else {
+		require.Equal(t, testDataString, msg.buf.String())
+	}
+	require.Error(t, msg.advanceToStage(nil, stageEmpty))
+}
+
+func checkStageDecoded(t *testing.T, msg *message) {
+	t.Helper()
+	require.Equal(t, stageDecoded, msg.stage)
+	stringValue, _ := msg.msg.(*wrapperspb.StringValue)
+	require.Equal(t, testDataString, stringValue.GetValue())
+	// Should not be possible to go backwards.
+	require.Error(t, msg.advanceToStage(nil, stageRead))
+	require.Error(t, msg.advanceToStage(nil, stageEmpty))
+}
+
+func checkStageSend(t *testing.T, msg *message, compressed bool) {
+	t.Helper()
+	require.Equal(t, stageSend, msg.stage)
+	require.NotNil(t, msg.buf)
+	if compressed {
+		require.Equal(t, testCompressedDataString, msg.buf.String())
+	} else {
+		require.Equal(t, testDataString, msg.buf.String())
+	}
+	require.Error(t, msg.advanceToStage(nil, stageDecoded))
+	require.Error(t, msg.advanceToStage(nil, stageRead))
+	require.Error(t, msg.advanceToStage(nil, stageEmpty))
 }
 
 type fakeCodec struct {

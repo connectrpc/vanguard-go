@@ -78,6 +78,15 @@ func newCompressionPool(
 	}
 }
 
+// Equal reports whether other is a *compressionPool with the same name.
+func (p *compressionPool) Equal(other any) bool {
+	if p == nil {
+		return other == nil
+	}
+	o, ok := other.(*compressionPool)
+	return ok && o != nil && p.name == o.name
+}
+
 func (p *compressionPool) Name() string {
 	if p == nil {
 		return ""
@@ -107,12 +116,6 @@ func (p *compressionPool) decompress(dst *bytes.Buffer, src io.Reader) error {
 	if p == nil {
 		_, err := io.Copy(dst, src)
 		return err
-	}
-	// Preserve the empty-buffer short-circuit for existing callers that
-	// still pass *bytes.Buffer directly. The full PR (#86) removes this
-	// guard by rewriting callers to never pass empty buffers.
-	if buf, ok := src.(*bytes.Buffer); ok && buf.Len() == 0 {
-		return nil
 	}
 	decomp, _ := p.decompressors.Get().(connect.Decompressor)
 	defer p.decompressors.Put(decomp)

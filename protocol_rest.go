@@ -200,7 +200,7 @@ func (r restClientProtocol) prepareUnmarshalledRequestFromBody(op *operation, sr
 		fields := msg.Descriptor().Fields()
 		contentType := op.reqContentType
 		msg.Set(fields.ByName("content_type"), protoreflect.ValueOfString(contentType))
-		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(src))
+		msg.Set(fields.ByName("data"), protoreflect.ValueOfBytes(bytes.Clone(src)))
 		return nil
 	}
 

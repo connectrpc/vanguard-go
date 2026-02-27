@@ -130,7 +130,7 @@ func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation,
 	} else {
 		msgData = ([]byte)(msgStr)
 	}
-	if op.client.reqCompression != nil {
+	if op.client.reqCompression != nil && len(msgData) > 0 {
 		dst := op.bufferPool.Get()
 		defer op.bufferPool.Put(dst)
 		if err := op.client.reqCompression.decompress(dst, bytes.NewBuffer(msgData)); err != nil {

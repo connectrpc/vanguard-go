@@ -108,6 +108,16 @@ func (j JSONCodec) Name() string {
 	return CodecJSON
 }
 
+// Equal reports whether other is also a JSONCodec.
+func (j JSONCodec) Equal(other any) bool {
+	switch other.(type) {
+	case JSONCodec, *JSONCodec:
+		return true
+	default:
+		return false
+	}
+}
+
 // IsBinary returns false, indicating that JSON is a text format. Implements
 // [StableCodec].
 func (j JSONCodec) IsBinary() bool {
@@ -243,6 +253,12 @@ func NewProtoCodec(res TypeResolver) *ProtoCodec {
 // Name returns "proto". Implements [Codec].
 func (p *ProtoCodec) Name() string {
 	return CodecProto
+}
+
+// Equal reports whether other is also a *ProtoCodec.
+func (p *ProtoCodec) Equal(other any) bool {
+	_, ok := other.(*ProtoCodec)
+	return ok
 }
 
 // IsBinary returns true, indicating that Protobuf is a binary format. Implements
