@@ -150,16 +150,14 @@ func (r restClientProtocol) requestNeedsPrep(op *operation) bool {
 }
 
 func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte, target proto.Message) error {
-	err := r.prepareUnmarshalledRequestFromBody(op, src, target)
-	if err != nil {
+	if err := r.prepareUnmarshalledRequestFromBody(op, src, target); err != nil {
 		return err
 	}
 	// Now pull in the fields from the URI path:
 	msg := target.ProtoReflect()
 	for i := len(op.restVars) - 1; i >= 0; i-- {
 		variable := op.restVars[i]
-		err := setParameter(msg, variable.fields, variable.value)
-		if err != nil {
+		if err := setParameter(msg, variable.fields, variable.value); err != nil {
 			return err
 		}
 	}
@@ -177,8 +175,7 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 			return err
 		}
 		for _, value := range values {
-			err := setParameter(msg, fields, value)
-			if err != nil {
+			if err := setParameter(msg, fields, value); err != nil {
 				return err
 			}
 		}

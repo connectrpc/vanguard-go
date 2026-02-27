@@ -72,8 +72,7 @@ func parsePathTemplate(template string) (
 	pathSegments, []pathVariable, error,
 ) {
 	parser := &pathParser{scan: pathScanner{input: template}}
-	err := parser.parseTemplate()
-	if err != nil {
+	if err := parser.parseTemplate(); err != nil {
 		return pathSegments{}, nil, err
 	}
 	return parser.segments, parser.variables, nil
@@ -108,8 +107,7 @@ func (p *pathParser) parseTemplate() error {
 	if !p.scan.consume('/') {
 		return p.errExpected('/') // empty path is not allowed.
 	}
-	err := p.parseSegments()
-	if err != nil {
+	if err := p.parseSegments(); err != nil {
 		return err
 	}
 	switch p.scan.next() {
@@ -137,8 +135,7 @@ func (p *pathParser) parseVerb() error {
 
 func (p *pathParser) parseSegments() error {
 	for {
-		err := p.parseSegment()
-		if err != nil {
+		if err := p.parseSegment(); err != nil {
 			return err
 		}
 		if p.scan.next() != '/' {
@@ -229,8 +226,7 @@ func (p *pathParser) parseVariable() error {
 		p.segments.path = append(p.segments.path, "*") // default capture.
 	case '=':
 		p.scan.discard()
-		err := p.parseSegments()
-		if err != nil {
+		if err := p.parseSegments(); err != nil {
 			return err
 		}
 		if !p.scan.consume('}') {
@@ -341,8 +337,7 @@ func pathUnescape(input string, mode pathEncoding) (string, error) {
 		switch input[i] {
 		case '%':
 			percentCount++
-			err := validateHex(input[i:])
-			if err != nil {
+			if err := validateHex(input[i:]); err != nil {
 				return "", err
 			}
 			i += 3

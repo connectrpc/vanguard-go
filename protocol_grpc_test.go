@@ -72,8 +72,7 @@ func TestGRPCEncodeTimeoutQuick(t *testing.T) {
 		v := grpcEncodeTimeout(d)
 		return v != ""
 	}
-	err := quick.Check(encode, nil)
-	if err != nil {
+	if err := quick.Check(encode, nil); err != nil {
 		t.Error(err)
 	}
 }
@@ -88,8 +87,7 @@ func TestGRPCPercentEncodingQuick(t *testing.T) {
 		decoded, _ := grpcPercentDecode(encoded)
 		return decoded == input
 	}
-	err := quick.Check(roundtrip, nil)
-	if err != nil {
+	if err := quick.Check(roundtrip, nil); err != nil {
 		t.Error(err)
 	}
 }

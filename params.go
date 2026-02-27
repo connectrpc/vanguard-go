@@ -78,8 +78,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 		// Resolve the field path for the error message in proto format.
 		// The JSON format is not used for consistency with other errors.
 		fieldPath := resolveFieldDescriptorsToPath(fields, false)
-		jsonErr := (*json.UnmarshalTypeError)(nil)
-		if errors.As(err, &jsonErr) ||
+		if jsonErr := (*json.UnmarshalTypeError)(nil); errors.As(err, &jsonErr) ||
 			// protojson errors are not exported, check the error string.
 			strings.HasPrefix(err.Error(), "proto") {
 			return connect.NewError(connect.CodeInvalidArgument,

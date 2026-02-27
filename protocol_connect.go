@@ -71,8 +71,7 @@ func (c connectUnaryGetClientProtocol) endMustBeInHeaders() bool {
 
 func (c connectUnaryGetClientProtocol) extractProtocolRequestHeaders(op *operation, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
-	err := connectExtractTimeout(headers, &reqMeta)
-	if err != nil {
+	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
 	query := op.queryValues()
@@ -134,8 +133,7 @@ func (c connectUnaryGetClientProtocol) prepareUnmarshalledRequest(op *operation,
 	if op.client.reqCompression != nil {
 		dst := op.bufferPool.Get()
 		defer op.bufferPool.Put(dst)
-		err := op.client.reqCompression.decompress(dst, bytes.NewBuffer(msgData))
-		if err != nil {
+		if err := op.client.reqCompression.decompress(dst, bytes.NewBuffer(msgData)); err != nil {
 			return err
 		}
 		msgData = dst.Bytes()
@@ -177,8 +175,7 @@ func (c connectUnaryPostClientProtocol) endMustBeInHeaders() bool {
 
 func (c connectUnaryPostClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
-	err := connectExtractTimeout(headers, &reqMeta)
-	if err != nil {
+	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
 	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), contentConnectUnaryPrefix)
@@ -303,8 +300,7 @@ func (c connectUnaryServerProtocol) extractProtocolResponseHeaders(statusCode in
 		}
 		endUnmarshaller = func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
 			var wireErr connectWireError
-			err := json.Unmarshal(buf.Bytes(), &wireErr)
-			if err != nil {
+			if err := json.Unmarshal(buf.Bytes(), &wireErr); err != nil {
 				end.err = connect.NewError(connect.CodeInternal, err)
 				return
 			}
@@ -371,8 +367,7 @@ func (c connectUnaryServerProtocol) requestLine(op *operation, msg proto.Message
 	defer op.bufferPool.Put(encoded)
 	if op.server.reqCompression != nil {
 		vals.Set("compression", op.server.reqCompression.Name())
-		err := op.server.reqCompression.compress(encoded, buf)
-		if err != nil {
+		if err := op.server.reqCompression.compress(encoded, buf); err != nil {
 			return "", "", "", false, err
 		}
 		// for the next step, we want encoded empty and data to be the message source
@@ -423,8 +418,7 @@ func (c connectStreamClientProtocol) acceptsStreamType(_ *operation, streamType 
 
 func (c connectStreamClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
-	err := connectExtractTimeout(headers, &reqMeta)
-	if err != nil {
+	if err := connectExtractTimeout(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
 	reqMeta.codec = strings.TrimPrefix(headers.Get("Content-Type"), contentConnectStreamPrefix)
@@ -455,8 +449,7 @@ func (c connectStreamClientProtocol) encodeEnd(op *operation, end *responseEnd, 
 	buffer := op.bufferPool.Get()
 	defer op.bufferPool.Put(buffer)
 	enc := json.NewEncoder(buffer)
-	err := enc.Encode(streamEnd)
-	if err != nil {
+	if err := enc.Encode(streamEnd); err != nil {
 		buffer.WriteString(`{"error": {"code": "internal", "message": ` + strconv.Quote(err.Error()) + `}}`)
 	}
 	// TODO: compress?
@@ -579,8 +572,7 @@ func (c connectStreamServerProtocol) encodeEnvelope(env envelope) envelopeBytes 
 
 func (c connectStreamServerProtocol) decodeEndFromMessage(_ *operation, buffer *bytes.Buffer) (responseEnd, error) {
 	var streamEnd connectStreamEnd
-	err := json.Unmarshal(buffer.Bytes(), &streamEnd)
-	if err != nil {
+	if err := json.Unmarshal(buffer.Bytes(), &streamEnd); err != nil {
 		return responseEnd{}, err
 	}
 	var cerr *connect.Error

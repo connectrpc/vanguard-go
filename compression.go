@@ -99,8 +99,7 @@ func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
 	decomp, _ := p.decompressors.Get().(connect.Decompressor)
 	defer p.decompressors.Put(decomp)
 
-	err := decomp.Reset(src)
-	if err != nil {
+	if err := decomp.Reset(src); err != nil {
 		return err
 	}
 	if _, err := dst.ReadFrom(decomp); err != nil {

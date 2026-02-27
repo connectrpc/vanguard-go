@@ -286,8 +286,7 @@ func (g grpcWebServerProtocol) String() string {
 
 func grpcExtractRequestMeta(contentTypeShort, contentTypePrefix string, headers http.Header) (requestMeta, error) {
 	var reqMeta requestMeta
-	err := grpcExtractTimeoutFromHeaders(headers, &reqMeta)
-	if err != nil {
+	if err := grpcExtractTimeoutFromHeaders(headers, &reqMeta); err != nil {
 		return reqMeta, err
 	}
 	contentType := headers.Get("Content-Type")
