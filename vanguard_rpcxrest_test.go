@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -100,7 +100,7 @@ func TestMux_RPCxREST(t *testing.T) {
 		t.Cleanup(server.Close)
 		return testServer{name: name, server: server}
 	}
-	servers := []testServer{}
+	var servers []testServer
 	for _, compression := range compressions {
 		servers = append(servers, makeServer(compression))
 	}
@@ -122,7 +122,7 @@ func TestMux_RPCxREST(t *testing.T) {
 		server *httptest.Server
 		opts   []connect.ClientOption
 	}
-	testOpts := []testOpt{}
+	var testOpts []testOpt
 	for _, server := range servers {
 		opts := []connect.ClientOption{}
 		for _, protocol := range protocols {
@@ -465,7 +465,7 @@ type stableJSONCodec struct {
 
 func (s stableJSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
 	// Always use stable method
-	return s.JSONCodec.MarshalAppendStable(base, msg)
+	return s.MarshalAppendStable(base, msg)
 }
 
 func (s stableJSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {

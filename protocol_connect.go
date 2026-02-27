@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -598,8 +598,8 @@ func connectExtractUnaryTrailers(headers http.Header) http.Header {
 	}
 	result := make(http.Header, count)
 	for k, v := range headers {
-		if strings.HasPrefix(k, "Trailer-") {
-			result[strings.TrimPrefix(k, "Trailer-")] = v
+		if after, ok := strings.CutPrefix(k, "Trailer-"); ok {
+			result[after] = v
 			delete(headers, k)
 		}
 	}

@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -101,7 +101,7 @@ func httpWriteError(rsp http.ResponseWriter, err error) {
 		bin = []byte(`{"code": 12, "message":"` + err.Error() + `"}`)
 	}
 	rsp.WriteHeader(statusCode)
-	_, _ = rsp.Write(bin)
+	_, _ = rsp.Write(bin) //nolint:gosec // writing error response, not user-tainted data
 }
 
 func httpErrorFromResponse(statusCode int, contentType string, src *bytes.Buffer) *connect.Error {

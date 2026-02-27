@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -111,14 +112,10 @@ func BenchmarkServeHTTP(b *testing.B) {
 		return func(rsp http.ResponseWriter, req *http.Request) {
 			_, _ = io.Copy(io.Discard, req.Body)
 			hdr := rsp.Header()
-			for key, vals := range rspHdr {
-				hdr[key] = vals
-			}
+			maps.Copy(hdr, rspHdr)
 			rsp.WriteHeader(http.StatusOK)
 			_, _ = rsp.Write(rspBody)
-			for key, vals := range rspTrl {
-				hdr[key] = vals
-			}
+			maps.Copy(hdr, rspTrl)
 		}
 	}
 

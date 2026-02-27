@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -163,7 +163,7 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	}
 
 	// And finally from the query string:
-	discardUnknownQueryParams := op.methodConf.serviceOptions.restUnmarshalOptions.DiscardUnknownQueryParams
+	discardUnknownQueryParams := op.methodConf.restUnmarshalOptions.DiscardUnknownQueryParams
 	for fieldPath, values := range op.queryValues() {
 		fields, err := resolvePathToFieldDescriptors(
 			msg.Descriptor(), fieldPath, true,
