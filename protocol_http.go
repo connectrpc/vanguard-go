@@ -110,8 +110,7 @@ func httpErrorFromResponse(statusCode int, contentType string, src *bytes.Buffer
 	}
 	codec := protojson.UnmarshalOptions{}
 	var stat status.Status
-	err := codec.Unmarshal(src.Bytes(), &stat)
-	if err != nil {
+	if err := codec.Unmarshal(src.Bytes(), &stat); err != nil {
 		body, err := anypb.New(&httpbody.HttpBody{
 			ContentType: contentType,
 			Data:        src.Bytes(),

@@ -82,8 +82,7 @@ func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
 	defer p.compressors.Put(comp)
 
 	comp.Reset(dst)
-	_, err := src.WriteTo(comp)
-	if err != nil {
+	if _, err := src.WriteTo(comp); err != nil {
 		return err
 	}
 	return comp.Close()

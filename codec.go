@@ -196,8 +196,7 @@ func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoref
 	fieldName := j.fieldName(field)
 	buf := bytes.NewBuffer(make([]byte, 0, len(fieldName)+len(data)+3))
 	buf.WriteByte('{')
-	err := json.NewEncoder(buf).Encode(fieldName)
-	if err != nil {
+	if err := json.NewEncoder(buf).Encode(fieldName); err != nil {
 		return err
 	}
 	buf.WriteByte(':')
@@ -272,8 +271,7 @@ func jsonStabilize(data []byte) ([]byte, error) {
 	// safe to use the same backing slice as source and destination. This is safe
 	// for the same reason that copy is safe even when the two slices overlap.
 	buf := bytes.NewBuffer(data[:0])
-	err := json.Compact(buf, data)
-	if err != nil {
+	if err := json.Compact(buf, data); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
