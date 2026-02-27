@@ -47,6 +47,15 @@ type compressor interface {
 	decompress(dst *bytes.Buffer, src io.Reader) error
 }
 
+// asCompressor safely converts a *compressionPool to the compressor interface.
+// A nil *compressionPool returns a nil interface (not a typed nil).
+func asCompressor(p *compressionPool) compressor {
+	if p == nil {
+		return nil
+	}
+	return p
+}
+
 type compressionPool struct {
 	name          string
 	decompressors sync.Pool

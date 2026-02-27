@@ -118,7 +118,7 @@ func convertBuffer(
 }
 
 // encodeBuffer encodes the message into the buffer, compressing as needed.
-func encodeBuffer(buffers *bufferPool, buf *bytes.Buffer, msg proto.Message, codec Codec, comp compressor) error { //nolint:unused
+func encodeBuffer(buffers *bufferPool, buf *bytes.Buffer, msg proto.Message, codec Codec, comp compressor) error {
 	return convertBuffer(buffers, buf, nil, nil, msg, codec, comp)
 }
 
@@ -141,7 +141,7 @@ func marshal(dst *bytes.Buffer, msg proto.Message, codec Codec) error {
 	} else {
 		// The buffer from the pool was large enough, MarshalAppend didn't
 		// allocate. Copy to the same byte slice is a nop.
-		dst.Write(raw[dst.Len():]) //nolint:gosec
+		dst.Write(raw[dst.Len():])
 	}
 	return nil
 }

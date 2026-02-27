@@ -219,6 +219,7 @@ func TestConvertBuffer(t *testing.T) {
 
 type countCodec struct {
 	Codec
+
 	marshalCalls, unmarshalCalls *int
 }
 
@@ -234,6 +235,7 @@ func (c countCodec) Unmarshal(b []byte, msg proto.Message) error {
 
 type countCompressor struct {
 	*compressionPool
+
 	compressorCalls, decompressorCalls *int
 }
 

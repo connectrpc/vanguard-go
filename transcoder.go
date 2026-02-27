@@ -517,27 +517,31 @@ func (o *operation) handle() {
 	sameRequestCodec := sameCodec && !o.clientReqNeedsPrep && !o.serverReqNeedsPrep
 	mustDecodeRequest := !sameRequestCodec || requireMessageForRequestLine
 
-	reqMsg := message{
-		sameCompression: sameRequestCompression,
-		sameCodec:       sameRequestCodec,
-	}
+	var reqMsg message
 
 	if mustDecodeRequest {
 		// Need the message type to decode
 		reqMsg.msg = o.methodConf.requestType.New().Interface()
 	}
 
+	var firstMessageRead bool
 	if requireMessageForRequestLine {
 		// Go ahead and process first request message
 		switch err := o.readRequestMessage(nil, o.request.Body, &reqMsg); {
 		case errors.Is(err, io.EOF):
 			// okay for the first message: means empty message data
-			reqMsg.markReady()
+			reqMsg.codec = o.client.codec
+			reqMsg.wasCompressed = o.client.reqCompression != nil
+			if o.client.reqCompression != nil {
+				reqMsg.comp = o.client.reqCompression
+			}
+			reqMsg.size = 0
 		case err != nil:
 			o.reportError(err)
 			return
 		}
-		if err := reqMsg.advanceToStage(o, stageDecoded); err != nil {
+		firstMessageRead = true
+		if err := o.decodeFirstRequestMessage(&reqMsg); err != nil {
 			o.reportError(err)
 			return
 		}
@@ -594,8 +598,9 @@ func (o *operation) handle() {
 	default:
 		tw := &transformingReader{rw: rw, msg: &reqMsg, r: o.request.Body}
 		o.request.Body = tw
-		if reqMsg.stage != stageEmpty {
-			if err := tw.prepareMessage(); err != nil {
+		if firstMessageRead {
+			err := tw.prepareMessage()
+			if err != nil {
 				tw.err = err
 			}
 		}
@@ -706,7 +711,7 @@ func (o *operation) readRequestMessage(rw *responseWriter, reader io.Reader, msg
 		}
 	}
 
-	buffer := msg.reset(o.bufferPool, true, compressed)
+	buffer := msg.reset(o.bufferPool)
 	var err error
 	if msgLen == -1 { //nolint:nestif
 		limit, grow, makeError, limitErr := o.determineReadLimit()
@@ -734,8 +739,33 @@ func (o *operation) readRequestMessage(rw *responseWriter, reader io.Reader, msg
 	if err != nil {
 		return err
 	}
-	msg.markReady()
+	msg.codec = o.client.codec
+	msg.wasCompressed = compressed
+	if compressed {
+		msg.comp = o.client.reqCompression
+	}
+	msg.size = buffer.Len()
 	return nil
+}
+
+// decodeFirstRequestMessage decodes the first request message for the
+// request-line builder. If the client needs a preparer, it decompresses
+// and uses the preparer to unmarshal; otherwise it uses the normal decode.
+func (o *operation) decodeFirstRequestMessage(msg *message) error {
+	if o.clientReqNeedsPrep {
+		// Decompress but keep encoded (preparer does unmarshal)
+		if msg.comp != nil {
+			if err := msg.convert(o.bufferPool, nil, msg.codec); err != nil {
+				return err
+			}
+		}
+		if err := o.clientPreparer.prepareUnmarshalledRequest(o, msg.buf.Bytes(), msg.msg); err != nil {
+			return err
+		}
+		msg.codec = nil
+		return nil
+	}
+	return msg.decode(o.bufferPool)
 }
 
 func (o *operation) processRequestEnvelope(envBuf envelopeBytes) (msgLen int, compressed bool, err error) {
@@ -962,7 +992,9 @@ func (r *transformingReader) Read(data []byte) (n int, err error) {
 			// preparer, we'll allow it and let the preparer produce a message from zero
 			// request bytes.
 			if !r.consumedFirst && errors.Is(err, io.EOF) && r.rw.op.clientReqNeedsPrep {
-				r.msg.markReady()
+				r.msg.codec = r.rw.op.client.codec
+				r.msg.wasCompressed = r.rw.op.client.reqCompression != nil
+				r.msg.size = 0
 			} else {
 				r.err = err
 				return 0, err
@@ -986,26 +1018,102 @@ func (r *transformingReader) Close() error {
 
 func (r *transformingReader) prepareMessage() error {
 	r.consumedFirst = true
-	if err := r.msg.advanceToStage(r.rw.op, stageSend); err != nil {
-		return err
+	op := r.rw.op
+	msg := r.msg
+
+	// Determine destination compression: only compress if source was compressed.
+	var dstComp compressor
+	if msg.wasCompressed {
+		dstComp = asCompressor(op.server.reqCompression)
 	}
-	r.buffer = r.msg.sendBuffer()
-	if r.rw.op.serverEnveloper == nil {
+
+	if op.clientReqNeedsPrep || op.serverReqNeedsPrep {
+		if err := r.prepareMessageWithPrep(dstComp); err != nil {
+			return err
+		}
+	} else {
+		if err := msg.convert(op.bufferPool, dstComp, op.server.codec); err != nil {
+			return err
+		}
+	}
+
+	r.buffer = msg.buf
+	if op.serverEnveloper == nil {
 		r.envRemain = 0
 		return nil
 	}
 	length := r.buffer.Len()
-	if limit := int(r.rw.op.methodConf.maxMsgBufferBytes); length > limit {
+	if limit := int(op.methodConf.maxMsgBufferBytes); length > limit {
 		return bufferLimitError(int64(limit))
 	}
 	// Need to prefix the buffer with an envelope
 	env := envelope{
-		compressed: r.msg.wasCompressed && r.rw.op.server.reqCompression != nil,
+		compressed: msg.comp != nil,
 		length:     uint32(length), //nolint:gosec // Length is validated above.
 	}
-	r.env = r.rw.op.serverEnveloper.encodeEnvelope(env)
+	r.env = op.serverEnveloper.encodeEnvelope(env)
 	r.envRemain = envelopeLen
 	return nil
+}
+
+// decodeForPrep decompresses and unmarshals the message for the preparer path.
+func (r *transformingReader) decodeForPrep() error {
+	op := r.rw.op
+	msg := r.msg
+	// Decompress if needed (keep same codec)
+	if msg.comp != nil {
+		if err := msg.convert(op.bufferPool, nil, msg.codec); err != nil {
+			return err
+		}
+	}
+	// Unmarshal via preparer or normal codec
+	if op.clientReqNeedsPrep {
+		if err := op.clientPreparer.prepareUnmarshalledRequest(op, msg.buf.Bytes(), msg.msg); err != nil {
+			return err
+		}
+	} else {
+		if err := msg.codec.Unmarshal(msg.buf.Bytes(), msg.msg); err != nil {
+			return err
+		}
+	}
+	msg.codec = nil
+	return nil
+}
+
+func (r *transformingReader) prepareMessageWithPrep(dstComp compressor) error {
+	op := r.rw.op
+	msg := r.msg
+
+	// If the message is still encoded, decode it now. When the first message
+	// was already decoded in operation.handle(), msg.codec is nil and we skip
+	// straight to the marshal step.
+	if msg.codec != nil {
+		if err := r.decodeForPrep(); err != nil {
+			return err
+		}
+	}
+
+	// Marshal via preparer or normal encode
+	if op.serverReqNeedsPrep {
+		buf := op.bufferPool.Get()
+		data, err := op.serverPreparer.prepareMarshalledRequest(op, buf.Bytes(), msg.msg, op.request.Header)
+		if err != nil {
+			op.bufferPool.Put(buf)
+			return err
+		}
+		old := msg.buf
+		msg.buf = op.bufferPool.Wrap(data, buf)
+		if old != msg.buf {
+			op.bufferPool.Put(old)
+		}
+		msg.codec = op.server.codec
+		// Compress if needed
+		if dstComp != nil {
+			return msg.convert(op.bufferPool, dstComp, msg.codec)
+		}
+		return nil
+	}
+	return msg.encode(op.bufferPool, dstComp, op.server.codec)
 }
 
 // responseWriter wraps the original writer and performs the protocol
@@ -1141,7 +1249,7 @@ func (w *responseWriter) WriteHeader(statusCode int) {
 	sameResponseCodec := sameCodec && !w.op.clientRespNeedsPrep && !w.op.serverRespNeedsPrep
 	mustDecodeResponse := !sameResponseCodec
 
-	respMsg := message{sameCompression: true, sameCodec: sameResponseCodec}
+	var respMsg message
 
 	if mustDecodeResponse {
 		// We will have to decode and re-encode, so we need the message type.
@@ -1617,7 +1725,7 @@ func (w *transformingWriter) Write(data []byte) (n int, err error) {
 				w.rw.reportError(err)
 				return written, err
 			}
-			w.buffer = w.msg.reset(w.rw.op.bufferPool, false, w.latestEnvelope.compressed)
+			w.buffer = w.msg.reset(w.rw.op.bufferPool)
 			w.buffer.Grow(int(w.latestEnvelope.length))
 			w.expectingBytes = int(w.latestEnvelope.length)
 			w.writingEnvelope = false
@@ -1678,19 +1786,48 @@ func (w *transformingWriter) flushMessage() error {
 		return nil
 	}
 
-	// We've finished reading the message, so we can manually set the stage
-	w.msg.markReady()
-	if err := w.msg.advanceToStage(w.rw.op, stageSend); err != nil {
-		return err
+	op := w.rw.op
+	msg := w.msg
+
+	// Set encoding state from what was read
+	msg.codec = op.server.codec
+	if op.serverEnveloper != nil {
+		msg.wasCompressed = w.latestEnvelope.compressed
+		if w.latestEnvelope.compressed {
+			msg.comp = asCompressor(op.server.respCompression)
+		}
+	} else {
+		msg.wasCompressed = w.rw.respMeta.compression != ""
+		if w.rw.respMeta.compression != "" {
+			msg.comp = asCompressor(op.server.respCompression)
+		}
 	}
-	buffer := w.msg.sendBuffer()
-	if enveloper := w.rw.op.clientEnveloper; enveloper != nil {
+	msg.size = msg.buf.Len()
+
+	// Determine destination compression
+	var dstComp compressor
+	if msg.wasCompressed {
+		dstComp = asCompressor(op.client.respCompression)
+	}
+
+	if op.serverRespNeedsPrep || op.clientRespNeedsPrep {
+		if err := w.convertResponseWithPrep(dstComp); err != nil {
+			return err
+		}
+	} else {
+		if err := msg.convert(op.bufferPool, dstComp, op.client.codec); err != nil {
+			return err
+		}
+	}
+
+	buffer := msg.buf
+	if enveloper := op.clientEnveloper; enveloper != nil {
 		length := buffer.Len()
-		if limit := int(w.rw.op.methodConf.maxMsgBufferBytes); length > limit {
+		if limit := int(op.methodConf.maxMsgBufferBytes); length > limit {
 			return bufferLimitError(int64(limit))
 		}
 		env := envelope{
-			compressed: w.msg.wasCompressed && w.rw.op.client.respCompression != nil,
+			compressed: msg.comp != nil,
 			length:     uint32(length), //nolint:gosec // Length is validated above.
 		}
 		envBytes := enveloper.encodeEnvelope(env)
@@ -1710,14 +1847,57 @@ func (w *transformingWriter) flushMessage() error {
 	return nil
 }
 
+func (w *transformingWriter) convertResponseWithPrep(dstComp compressor) error {
+	op := w.rw.op
+	msg := w.msg
+
+	// Decompress if needed
+	if msg.comp != nil {
+		if err := msg.convert(op.bufferPool, nil, msg.codec); err != nil {
+			return err
+		}
+	}
+
+	// Unmarshal via preparer or codec
+	if op.serverRespNeedsPrep {
+		if err := op.serverPreparer.prepareUnmarshalledResponse(op, msg.buf.Bytes(), msg.msg); err != nil {
+			return err
+		}
+	} else {
+		if err := msg.codec.Unmarshal(msg.buf.Bytes(), msg.msg); err != nil {
+			return err
+		}
+	}
+	msg.codec = nil
+
+	// Marshal via preparer or encode
+	if op.clientRespNeedsPrep {
+		buf := op.bufferPool.Get()
+		data, err := op.clientPreparer.prepareMarshalledResponse(op, buf.Bytes(), msg.msg, op.writer.Header())
+		if err != nil {
+			op.bufferPool.Put(buf)
+			return err
+		}
+		old := msg.buf
+		msg.buf = op.bufferPool.Wrap(data, buf)
+		if old != msg.buf {
+			op.bufferPool.Put(old)
+		}
+		msg.codec = op.client.codec
+		if dstComp != nil {
+			return msg.convert(op.bufferPool, dstComp, msg.codec)
+		}
+		return nil
+	}
+	return msg.encode(op.bufferPool, dstComp, op.client.codec)
+}
+
 func (w *transformingWriter) reset() {
+	w.buffer = w.msg.reset(w.rw.op.bufferPool)
 	if w.rw.op.serverEnveloper != nil {
-		w.buffer = w.msg.reset(w.rw.op.bufferPool, false, false)
 		w.expectingBytes = envelopeLen
 		w.writingEnvelope = true
 	} else {
-		isCompressed := w.rw.respMeta.compression != ""
-		w.buffer = w.msg.reset(w.rw.op.bufferPool, false, isCompressed)
 		w.expectingBytes = -1
 	}
 }
@@ -1835,346 +2015,80 @@ func (h *hardLimitReader) error() error {
 	return h.makeError(h.limit)
 }
 
-type messageStage int
-
-const (
-	stageEmpty = messageStage(iota)
-	// This is the stage of a message after the raw data has been read from the client
-	// or written by the server handler.
-	//
-	// At this point either compressed or data fields of the message will be populated
-	// (depending on whether message data was compressed or not).
-	stageRead
-	// This is the stage of a message after the data has been decompressed and decoded.
-	//
-	// The msg field of the message is usable at this point. The compressed and data
-	// fields of the message will remain populated if their values can be re-used.
-	stageDecoded
-	// This is the stage of a message after it has been re-encoded and re-compressed
-	// and is ready to send (to be read by server handler or to be written to client).
-	//
-	// Either compressed or data fields of the message will be populated (depending on
-	// whether message data was compressed or not).
-	stageSend
-)
-
-func (s messageStage) String() string {
-	switch s {
-	case stageEmpty:
-		return "empty"
-	case stageRead:
-		return "read"
-	case stageDecoded:
-		return "decoded"
-	case stageSend:
-		return "send"
-	default:
-		return "unknown"
-	}
-}
-
-// message represents a single message in an RPC stream. It can be re-used in a stream,
-// so we only allocate one and then re-use it for subsequent messages (if stream has
-// more than one).
+// message represents a single message in an RPC stream. It tracks the current
+// encoding state of the buffer via the comp and codec fields.
+//
+// A message can be re-used in a stream by calling reset between messages.
 type message struct {
-	// true if this is a request message read from the client; false if
-	// this is a response message written by the server.
-	isRequest bool
-
-	// flags indicating if compressed and data should be preserved after use.
-	sameCompression, sameCodec bool
-	// wasCompressed is true if the data was originally compressed; this can
-	// be false in a stream when the stream envelope's compressed bit is unset.
-	wasCompressed bool
-	// original size of the message on the wire, in bytes
-	size int
-
-	stage messageStage
-
-	// compressed is the compressed bytes; may be nil if the contents have
-	// already been decompressed into the data field.
-	compressed *bytes.Buffer
-	// data is the serialized but uncompressed bytes; may be nil if the
-	// contents have not yet been decompressed or have been de-serialized
-	// into the msg field.
-	data *bytes.Buffer
-	// msg is the plain message; not valid unless stage is stageDecoded
-	msg proto.Message
+	buf           *bytes.Buffer // current data buffer; nil if empty
+	comp          compressor    // compression applied to buf; nil if uncompressed
+	codec         Codec         // codec applied to buf; nil if decoded
+	msg           proto.Message // proto message for decode/encode; set by caller
+	size          int           // original wire size in bytes, -1 if unknown
+	wasCompressed bool          // whether the message was compressed when read
 }
 
-// sendBuffer returns the buffer to use to read message data to be sent.
-func (m *message) sendBuffer() *bytes.Buffer {
-	if m.stage != stageSend {
-		return nil
+// convert converts the buffer from its current encoding (m.comp, m.codec)
+// to the target encoding (comp, codec). Uses convertBuffer internally.
+func (m *message) convert(buffers *bufferPool, comp compressor, codec Codec) error {
+	if err := convertBuffer(buffers, m.buf, m.comp, m.codec, m.msg, codec, comp); err != nil {
+		return err
 	}
-	if m.wasCompressed {
-		return m.compressed
-	}
-	return m.data
+	m.comp = comp
+	m.codec = codec
+	return nil
 }
 
-// release releases all buffers associated with message to the given pool.
-func (m *message) release(pool *bufferPool) {
-	if m.compressed != nil {
-		pool.Put(m.compressed)
+// decode decompresses and decodes the buffer into m.msg.
+// After decode, m.comp and m.codec are nil.
+func (m *message) decode(buffers *bufferPool) error {
+	if err := decodeBuffer(buffers, m.buf, m.msg, m.codec, m.comp); err != nil {
+		return err
 	}
-	if m.data != nil && m.data != m.compressed {
-		pool.Put(m.data)
-	}
-	m.data, m.compressed, m.msg = nil, nil, nil
+	m.comp = nil
+	m.codec = nil
+	return nil
 }
 
-// reset arranges for message to be re-used by making sure it has
-// a compressed buffer that is ready to accept bytes and no data
-// buffer.
-func (m *message) reset(pool *bufferPool, isRequest, isCompressed bool) *bytes.Buffer {
-	m.stage = stageEmpty
+// encode marshals m.msg into the buffer with the given codec and compressor.
+// A fresh buffer is allocated to avoid aliasing with data that m.msg may
+// reference from the old buffer (e.g. HttpBody.data from a REST preparer).
+func (m *message) encode(buffers *bufferPool, comp compressor, codec Codec) error {
+	buf := buffers.Get()
+	if err := encodeBuffer(buffers, buf, m.msg, codec, comp); err != nil {
+		buffers.Put(buf)
+		return err
+	}
+	buffers.Put(m.buf)
+	m.buf = buf
+	m.comp = comp
+	m.codec = codec
+	return nil
+}
+
+// reset prepares the message for reuse, returning the buffer ready for writing.
+func (m *message) reset(pool *bufferPool) *bytes.Buffer {
+	if m.buf == nil {
+		m.buf = pool.Get()
+	} else {
+		m.buf.Reset()
+	}
+	m.comp = nil
+	m.codec = nil
+	m.wasCompressed = false
 	m.size = -1
-	m.isRequest = isRequest
-	m.wasCompressed = isCompressed
-	// we only need one buffer to start, so put
-	// a non-nil buffer into buffer1 and if we
-	// have a second non-nil buffer, release it
-	buffer1, buffer2 := m.compressed, m.data
-	if buffer1 == nil && buffer2 != nil {
-		buffer1, buffer2 = buffer2, buffer1
-	}
-	if buffer2 != nil && buffer2 != buffer1 {
-		pool.Put(buffer2)
-	}
-	if buffer1 == nil {
-		buffer1 = pool.Get()
-	} else {
-		buffer1.Reset()
-	}
-	if isCompressed {
-		m.compressed, m.data = buffer1, nil
-	} else {
-		m.data, m.compressed = buffer1, nil
-	}
-	return buffer1
+	return m.buf
 }
 
-func (m *message) markReady() {
-	m.stage = stageRead
-	if m.wasCompressed {
-		m.size = m.compressed.Len()
-	} else {
-		m.size = m.data.Len()
+// release releases the buffer back to the pool and clears all fields.
+func (m *message) release(pool *bufferPool) {
+	if m.buf != nil {
+		pool.Put(m.buf)
+		m.buf = nil
 	}
-}
-
-func (m *message) advanceToStage(op *operation, newStage messageStage) error {
-	if m.stage == stageEmpty {
-		return errors.New("message has not yet been read")
-	}
-	if m.stage > newStage {
-		return fmt.Errorf("cannot advance message stage backwards: stage %v > target %v", m.stage, newStage)
-	}
-
-	if newStage == m.stage {
-		return nil // no-op
-	}
-
-	if newStage == stageSend && m.sameCodec &&
-		(!m.wasCompressed || (m.wasCompressed && m.sameCompression)) {
-		// We can re-use existing buffer; no more action to take.
-		m.stage = newStage
-		return nil // no more action to take
-	}
-
-	switch {
-	case m.stage == stageRead && newStage == stageSend:
-		if !m.sameCodec {
-			// If the codec is different we have to fully decode the message and
-			// then fully re-encode.
-			if err := m.advanceToStage(op, stageDecoded); err != nil {
-				return err
-			}
-			return m.advanceToStage(op, newStage)
-		}
-
-		// We must de-compress and re-compress the data.
-		if err := m.decompress(op, false); err != nil {
-			return err
-		}
-		if err := m.compress(op); err != nil {
-			return err
-		}
-		m.stage = newStage
-		return nil
-
-	case m.stage == stageRead && newStage == stageDecoded:
-		if m.wasCompressed {
-			if err := m.decompress(op, m.sameCompression && m.sameCodec); err != nil {
-				return err
-			}
-		}
-		if err := m.decode(op, m.sameCodec); err != nil {
-			return err
-		}
-		m.stage = newStage
-		return nil
-
-	case m.stage == stageDecoded && newStage == stageSend:
-		if !m.sameCodec {
-			// re-encode
-			if err := m.encode(op); err != nil {
-				return err
-			}
-		}
-		if m.wasCompressed {
-			// re-compress
-			if err := m.compress(op); err != nil {
-				return err
-			}
-		}
-		m.stage = newStage
-		return nil
-
-	default:
-		return fmt.Errorf("unknown stage transition: stage %v to target %v", m.stage, newStage)
-	}
-}
-
-// decompress will decompress data in m.compressed into m.data,
-// acquiring a new buffer from op's bufferPool if necessary.
-// If saveBuffer is true, m.compressed will be unmodified on
-// return; otherwise, the buffer will be released to op's
-// bufferPool and the field set to nil.
-//
-// This method should not be called directly as the message's
-// buffers could get out of sync with its stage. It should
-// only be called from m.advanceToStage.
-func (m *message) decompress(op *operation, saveBuffer bool) error {
-	var pool *compressionPool
-	if m.isRequest {
-		pool = op.client.reqCompression
-	} else {
-		pool = op.client.respCompression
-	}
-	if pool == nil {
-		// identity compression, so nothing to do
-		m.data = m.compressed
-		if !saveBuffer {
-			m.compressed = nil
-		}
-		return nil
-	}
-
-	var src *bytes.Buffer
-	if saveBuffer {
-		// we allocate a new buffer, but not the underlying byte slice
-		// (it's cheaper than re-compressing later)
-		src = bytes.NewBuffer(m.compressed.Bytes())
-	} else {
-		src = m.compressed
-	}
-	m.data = op.bufferPool.Get()
-	if err := pool.decompress(m.data, src); err != nil {
-		return err
-	}
-	if !saveBuffer {
-		op.bufferPool.Put(m.compressed)
-		m.compressed = nil
-	}
-	return nil
-}
-
-// compress will compress data in m.data into m.compressed,
-// acquiring a new buffer from op's bufferPool if necessary.
-//
-// This method should not be called directly as the message's
-// buffers could get out of sync with its stage. It should
-// only be called from m.advanceToStage.
-func (m *message) compress(op *operation) error {
-	var pool *compressionPool
-	if m.isRequest {
-		pool = op.server.reqCompression
-	} else {
-		pool = op.server.respCompression
-	}
-	if pool == nil {
-		// identity compression, so nothing to do
-		m.compressed = m.data
-		m.data = nil
-		return nil
-	}
-
-	m.compressed = op.bufferPool.Get()
-	if err := pool.compress(m.compressed, m.data); err != nil {
-		return err
-	}
-	op.bufferPool.Put(m.data)
-	m.data = nil
-	return nil
-}
-
-// decode will unmarshal data in m.data into m.msg. If
-// saveBuffer is true, m.data will be unmodified on return;
-// otherwise, the buffer will be released to op's bufferPool
-// and the field set to nil.
-//
-// This method should not be called directly as the message's
-// buffers could get out of sync with its stage. It should
-// only be called from m.advanceToStage.
-func (m *message) decode(op *operation, saveBuffer bool) error {
-	switch {
-	case m.isRequest && op.clientReqNeedsPrep:
-		return op.clientPreparer.prepareUnmarshalledRequest(op, m.data.Bytes(), m.msg)
-	case !m.isRequest && op.serverRespNeedsPrep:
-		return op.serverPreparer.prepareUnmarshalledResponse(op, m.data.Bytes(), m.msg)
-	}
-
-	var codec Codec
-	if m.isRequest {
-		codec = op.client.codec
-	} else {
-		codec = op.server.codec
-	}
-
-	if err := codec.Unmarshal(m.data.Bytes(), m.msg); err != nil {
-		return err
-	}
-	if !saveBuffer {
-		op.bufferPool.Put(m.data)
-		m.data = nil
-	}
-	return nil
-}
-
-// encode will marshal data in m.msg into m.data.
-//
-// This method should not be called directly as the message's
-// buffers could get out of sync with its stage. It should
-// only be called from m.advanceToStage.
-func (m *message) encode(op *operation) error {
-	buf := op.bufferPool.Get()
-	var data []byte
-	var err error
-
-	switch {
-	case m.isRequest && op.serverReqNeedsPrep:
-		data, err = op.serverPreparer.prepareMarshalledRequest(op, buf.Bytes(), m.msg, op.request.Header)
-	case !m.isRequest && op.clientRespNeedsPrep:
-		data, err = op.clientPreparer.prepareMarshalledResponse(op, buf.Bytes(), m.msg, op.writer.Header())
-	default:
-		var codec Codec
-		if m.isRequest {
-			codec = op.server.codec
-		} else {
-			codec = op.client.codec
-		}
-		data, err = codec.MarshalAppend(buf.Bytes(), m.msg)
-	}
-
-	if err != nil {
-		op.bufferPool.Put(buf)
-		m.data = nil
-		return err
-	}
-	m.data = op.bufferPool.Wrap(data, buf)
-	return nil
+	m.comp = nil
+	m.codec = nil
+	m.msg = nil
 }
 
 type errorFlusher interface {
