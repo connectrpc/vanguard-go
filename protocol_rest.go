@@ -297,8 +297,7 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 		return responseMeta{
 				end: &responseEnd{httpCode: statusCode},
 			}, func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
-				err := httpErrorFromResponse(statusCode, contentType, buf)
-				if err != nil {
+				if err := httpErrorFromResponse(statusCode, contentType, buf); err != nil {
 					end.err = err
 					end.httpCode = httpStatusCodeFromRPC(err.Code())
 				}

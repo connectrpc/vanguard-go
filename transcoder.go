@@ -1357,16 +1357,14 @@ func (w *envelopingWriter) Write(data []byte) (n int, err error) {
 			return written, err
 		}
 		if w.writingEnvelope {
-			err := w.handleEnvelopeWritten()
-			if err != nil {
+			if err := w.handleEnvelopeWritten(); err != nil {
 				return written, err
 			}
 			continue
 		}
 
 		if w.currentIsTrailer {
-			err := w.handleTrailer()
-			if err != nil {
+			if err := w.handleTrailer(); err != nil {
 				return written, err
 			}
 			if len(data) == 0 {
@@ -1416,8 +1414,7 @@ func (w *envelopingWriter) handleEnvelopeWritten() error {
 	}
 	if w.rw.op.clientEnveloper != nil {
 		envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
-		_, err := w.w.Write(envBytes[:])
-		if err != nil {
+		if _, err := w.w.Write(envBytes[:]); err != nil {
 			w.err = err
 			return err
 		}
@@ -1456,13 +1453,11 @@ func (w *envelopingWriter) Close() error {
 			length:     uint32(buf.Len()), //nolint:gosec // Length is validated above.
 		}
 		envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
-		_, err := w.w.Write(envBytes[:])
-		if err != nil {
+		if _, err := w.w.Write(envBytes[:]); err != nil {
 			w.err = err
 			return err
 		}
-		_, err = buf.WriteTo(w.w)
-		if err != nil {
+		if _, err := buf.WriteTo(w.w); err != nil {
 			w.err = err
 			return err
 		}
@@ -1520,8 +1515,7 @@ func (w *envelopingWriter) maybeInit() {
 	env.compressed = w.rw.op.client.respCompression != nil
 	env.length = uint32(w.rw.contentLen) //nolint:gosec // Length is validated above.
 	envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
-	_, err := w.w.Write(envBytes[:])
-	if err != nil {
+	if _, err := w.w.Write(envBytes[:]); err != nil {
 		w.err = err
 		return
 	}
