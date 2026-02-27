@@ -133,8 +133,7 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 		for _, opt := range svc.opts {
 			opt.applyToService(&resolvedOpts)
 		}
-		err := transcoder.registerService(svc, resolvedOpts)
-		if err != nil {
+		if err := transcoder.registerService(svc, resolvedOpts); err != nil {
 			return nil, err
 		}
 		if len(resolvedOpts.protocols) == 1 {
@@ -144,8 +143,7 @@ func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, 
 			}
 		}
 	}
-	err := transcoder.registerRules(transcoderOpts.rules)
-	if err != nil {
+	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
 		return nil, err
 	}
 

@@ -106,8 +106,7 @@ func resolverForFile(file protoreflect.FileDescriptor) TypeResolver {
 		return protoregistry.GlobalTypes
 	}
 	var files protoregistry.Files
-	err := addFileRecursive(file, &files)
-	if err != nil {
+	if err := addFileRecursive(file, &files); err != nil {
 		// Failed to create a bespoke resolver for this file.
 		return protoregistry.GlobalTypes
 	}
@@ -122,15 +121,13 @@ func addFileRecursive(file protoreflect.FileDescriptor, files *protoregistry.Fil
 		// already registered
 		return nil
 	}
-	err := files.RegisterFile(file)
-	if err != nil {
+	if err := files.RegisterFile(file); err != nil {
 		return err
 	}
 	imports := file.Imports()
 	for i, length := 0, imports.Len(); i < length; i++ {
 		depFile := imports.Get(i).FileDescriptor
-		err := addFileRecursive(depFile, files)
-		if err != nil {
+		if err := addFileRecursive(depFile, files); err != nil {
 			return err
 		}
 	}

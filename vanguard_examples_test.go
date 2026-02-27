@@ -205,8 +205,7 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 	var body []byte
 	if err != nil {
 		code := connect.CodeInternal
-		ce := (*connect.Error)(nil)
-		if errors.As(err, &ce) {
+		if ce := (*connect.Error)(nil); errors.As(err, &ce) {
 			code = ce.Code()
 		}
 		body = []byte(`{"code":` + strconv.Itoa(int(code)) +

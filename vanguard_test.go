@@ -557,8 +557,7 @@ func (i *testInterceptor) restUnaryHandler(
 		if comp != nil && len(body) > 0 && encoding != "" {
 			assert.Equal(stream.T, comp.Name(), encoding, "expected encoding")
 			var dst bytes.Buffer
-			err := comp.decompress(&dst, bytes.NewBuffer(body))
-			if err != nil {
+			if err := comp.decompress(&dst, bytes.NewBuffer(body)); err != nil {
 				return err
 			}
 			body = dst.Bytes()
@@ -575,8 +574,7 @@ func (i *testInterceptor) restUnaryHandler(
 				if !assert.Equal(stream.T, codec.Name(), codecName, "codec didn't match") {
 					return errors.New("codec didn't match")
 				}
-				err := codec.Unmarshal(body, got)
-				if err != nil {
+				if err := codec.Unmarshal(body, got); err != nil {
 					return err
 				}
 			}
@@ -614,8 +612,7 @@ func (i *testInterceptor) restUnaryHandler(
 				assert.Equal(stream.T, comp.Name(), acceptEncoding, "expected encoding")
 				rsp.Header().Set("Content-Encoding", comp.Name())
 				var dst bytes.Buffer
-				err := comp.compress(&dst, bytes.NewBuffer(body))
-				if err != nil {
+				if err := comp.compress(&dst, bytes.NewBuffer(body)); err != nil {
 					return err
 				}
 				body = dst.Bytes()
@@ -860,8 +857,7 @@ func outputFromClientStream[Req, Resp any](
 	resp, err := str.CloseAndReceive()
 	if err != nil {
 		var headers http.Header
-		connErr := new(connect.Error)
-		if errors.As(err, &connErr) {
+		if connErr := new(connect.Error); errors.As(err, &connErr) {
 			headers = connErr.Meta()
 		}
 		return headers, nil, nil, err
