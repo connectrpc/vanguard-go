@@ -460,8 +460,7 @@ func grpcPercentDecode(input string) (string, error) {
 		switch input[i] {
 		case '%':
 			percentCount++
-			err := validateHex(input[i:])
-			if err != nil {
+			if err := validateHex(input[i:]); err != nil {
 				return "", err
 			}
 			i += 3
