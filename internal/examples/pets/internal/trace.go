@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -172,7 +172,7 @@ func (t *traceWriter) WriteHeader(statusCode int) {
 	trailers := t.Header().Values("Trailer")
 	t.trailersSnapshot = make([]string, 0, len(trailers))
 	for _, trailer := range trailers {
-		for _, k := range strings.Split(trailer, ",") {
+		for k := range strings.SplitSeq(trailer, ",") {
 			t.trailersSnapshot = append(t.trailersSnapshot, strings.TrimSpace(k))
 		}
 	}
@@ -188,8 +188,8 @@ func (t *traceWriter) traceTrailers() {
 	}
 	trailers := http.Header{}
 	for k, v := range t.Header() {
-		if strings.HasPrefix(k, http.TrailerPrefix) {
-			trailers[strings.TrimPrefix(k, http.TrailerPrefix)] = v
+		if after, ok := strings.CutPrefix(k, http.TrailerPrefix); ok {
+			trailers[after] = v
 		}
 	}
 	for _, k := range t.trailersSnapshot {
@@ -212,10 +212,10 @@ type tracer struct {
 	prefix string
 }
 
-func (trc *tracer) traceReq(msg string, args ...interface{}) {
+func (trc *tracer) traceReq(msg string, args ...any) {
 	fmt.Printf("%s#%04d>> %s\n", trc.prefix, trc.reqID, fmt.Sprintf(msg, args...))
 }
 
-func (trc *tracer) traceResp(msg string, args ...interface{}) {
+func (trc *tracer) traceResp(msg string, args ...any) {
 	fmt.Printf("%s#%04d<< %s\n", trc.prefix, trc.reqID, fmt.Sprintf(msg, args...))
 }

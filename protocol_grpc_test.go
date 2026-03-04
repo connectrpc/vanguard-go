@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -43,7 +43,7 @@ func TestGRPCErrorWriter(t *testing.T) {
 	assert.Equal(t, "16", rec.Header().Get("Grpc-Status"))
 	assert.Equal(t, "test error: Hello, %E4%B8%96%E7%95%8C", rec.Header().Get("Grpc-Message"))
 	// if error has no details, no need to generate this response trailer
-	assert.Equal(t, "", rec.Header().Get("Grpc-Status-Details-Bin"))
+	assert.Empty(t, rec.Header().Get("Grpc-Status-Details-Bin"))
 	assert.Empty(t, rec.Body.Bytes())
 
 	got := grpcExtractErrorFromTrailer(rec.Header())
@@ -87,7 +87,7 @@ func TestGRPCPercentEncodingQuick(t *testing.T) {
 		decoded, _ := grpcPercentDecode(encoded)
 		return decoded == input
 	}
-	if err := quick.Check(roundtrip, nil /* config */); err != nil {
+	if err := quick.Check(roundtrip, nil); err != nil {
 		t.Error(err)
 	}
 }

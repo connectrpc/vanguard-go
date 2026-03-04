@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -391,8 +391,7 @@ func (o *operation) validate(transcoder *Transcoder) error {
 	o.request.ContentLength = -1 // transforming it will likely change it
 
 	// Identify the method being invoked.
-	err := o.resolveMethod(transcoder)
-	if err != nil {
+	if err := o.resolveMethod(transcoder); err != nil {
 		return err
 	}
 	if !o.client.protocol.acceptsStreamType(o, o.methodConf.streamType) {
@@ -1365,8 +1364,7 @@ func (w *envelopingWriter) Write(data []byte) (n int, err error) {
 		}
 
 		if w.currentIsTrailer {
-			err := w.handleTrailer()
-			if err != nil {
+			if err := w.handleTrailer(); err != nil {
 				return written, err
 			}
 			if len(data) == 0 {
@@ -1416,8 +1414,7 @@ func (w *envelopingWriter) handleEnvelopeWritten() error {
 	}
 	if w.rw.op.clientEnveloper != nil {
 		envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
-		_, err := w.w.Write(envBytes[:])
-		if err != nil {
+		if _, err := w.w.Write(envBytes[:]); err != nil {
 			w.err = err
 			return err
 		}
@@ -1456,13 +1453,11 @@ func (w *envelopingWriter) Close() error {
 			length:     uint32(buf.Len()), //nolint:gosec // Length is validated above.
 		}
 		envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
-		_, err := w.w.Write(envBytes[:])
-		if err != nil {
+		if _, err := w.w.Write(envBytes[:]); err != nil {
 			w.err = err
 			return err
 		}
-		_, err = buf.WriteTo(w.w)
-		if err != nil {
+		if _, err := buf.WriteTo(w.w); err != nil {
 			w.err = err
 			return err
 		}
@@ -1520,8 +1515,7 @@ func (w *envelopingWriter) maybeInit() {
 	env.compressed = w.rw.op.client.respCompression != nil
 	env.length = uint32(w.rw.contentLen) //nolint:gosec // Length is validated above.
 	envBytes := w.rw.op.clientEnveloper.encodeEnvelope(env)
-	_, err := w.w.Write(envBytes[:])
-	if err != nil {
+	if _, err := w.w.Write(envBytes[:]); err != nil {
 		w.err = err
 		return
 	}

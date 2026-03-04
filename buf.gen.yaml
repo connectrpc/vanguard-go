@@ -8,12 +8,12 @@ managed:
     - file_option: go_package_prefix
       value: connectrpc.com/vanguard/internal/gen
 plugins:
-  - remote: buf.build/protocolbuffers/go:v1.36.6
+  - remote: buf.build/protocolbuffers/go:v1.36.11
     out: internal/gen
     opt: paths=source_relative
-  - remote: buf.build/connectrpc/go:v1.18.1
+  - remote: buf.build/connectrpc/go:v1.19.1
     out: internal/gen
     opt: paths=source_relative
-  - remote: buf.build/grpc/go:v1.5.1
+  - remote: buf.build/grpc/go:v1.6.1
     out: internal/gen
     opt: paths=source_relative

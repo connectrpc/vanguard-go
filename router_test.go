@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -161,7 +161,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 					target, vars, _ := trie.match(testCase.path, method)
 					require.NotNil(t, target)
 					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.config.descriptor.Name())
-					require.Equal(t, len(testCase.expectedVars), len(vars))
+					require.Len(t, vars, len(testCase.expectedVars))
 					for _, varMatch := range vars {
 						names := make([]string, len(varMatch.fields))
 						for i, fld := range varMatch.fields {
@@ -242,6 +242,7 @@ func initTrie(tb testing.TB) *routeTrie {
 
 type fakeMethodDescriptor struct {
 	protoreflect.MethodDescriptor
+
 	name    string
 	in, out protoreflect.MessageDescriptor
 }
@@ -266,6 +267,7 @@ func (f *fakeMethodDescriptor) Output() protoreflect.MessageDescriptor {
 
 type fakeMessageDescriptor struct {
 	protoreflect.MessageDescriptor
+
 	fields protoreflect.FieldDescriptors
 }
 
@@ -278,6 +280,7 @@ func (f *fakeMessageDescriptor) Fields() protoreflect.FieldDescriptors {
 
 type fakeFieldDescriptors struct {
 	protoreflect.FieldDescriptors
+
 	fields map[protoreflect.Name]protoreflect.FieldDescriptor
 }
 
@@ -294,10 +297,11 @@ func (f *fakeFieldDescriptors) ByName(name protoreflect.Name) protoreflect.Field
 }
 
 type fakeFieldDescriptor struct {
+	protoreflect.FieldDescriptor
+
 	name protoreflect.Name
 	msg  protoreflect.MessageDescriptor
 	kind protoreflect.Kind
-	protoreflect.FieldDescriptor
 }
 
 func (f *fakeFieldDescriptor) Name() protoreflect.Name {

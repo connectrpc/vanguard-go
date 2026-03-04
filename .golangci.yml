@@ -1,80 +1,94 @@
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-  exhaustruct:
-    include:
-      - 'github\.com/bufbuild/vanguard\..*[cC]onfig'
-  forbidigo:
-    forbid:
-      - '^fmt\.Print'
-      - '^log\.'
-      - '^print$'
-      - '^println$'
-      - '^panic$'
-  godox:
-    # TODO, OPT, etc. comments are fine to commit. Use FIXME comments for
-    # temporary hacks, and use godox to prevent committing them.
-    keywords: [FIXME]
-  varnamelen:
-    ignore-decls:
-      - T any
-      - i int
-      - wg sync.WaitGroup
-      - sb strings.Builder
-      - sb *strings.Builder
-      - ok bool
-      - op *operation
-      - op Operation
-      - t *ttStream
-      - rw *responseWriter
+version: "2"
 linters:
-  enable-all: true
+  default: all
   disable:
-    - cyclop            # covered by gocyclo
-    - depguard          # unnecessary for small libraries
-    - funlen            # rely on code review to limit function length
-    - gocognit          # dubious "cognitive overhead" quantification
-    - gofumpt           # prefer standard gofmt
-    - goimports         # rely on gci instead
-    - inamedparam       # convention is not followed
-    - ireturn           # "accept interfaces, return structs" isn't ironclad
-    - lll               # don't want hard limits for line length
-    - maintidx          # covered by gocyclo
-    - mnd               # status codes are clearer than constants
-    - nlreturn          # generous whitespace violates house style
-    - nonamedreturns    # named returns are fine; it's *bare* returns that are bad
-    - protogetter       # too many false positives
-    - tenv              # replaced by usetesting
-    - testpackage       # internal tests are fine
-    - wrapcheck         # don't _always_ need to wrap errors
-    - wsl               # generous whitespace violates house style
-issues:
-  exclude-dirs-use-default: false
-  exclude:
-    # Don't ban use of fmt.Errorf to create new errors, but the remaining
-    # checks from err113 are useful.
-    - "do not define dynamic errors, use wrapped static errors instead: .*"
-  exclude-rules:
-    - path: internal/examples/.*/.*\.go
-      linters:
-        - forbidigo # log.Fatal, fmt.Printf used in example programs
-        - gosec
-        - gochecknoglobals
-    - path: ".*_test.go"
-      linters:
-        - dupl # allow duplicate string literals for testing
-        - forcetypeassert
-        - nilerr # allow encoding error and returning nil
-    - path: vanguard_examples_test.go
-      linters:
-        - gocritic # allow log.Fatal for examples
-    - path: handler.go
-      linters:
-        - contextcheck # use request context
-    - path: params.go
-      linters:
-        - goconst # allow string literals for WKT names
-    - path: protocol.go
-      linters:
-        - gochecknoglobals # allow Protocol global helpers
-      text: "(allProtocols|protocolToString) is a global variable"
+    - cyclop
+    - depguard
+    - funcorder # TODO: re-enable
+    - funlen
+    - gocognit
+    - gosmopolitan
+    - inamedparam
+    - ireturn
+    - lll
+    - maintidx
+    - mnd
+    - nlreturn
+    - noinlineerr
+    - nonamedreturns
+    - protogetter
+    - testpackage
+    - wrapcheck
+    - wsl
+    - wsl_v5
+  settings:
+    errcheck:
+      check-type-assertions: true
+    exhaustruct:
+      include:
+        - github\.com/bufbuild/vanguard\..*[cC]onfig
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print
+        - pattern: ^log\.
+        - pattern: ^print$
+        - pattern: ^println$
+        - pattern: ^panic$
+    godox:
+      keywords:
+        - FIXME
+    varnamelen:
+      ignore-decls:
+        - T any
+        - i int
+        - wg sync.WaitGroup
+        - sb strings.Builder
+        - sb *strings.Builder
+        - ok bool
+        - op *operation
+        - op Operation
+        - t *ttStream
+        - rw *responseWriter
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - forbidigo
+          - funcorder
+          - gochecknoglobals
+          - gosec
+          - noctx
+          - noinlineerr
+        path: internal/examples/.*/.*\.go
+      - linters:
+          - dupl
+          - forcetypeassert
+          - nilerr
+          - prealloc
+        path: .*_test.go
+      - linters:
+          - gocritic
+        path: vanguard_examples_test.go
+      - linters:
+          - contextcheck
+        path: handler.go
+      - linters:
+          - goconst
+        path: params.go
+      - linters:
+          - gochecknoglobals
+        path: protocol.go
+        text: (allProtocols|protocolToString) is a global variable
+      - path: (.+)\.go$
+        text: "do not define dynamic errors, use wrapped static errors instead: .*"
+formatters:
+  enable:
+    - gci
+    - gofmt
+  exclusions:
+    generated: lax

@@ -1,4 +1,4 @@
-// Copyright 2023-2025 Buf Technologies, Inc.
+// Copyright 2023-2026 Buf Technologies, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,10 +26,7 @@ import (
 type compressionMap map[string]*compressionPool
 
 func (m compressionMap) intersection(names []string) []string {
-	length := len(names)
-	if len(m) < length {
-		length = len(m)
-	}
+	length := min(len(names), len(m))
 	if length == 0 {
 		// If either set is empty, the intersection is empty.
 		// We don't use nil since it is used in places as a sentinel.
@@ -85,8 +82,7 @@ func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
 	defer p.compressors.Put(comp)
 
 	comp.Reset(dst)
-	_, err := src.WriteTo(comp)
-	if err != nil {
+	if _, err := src.WriteTo(comp); err != nil {
 		return err
 	}
 	return comp.Close()
