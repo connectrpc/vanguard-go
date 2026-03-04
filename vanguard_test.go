@@ -456,8 +456,7 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 		ctx context.Context,
 		conn connect.StreamingHandlerConn,
 	) (resultError error) {
-		err := assertTestTimeoutEncoded(ctx)
-		if err != nil {
+		if err := assertTestTimeoutEncoded(ctx); err != nil {
 			return err
 		}
 		val := conn.RequestHeader().Get("Test")
@@ -512,8 +511,7 @@ func (i *testInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc
 				case msg.err != nil:
 					return msg.err
 				default:
-					err := conn.Send(msg.msg)
-					if err != nil {
+					if err := conn.Send(msg.msg); err != nil {
 						return err
 					}
 				}
@@ -785,8 +783,7 @@ func outputFromUnary[Req, Resp any](
 	resp, err := method(ctx, makeRequest(headers, req))
 	if err != nil {
 		var headers http.Header
-		connErr := new(connect.Error)
-		if errors.As(err, &connErr) {
+		if connErr := new(connect.Error); errors.As(err, &connErr) {
 			headers = connErr.Meta()
 		}
 		return headers, nil, nil, err
@@ -816,8 +813,7 @@ func outputFromServerStream[Req, Resp any](
 	str, err := method(ctx, makeRequest(headers, req))
 	if err != nil {
 		var headers http.Header
-		connErr := new(connect.Error)
-		if errors.As(err, &connErr) {
+		if connErr := new(connect.Error); errors.As(err, &connErr) {
 			headers = connErr.Meta()
 		}
 		return headers, nil, nil, err
