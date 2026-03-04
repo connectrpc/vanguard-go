@@ -1448,7 +1448,12 @@ func TestMessage_AdvanceStage(t *testing.T) {
 			createMessage: func() *message { return &message{sameCodec: true, sameCompression: true} },
 			// no calls necessary since client payload can be re-used
 			decodedToSend: expectedCounts{},
-			readToSend:    expectedCounts{},
+			// With one buffer, decompressing to stageDecoded destroys the
+			// compressed data, so decoded->send must re-compress.
+			decodedToSendIfCompressed: &expectedCounts{
+				xyzCompressCalls: 1,
+			},
+			readToSend: expectedCounts{},
 		},
 		{
 			name:          "same codec, different compression",
@@ -1508,7 +1513,7 @@ func TestMessage_AdvanceStage(t *testing.T) {
 							msg := testCase.createMessage()
 							msg.msg = &wrapperspb.StringValue{}
 							buffer := msg.reset(env.op.bufferPool, isRequest, compressed)
-							checkStageEmpty(t, msg, compressed)
+							checkStageEmpty(t, msg)
 
 							buffer.WriteString(originalData)
 							msg.stage = stageRead
@@ -1560,19 +1565,11 @@ func TestMessage_AdvanceStage(t *testing.T) {
 	}
 }
 
-func checkStageEmpty(t *testing.T, msg *message, compressed bool) {
+func checkStageEmpty(t *testing.T, msg *message) {
 	t.Helper()
 	require.Equal(t, stageEmpty, msg.stage)
-	if compressed {
-		require.NotNil(t, msg.compressed)
-		require.Zero(t, msg.compressed.Len())
-		require.Nil(t, msg.data)
-	} else {
-		require.Nil(t, msg.compressed)
-		require.NotNil(t, msg.data)
-		require.Zero(t, msg.data.Len())
-	}
-	// Should not be possible to advance from empty.
+	require.NotNil(t, msg.buf)
+	require.Zero(t, msg.buf.Len())
 	require.Error(t, msg.advanceToStage(nil, stageRead))
 	require.Error(t, msg.advanceToStage(nil, stageDecoded))
 	require.Error(t, msg.advanceToStage(nil, stageSend))
@@ -1581,16 +1578,12 @@ func checkStageEmpty(t *testing.T, msg *message, compressed bool) {
 func checkStageRead(t *testing.T, msg *message, compressed bool) {
 	t.Helper()
 	require.Equal(t, stageRead, msg.stage)
+	require.NotNil(t, msg.buf)
 	if compressed {
-		require.NotNil(t, msg.compressed)
-		require.Equal(t, testCompressedDataString, msg.compressed.String())
-		require.Nil(t, msg.data)
+		require.Equal(t, testCompressedDataString, msg.buf.String())
 	} else {
-		require.Nil(t, msg.compressed)
-		require.NotNil(t, msg.data)
-		require.Equal(t, testDataString, msg.data.String())
+		require.Equal(t, testDataString, msg.buf.String())
 	}
-	// Should not be possible to go backwards.
 	require.Error(t, msg.advanceToStage(nil, stageEmpty))
 }
 
@@ -1606,20 +1599,13 @@ func checkStageDecoded(t *testing.T, msg *message) {
 
 func checkStageSend(t *testing.T, msg *message, compressed bool) {
 	t.Helper()
-	if compressed {
-		require.NotNil(t, msg.compressed)
-		require.Equal(t, testCompressedDataString, msg.compressed.String())
-		// can't assert anything about m.data: if we didn't have to do
-		// anything to get to send (same codec, same compression), we
-		// won't have done anything to it; but if we had to re-encode
-		// and re-compress, it would get released and set to nil
-	} else {
-		require.Nil(t, msg.compressed)
-		require.NotNil(t, msg.data)
-		require.Equal(t, testDataString, msg.data.String())
-	}
 	require.Equal(t, stageSend, msg.stage)
-	// Should not be possible to go backwards.
+	require.NotNil(t, msg.buf)
+	if compressed {
+		require.Equal(t, testCompressedDataString, msg.buf.String())
+	} else {
+		require.Equal(t, testDataString, msg.buf.String())
+	}
 	require.Error(t, msg.advanceToStage(nil, stageDecoded))
 	require.Error(t, msg.advanceToStage(nil, stageRead))
 	require.Error(t, msg.advanceToStage(nil, stageEmpty))

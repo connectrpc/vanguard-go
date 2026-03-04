@@ -75,9 +75,6 @@ func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
 		_, err := io.Copy(dst, src)
 		return err
 	}
-	if src.Len() == 0 {
-		return nil
-	}
 	comp, _ := p.compressors.Get().(connect.Compressor)
 	defer p.compressors.Put(comp)
 
@@ -92,9 +89,6 @@ func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
 	if p == nil {
 		_, err := io.Copy(dst, src)
 		return err
-	}
-	if src.Len() == 0 {
-		return nil
 	}
 	decomp, _ := p.decompressors.Get().(connect.Decompressor)
 	defer p.decompressors.Put(decomp)
