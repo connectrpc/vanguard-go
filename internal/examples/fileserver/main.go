@@ -37,16 +37,22 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	flagset := flag.NewFlagSet("fileserver", flag.ExitOnError)
 	port := flagset.String("p", "8100", "port to serve on")
 	directory := flagset.String("d", ".", "the directory of static file to host")
 	if err := flagset.Parse(os.Args[1:]); err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	root, err := os.OpenRoot(*directory)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	defer root.Close()
 
@@ -56,12 +62,12 @@ func main() {
 	service := vanguard.NewService(testv1connect.NewContentServiceHandler(serviceHandler))
 	handler, err := vanguard.NewTranscoder([]*vanguard.Service{service})
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	// Now handler also supports REST requests, translated to Connect
 	// using the HTTP annotations on the ContentService definition.
 	log.Printf("Serving %s on HTTP port: %s\n", *directory, *port)
-	log.Fatal(http.ListenAndServe(":"+*port, handler))
+	return http.ListenAndServe(":"+*port, handler)
 }
 
 var indexHTMLTemplate = template.Must(template.New("http").Parse(`
@@ -85,6 +91,7 @@ var indexHTMLTemplate = template.Must(template.New("http").Parse(`
 
 type ContentService struct {
 	testv1connect.UnimplementedContentServiceHandler
+
 	root *os.Root
 }
 
@@ -160,7 +167,7 @@ func (c *ContentService) Upload(
 			if err != nil {
 				return nil, err
 			}
-			defer file.Close() //nolint:gocritic
+			defer file.Close()
 			log.Printf("Upload: %q", msg.GetFilename())
 		}
 		if _, err := file.Write(msg.GetFile().GetData()); err != nil {
