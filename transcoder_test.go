@@ -821,6 +821,37 @@ func TestTranscoder_Errors(t *testing.T) {
 			},
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
+		// The following three cases verify that charset variants of application/json
+		// are NOT rejected as unsupported media types (415). The requests reach the
+		// handler (which returns a non-protobuf response causing a 500), proving that
+		// the content type check accepts these valid charset variations.
+		{
+			name:          "rest, json with uppercase charset",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/json; charset=UTF-8"},
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+		{
+			name:          "rest, json with no space before charset",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/json;charset=utf-8"},
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+		{
+			name:          "rest, json with mixed case charset",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/json; charset=Utf-8"},
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
 		{
 			name:          "connect stream, unknown codec",
 			requestURL:    "/vanguard.test.v1.ContentService/Download",
