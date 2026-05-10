@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -81,7 +80,8 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 	reqMeta.codec = CodecJSON // if actually a custom content-type, handled by body preparer methods
 	contentType := headers.Get("Content-Type")
 	if contentType != "" && !restHTTPBodyRequest(op) {
-		mediaType, _, _ := mime.ParseMediaType(contentType)
+		base, _, _ := strings.Cut(contentType, ";")
+		mediaType := strings.TrimSpace(strings.ToLower(base))
 		if mediaType != "application/json" {
 			// invalid content-type
 			reqMeta.codec = contentType + "?"
