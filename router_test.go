@@ -147,7 +147,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			path:         "/percent_encoding/A%2Fb/suffix",
 			expectedPath: "/percent_encoding/{outer={inner}/suffix}",
 			expectedVars: map[string]string{
-				"inner": "A/b",      // single-segment: %2F decoded
+				"inner": "A/b",          // single-segment: %2F decoded
 				"outer": "A%2Fb/suffix", // bounded multi-segment: %2F preserved
 			},
 		},
