@@ -1740,3 +1740,48 @@ func rot13(data []byte) {
 		data[index] = char
 	}
 }
+
+func TestTranscoder_ContextLeak(t *testing.T) {
+	t.Parallel()
+
+	var handlerCtx context.Context
+	rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCtx = r.Context()
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var unknownCtx context.Context
+	unknownHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		unknownCtx = r.Context()
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	services := []*Service{
+		NewService(testv1connect.LibraryServiceName, rpcHandler),
+	}
+	handler, err := NewTranscoder(services, WithUnknownHandler(unknownHandler))
+	require.NoError(t, err)
+
+	t.Run("success_pass_through", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/vanguard.test.v1.LibraryService/GetBook", nil)
+		req.ProtoMajor = 2
+		req.ProtoMinor = 0
+		req.Header.Set("Content-Type", "application/grpc")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		require.NotNil(t, handlerCtx)
+		assert.ErrorIs(t, handlerCtx.Err(), context.Canceled)
+	})
+
+	t.Run("not_found_unknown_handler", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/unknown/path", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		require.NotNil(t, unknownCtx)
+		assert.ErrorIs(t, unknownCtx.Err(), context.Canceled)
+	})
+}

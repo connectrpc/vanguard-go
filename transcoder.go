@@ -59,6 +59,7 @@ type Transcoder struct {
 // services and transcoding protocols and message encoding as needed.
 func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op := t.newOperation(writer, request)
+	defer op.cancel()
 	err := op.validate(t)
 
 	if t.unknownHandler != nil && errors.Is(err, errNotFound) {
