@@ -141,6 +141,23 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}",
 			expectedVars: map[string]string{"thing.id": "/", "cat": "*/%2F"},
 		},
+		{
+			// Var capture on multi-segment variable with end != -1 preserves %2F
+			path:         "/foo/blah/A%2fb/B/C/foo/D/E/F/G/foo/H/I/J/K/L/M:details",
+			expectedPath: "/foo/blah/{longest_var={long_var.a={medium.a={short.aa}/*/{short.ab}/foo}/*}/{long_var.b={medium.b={short.ba}/*/{short.bb}/foo}/{last=**}}}:details",
+			expectedVars: map[string]string{
+				"longest_var": "A%2Fb/B/C/foo/D/E/F/G/foo/H/I/J/K/L/M",
+				"long_var.a":  "A%2Fb/B/C/foo/D",
+				"medium.a":    "A%2Fb/B/C/foo",
+				"short.aa":    "A/b", // Single segment variable unescapes %2F to /
+				"short.ab":    "C",
+				"long_var.b":  "E/F/G/foo/H/I/J/K/L/M",
+				"medium.b":    "E/F/G/foo",
+				"short.ba":    "E",
+				"short.bb":    "G",
+				"last":        "H/I/J/K/L/M",
+			},
+		},
 	}
 
 	trie := initTrie(t)
