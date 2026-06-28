@@ -1744,25 +1744,19 @@ func rot13(data []byte) {
 func TestTranscoder_ContextLeak(t *testing.T) {
 	t.Parallel()
 
-	var handlerCtx context.Context
-	rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handlerCtx = r.Context()
-		w.WriteHeader(http.StatusOK)
-	})
-
-	var unknownCtx context.Context
-	unknownHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		unknownCtx = r.Context()
-		w.WriteHeader(http.StatusNotFound)
-	})
-
-	services := []*Service{
-		NewService(testv1connect.LibraryServiceName, rpcHandler),
-	}
-	handler, err := NewTranscoder(services, WithUnknownHandler(unknownHandler))
-	require.NoError(t, err)
-
 	t.Run("success_pass_through", func(t *testing.T) {
+		t.Parallel()
+		ctxChan := make(chan context.Context, 1)
+		rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctxChan <- r.Context()
+			w.WriteHeader(http.StatusOK)
+		})
+		services := []*Service{
+			NewService(testv1connect.LibraryServiceName, rpcHandler),
+		}
+		handler, err := NewTranscoder(services)
+		require.NoError(t, err)
+
 		req := httptest.NewRequest(http.MethodPost, "/vanguard.test.v1.LibraryService/GetBook", nil)
 		req.ProtoMajor = 2
 		req.ProtoMinor = 0
@@ -1771,16 +1765,35 @@ func TestTranscoder_ContextLeak(t *testing.T) {
 
 		handler.ServeHTTP(rec, req)
 
+		var handlerCtx context.Context
+		select {
+		case handlerCtx = <-ctxChan:
+		default:
+		}
 		require.NotNil(t, handlerCtx)
 		assert.ErrorIs(t, handlerCtx.Err(), context.Canceled)
 	})
 
 	t.Run("not_found_unknown_handler", func(t *testing.T) {
+		t.Parallel()
+		ctxChan := make(chan context.Context, 1)
+		unknownHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctxChan <- r.Context()
+			w.WriteHeader(http.StatusNotFound)
+		})
+		handler, err := NewTranscoder(nil, WithUnknownHandler(unknownHandler))
+		require.NoError(t, err)
+
 		req := httptest.NewRequest(http.MethodGet, "/unknown/path", nil)
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
 
+		var unknownCtx context.Context
+		select {
+		case unknownCtx = <-ctxChan:
+		default:
+		}
 		require.NotNil(t, unknownCtx)
 		assert.ErrorIs(t, unknownCtx.Err(), context.Canceled)
 	})
