@@ -59,11 +59,12 @@ type Transcoder struct {
 // services and transcoding protocols and message encoding as needed.
 func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op := t.newOperation(writer, request)
+	defer op.cancel()
 	err := op.validate(t)
 
 	if t.unknownHandler != nil && errors.Is(err, errNotFound) {
-		request.Header = op.originalHeaders // restore headers, just in case initialization removed keys
-		t.unknownHandler.ServeHTTP(writer, request)
+		op.request.Header = op.originalHeaders // restore headers, just in case initialization removed keys
+		t.unknownHandler.ServeHTTP(writer, op.request)
 		return
 	}
 
@@ -77,8 +78,8 @@ func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		op.client.reqCompression.Name() == op.server.reqCompression.Name() {
 		// No transformation needed. But we do need to restore the original headers first
 		// since extracting request metadata may have removed keys.
-		request.Header = op.originalHeaders
-		op.methodConf.handler.ServeHTTP(writer, request)
+		op.request.Header = op.originalHeaders
+		op.methodConf.handler.ServeHTTP(writer, op.request)
 		return
 	}
 
