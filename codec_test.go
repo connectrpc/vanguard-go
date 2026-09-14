@@ -15,9 +15,13 @@
 package vanguard
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"reflect"
 	"testing"
 
+	"connectrpc.com/connect/v2/connectproto"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
@@ -26,59 +30,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/testing/protocmp"
 )
-
-func TestJSONStabilize(t *testing.T) {
-	t.Parallel()
-	// Verifies that technique in jsonStabilize is correct/safe with a variety of input conditions.
-	testCases := []struct {
-		name   string
-		input  string
-		output string
-	}{
-		{
-			name:   "already compacted",
-			input:  `{"foo":123,"foe":{"bar":true,"baz":[0,1,2,3,4]},"buzz":3.14159,"frob":"nitz"}`,
-			output: `{"foo":123,"foe":{"bar":true,"baz":[0,1,2,3,4]},"buzz":3.14159,"frob":"nitz"}`,
-		},
-		{
-			name: "pretty printed",
-			input: `{
-  "foo": 123,
-  "foe": {
-    "bar": true,
-    "baz": [
-      0,
-      1,
-      2,
-      3,
-      4
-    ]
-  },
-  "buzz": 3.14159,
-  "frob": "nitz"
-}`,
-			output: `{"foo":123,"foe":{"bar":true,"baz":[0,1,2,3,4]},"buzz":3.14159,"frob":"nitz"}`,
-		},
-		{
-			name:   "just string",
-			input:  `"foo bar baz\nfoo\tbar\tbaz"`,
-			output: `"foo bar baz\nfoo\tbar\tbaz"`,
-		},
-		{
-			name:   "just bool",
-			input:  `           true       `,
-			output: `true`,
-		},
-	}
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Parallel()
-			result, err := jsonStabilize(([]byte)(testCase.input))
-			require.NoError(t, err)
-			require.Equal(t, testCase.output, string(result))
-		})
-	}
-}
 
 func TestJSONCodec_MarshalField(t *testing.T) {
 	t.Parallel()
@@ -459,7 +410,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 
 	for _, marshalOpt := range marshalOpts {
 		opts := marshalOpt.opts
-		codec := &JSONCodec{MarshalOptions: opts}
+		codec := &JSONCodec{JSONCodec: connectproto.JSONCodec{MarshalOptions: opts}}
 		t.Run(marshalOpt.name, func(t *testing.T) {
 			t.Parallel()
 			for _, testCase := range testCases {
@@ -470,7 +421,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 						field := msg.Descriptor().Fields().ByName(protoreflect.Name(fieldName))
 
 						// Marshal with value unset/zero.
-						data, err := codec.MarshalAppendField(nil, msg.Interface(), field)
+						data, err := codec.MarshalAppendField(context.Background(), nil, msg.Interface(), field)
 						require.NoError(t, err)
 						data, err = jsonStabilize(data) // for deterministic JSON strings
 						require.NoError(t, err)
@@ -484,7 +435,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 
 						// Do round-trip through unmarshal.
 						proto.Reset(msg.Interface())
-						err = codec.UnmarshalField(data, msg.Interface(), field)
+						err = codec.UnmarshalField(context.Background(), data, msg.Interface(), field)
 						require.NoError(t, err)
 						expectedMsg := (&testv1.AllTypes{}).ProtoReflect()
 						if field.HasPresence() {
@@ -502,7 +453,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 						proto.Reset(msg.Interface())
 						refValue := asValue(msg, field, testCase.value)
 						msg.Set(field, refValue)
-						data, err = codec.MarshalAppendField(nil, msg.Interface(), field)
+						data, err = codec.MarshalAppendField(context.Background(), nil, msg.Interface(), field)
 						require.NoError(t, err)
 						data, err = jsonStabilize(data)
 						require.NoError(t, err)
@@ -516,7 +467,7 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 
 						// And round-trip through unmarshal again.
 						proto.Reset(msg.Interface())
-						err = codec.UnmarshalField(data, msg.Interface(), field)
+						err = codec.UnmarshalField(context.Background(), data, msg.Interface(), field)
 						require.NoError(t, err)
 						proto.Reset(expectedMsg.Interface())
 						expectedMsg.Set(field, refValue)
@@ -527,4 +478,17 @@ func TestJSONCodec_MarshalField(t *testing.T) {
 			}
 		})
 	}
+}
+
+// jsonStabilize compacts the given JSON so expected strings are
+// deterministic regardless of the marshaller's whitespace.
+func jsonStabilize(data []byte) ([]byte, error) {
+	// Because json.Compact only removes whitespace, never elongating data, it is
+	// safe to use the same backing slice as source and destination. This is safe
+	// for the same reason that copy is safe even when the two slices overlap.
+	buf := bytes.NewBuffer(data[:0])
+	if err := json.Compact(buf, data); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }

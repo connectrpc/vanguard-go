@@ -177,7 +177,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 					t.Parallel()
 					target, vars, _ := trie.match(testCase.path, method)
 					require.NotNil(t, target)
-					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.config.descriptor.Name())
+					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.method.descriptor.Name())
 					require.Len(t, vars, len(testCase.expectedVars))
 					for _, varMatch := range vars {
 						names := make([]string, len(varMatch.fields))
@@ -243,15 +243,15 @@ func initTrie(tb testing.TB) *routeTrie {
 		segments, variables, err := parsePathTemplate(route)
 		require.NoError(tb, err)
 
-		for _, method := range []string{http.MethodGet, http.MethodPost} {
-			config := &methodConfig{
+		for _, httpMethod := range []string{http.MethodGet, http.MethodPost} {
+			m := &method{
 				descriptor: &fakeMethodDescriptor{
-					name: fmt.Sprintf("%s %s", method, route),
+					name: fmt.Sprintf("%s %s", httpMethod, route),
 				},
 			}
-			target, err := makeTarget(config, "POST", "*", "*", segments, variables)
+			target, err := makeTarget(m, "POST", "*", "*", segments, variables)
 			require.NoError(tb, err)
-			err = trie.insert(method, target, segments)
+			err = trie.insert(httpMethod, target, segments)
 			require.NoError(tb, err)
 		}
 	}

@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"strings"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -81,15 +81,14 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 		if jsonErr := (*json.UnmarshalTypeError)(nil); errors.As(err, &jsonErr) ||
 			// protojson errors are not exported, check the error string.
 			strings.HasPrefix(err.Error(), "proto") {
-			return connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("invalid parameter %q value for type %q: %s",
-					fieldPath, field.Kind(), data,
-				),
+			return connect.Errorf(connect.CodeInvalidArgument,
+				"invalid parameter %q value for type %q: %s",
+				fieldPath, field.Kind(), data,
 			)
 		}
-		return connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("invalid parameter %q: %w", fieldPath, err),
-		)
+		return connect.Errorf(connect.CodeInvalidArgument,
+			"invalid parameter %q: %s", fieldPath, err,
+		).WithCause(err)
 	}
 
 	// Set the value on the leaf message.
@@ -263,8 +262,8 @@ func getParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	value := leaf.Get(field)
 	if field.IsList() {
 		if index > value.List().Len() {
-			return "", connect.NewError(connect.CodeInvalidArgument,
-				fmt.Errorf("index %d out of range for field %s", index, field.Name()),
+			return "", connect.Errorf(connect.CodeInvalidArgument,
+				"index %d out of range for field %s", index, field.Name(),
 			)
 		}
 		value = value.List().Get(index)

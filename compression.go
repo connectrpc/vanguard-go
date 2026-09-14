@@ -15,101 +15,86 @@
 package vanguard
 
 import (
-	"bytes"
-	"compress/gzip"
+	"errors"
 	"io"
-	"sync"
+	"strings"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 )
 
-type compressionMap map[string]*compressionPool
+// compressors indexes [connect.Compressor]s by Content-Encoding token.
+type compressors struct {
+	byName map[string]connect.Compressor
+	names  string // comma-separated, for Accept-Encoding
+}
 
-func (m compressionMap) intersection(names []string) []string {
-	length := min(len(names), len(m))
-	if length == 0 {
-		// If either set is empty, the intersection is empty.
-		// We don't use nil since it is used in places as a sentinel.
-		return make([]string, 0)
+func newCompressors(list []connect.Compressor) *compressors {
+	byName := make(map[string]connect.Compressor, len(list))
+	names := make([]string, 0, len(list))
+	for _, compressor := range list {
+		name := compressor.Name()
+		if _, dup := byName[name]; dup || name == "" || name == connect.CompressionNameIdentity {
+			continue
+		}
+		byName[name] = compressor
+		names = append(names, name)
 	}
-	intersection := make([]string, 0, length)
-	for _, name := range names {
-		if _, ok := m[name]; ok {
-			intersection = append(intersection, name)
+	return &compressors{byName: byName, names: strings.Join(names, ", ")}
+}
+
+// encodingName returns the Content-Encoding token for compressor, identity for nil.
+func encodingName(compressor connect.Compressor) string {
+	if compressor == nil {
+		return connect.CompressionNameIdentity
+	}
+	return compressor.Name()
+}
+
+// get returns the compressor for name, or nil for identity and unknown names.
+func (c *compressors) get(name string) connect.Compressor {
+	return c.byName[name]
+}
+
+// negotiate mirrors connecthttp: the request encoding must be known, and the
+// response reuses it or else the first accepted encoding that is supported.
+func (c *compressors) negotiate(sent, accept string) (request, response connect.Compressor, err error) {
+	if sent != "" && sent != connect.CompressionNameIdentity {
+		request = c.byName[sent]
+		if request == nil {
+			return nil, nil, connect.Errorf(connect.CodeUnimplemented,
+				"unknown compression %q: supported encodings are %v", sent, c.names)
 		}
 	}
-	return intersection
+	response = request
+	if response == nil && accept != "" {
+		for name := range strings.FieldsFuncSeq(accept, isCommaOrSpace) {
+			name, _, _ = strings.Cut(name, ";") // drop any q-weight
+			if response = c.byName[name]; response != nil {
+				break
+			}
+		}
+	}
+	return request, response, nil
 }
 
-type compressionPool struct {
-	name          string
-	decompressors sync.Pool
-	compressors   sync.Pool
+func isCommaOrSpace(r rune) bool { return r == ',' || r == ' ' }
+
+// decompressBody wraps body so reads are decompressed. Close releases both.
+func decompressBody(compressor connect.Compressor, body io.ReadCloser) (io.ReadCloser, error) {
+	reader, err := compressor.Decompress(body)
+	if err != nil {
+		return nil, err
+	}
+	return &decompressedBody{Reader: reader, decompressor: reader, body: body}, nil
 }
 
-func newCompressionPool(
-	name string,
-	newCompressor func() connect.Compressor,
-	newDecompressor func() connect.Decompressor,
-) *compressionPool {
-	return &compressionPool{
-		name: name,
-		compressors: sync.Pool{
-			New: func() any { return newCompressor() },
-		},
-		decompressors: sync.Pool{
-			New: func() any { return newDecompressor() },
-		},
-	}
+type decompressedBody struct {
+	io.Reader
+
+	decompressor io.Closer
+	body         io.Closer
 }
 
-func (p *compressionPool) Name() string {
-	if p == nil {
-		return ""
-	}
-	return p.name
-}
-
-func (p *compressionPool) compress(dst, src *bytes.Buffer) error {
-	if p == nil {
-		_, err := io.Copy(dst, src)
-		return err
-	}
-	comp, _ := p.compressors.Get().(connect.Compressor)
-	defer p.compressors.Put(comp)
-
-	comp.Reset(dst)
-	if _, err := src.WriteTo(comp); err != nil {
-		return err
-	}
-	return comp.Close()
-}
-
-func (p *compressionPool) decompress(dst, src *bytes.Buffer) error {
-	if p == nil {
-		_, err := io.Copy(dst, src)
-		return err
-	}
-	decomp, _ := p.decompressors.Get().(connect.Decompressor)
-	defer p.decompressors.Put(decomp)
-
-	if err := decomp.Reset(src); err != nil {
-		return err
-	}
-	if _, err := dst.ReadFrom(decomp); err != nil {
-		return err
-	}
-	return decomp.Close()
-}
-
-// defaultGzipCompressor is a factory for Compressor instances used by default
-// for the "gzip" encoding type.
-func defaultGzipCompressor() connect.Compressor {
-	return gzip.NewWriter(io.Discard)
-}
-
-// defaultGzipDecompressor is a factory for Decompressor instances used by
-// default for the "gzip" encoding type.
-func defaultGzipDecompressor() connect.Decompressor {
-	return &gzip.Reader{}
+func (d *decompressedBody) Close() error {
+	return errors.Join(d.decompressor.Close(), d.body.Close())
 }
