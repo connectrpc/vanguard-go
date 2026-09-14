@@ -599,7 +599,7 @@ func (i *testInterceptor) restUnaryHandler(
 		if restIsHTTPBody(out.msg.ProtoReflect().Descriptor(), nil) { //nolint:nestif
 			msg, _ := out.msg.(*httpbody.HttpBody)
 			rsp.Header().Set("Content-Type", msg.GetContentType())
-			_, err = rsp.Write(msg.GetData()) //nolint:gosec // writing to test response
+			_, err = rsp.Write(msg.GetData())
 			require.NoError(stream.T, err, "failed to write response")
 		} else {
 			body, err = codec.MarshalAppend(nil, out.msg)
@@ -615,7 +615,7 @@ func (i *testInterceptor) restUnaryHandler(
 				}
 				body = dst.Bytes()
 			}
-			_, err = rsp.Write(body) //nolint:gosec // writing to test response
+			_, err = rsp.Write(body)
 			require.NoError(stream.T, err, "failed to write response")
 		}
 

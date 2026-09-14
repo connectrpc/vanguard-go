@@ -35,6 +35,9 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
+// allowHeader is the response header naming the methods a resource accepts.
+const allowHeader = "Allow"
+
 var (
 	errFinalDataAlreadyWritten = fmt.Errorf("final RPC response data already written: %w", context.Canceled)
 )
@@ -627,7 +630,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 		return &httpError{
 			code: http.StatusMethodNotAllowed,
 			header: http.Header{
-				"Allow": []string{sb.String()},
+				allowHeader: []string{sb.String()},
 			},
 		}
 	}
@@ -643,7 +646,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 			return &httpError{
 				code: http.StatusMethodNotAllowed,
 				header: http.Header{
-					"Allow": []string{http.MethodPost},
+					allowHeader: []string{http.MethodPost},
 				},
 			}
 		}
@@ -651,7 +654,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 			return &httpError{
 				code: http.StatusMethodNotAllowed,
 				header: http.Header{
-					"Allow": []string{http.MethodGet + "," + http.MethodPost},
+					allowHeader: []string{http.MethodGet + "," + http.MethodPost},
 				},
 			}
 		}
