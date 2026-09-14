@@ -16,9 +16,7 @@ package vanguard_test
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -31,8 +29,6 @@ import (
 	"connectrpc.com/vanguard"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -41,13 +37,18 @@ import (
 func TestIssue148(t *testing.T) {
 	t.Parallel()
 
+	// Servers accept HTTP/1.1 and unencrypted HTTP/2 (h2c); the client
+	// speaks only unencrypted HTTP/2, as required by gRPC.
+	var serverProtocols, h2cProtocols http.Protocols
+	serverProtocols.SetHTTP1(true)
+	serverProtocols.SetUnencryptedHTTP2(true)
+	h2cProtocols.SetUnencryptedHTTP2(true)
+
 	// GRPC-web server (process 1)
 	mux := http.NewServeMux()
 	mux.Handle(elizav1connect.NewElizaServiceHandler(&handler{t: t}))
-	grpcwebServer := httptest.NewUnstartedServer(
-		h2c.NewHandler(mux, &http2.Server{}),
-	)
-	grpcwebServer.EnableHTTP2 = true
+	grpcwebServer := httptest.NewUnstartedServer(mux)
+	grpcwebServer.Config.Protocols = &serverProtocols
 	grpcwebServer.Start()
 	t.Cleanup(grpcwebServer.Close)
 
@@ -69,13 +70,8 @@ func TestIssue148(t *testing.T) {
 		vanguard.WithUnknownHandler(proxy),
 	)
 	require.NoError(t, err)
-	vanguardServer := httptest.NewUnstartedServer(
-		h2c.NewHandler(
-			transcoder,
-			&http2.Server{},
-		),
-	)
-	vanguardServer.EnableHTTP2 = true
+	vanguardServer := httptest.NewUnstartedServer(transcoder)
+	vanguardServer.Config.Protocols = &serverProtocols
 	vanguardServer.Start()
 	t.Cleanup(vanguardServer.Close)
 
@@ -90,12 +86,7 @@ func TestIssue148(t *testing.T) {
 
 			// grpc client using h2c (process 3)
 			h2cClient := &http.Client{
-				Transport: &http2.Transport{
-					AllowHTTP: true,
-					DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-						return (&net.Dialer{}).DialContext(ctx, network, addr)
-					},
-				},
+				Transport: &http.Transport{Protocols: &h2cProtocols},
 			}
 
 			client := elizav1connect.NewElizaServiceClient(h2cClient, vanguardServer.URL, clientOpts...)

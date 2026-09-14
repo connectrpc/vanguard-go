@@ -356,9 +356,9 @@ func TestGetHTTPRuleExtension(t *testing.T) {
 			t.Parallel()
 
 			baseMethodProto := &descriptorpb.MethodDescriptorProto{
-				Name:       proto.String("Bar"),
-				InputType:  proto.String(".Foo"),
-				OutputType: proto.String(".Bar"),
+				Name:       new("Bar"),
+				InputType:  new(".Foo"),
+				OutputType: new(".Bar"),
 				Options:    &descriptorpb.MethodOptions{},
 			}
 			if testCase.rule != nil {
@@ -369,18 +369,18 @@ func TestGetHTTPRuleExtension(t *testing.T) {
 			}
 
 			baseFileProto := &descriptorpb.FileDescriptorProto{
-				Name: proto.String("foo/bar.proto"),
+				Name: new("foo/bar.proto"),
 				MessageType: []*descriptorpb.DescriptorProto{
 					{
-						Name: proto.String("Foo"),
+						Name: new("Foo"),
 					},
 					{
-						Name: proto.String("Bar"),
+						Name: new("Bar"),
 					},
 				},
 				Service: []*descriptorpb.ServiceDescriptorProto{
 					{
-						Name:   proto.String("FooService"),
+						Name:   new("FooService"),
 						Method: []*descriptorpb.MethodDescriptorProto{baseMethodProto},
 					},
 				},
