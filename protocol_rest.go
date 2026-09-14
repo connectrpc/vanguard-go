@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -79,12 +80,13 @@ func (r restClientProtocol) extractProtocolRequestHeaders(op *operation, headers
 
 	reqMeta.codec = CodecJSON // if actually a custom content-type, handled by body preparer methods
 	contentType := headers.Get("Content-Type")
-	if contentType != "" &&
-		contentType != "application/json" &&
-		contentType != "application/json; charset=utf-8" &&
-		!restHTTPBodyRequest(op) {
-		// invalid content-type
-		reqMeta.codec = contentType + "?"
+	if contentType != "" && !restHTTPBodyRequest(op) {
+		base, _, _ := strings.Cut(contentType, ";")
+		mediaType := strings.TrimSpace(strings.ToLower(base))
+		if mediaType != "application/json" {
+			// invalid content-type
+			reqMeta.codec = contentType + "?"
+		}
 	}
 	headers.Del("Content-Type")
 
@@ -155,8 +157,7 @@ func (r restClientProtocol) prepareUnmarshalledRequest(op *operation, src []byte
 	}
 	// Now pull in the fields from the URI path:
 	msg := target.ProtoReflect()
-	for i := len(op.restVars) - 1; i >= 0; i-- {
-		variable := op.restVars[i]
+	for _, variable := range slices.Backward(op.restVars) {
 		if err := setParameter(msg, variable.fields, variable.value); err != nil {
 			return err
 		}
@@ -295,13 +296,13 @@ func (r restServerProtocol) extractProtocolResponseHeaders(statusCode int, heade
 	contentType := headers.Get("Content-Type")
 	if statusCode/100 != 2 {
 		return responseMeta{
-				end: &responseEnd{httpCode: statusCode},
-			}, func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
-				if err := httpErrorFromResponse(statusCode, contentType, buf); err != nil {
-					end.err = err
-					end.httpCode = httpStatusCodeFromRPC(err.Code())
-				}
-			}, nil
+			end: &responseEnd{httpCode: statusCode},
+		}, func(_ Codec, buf *bytes.Buffer, end *responseEnd) {
+			if err := httpErrorFromResponse(statusCode, contentType, buf); err != nil {
+				end.err = err
+				end.httpCode = httpStatusCodeFromRPC(err.Code())
+			}
+		}, nil
 	}
 	var meta responseMeta
 	switch {

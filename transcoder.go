@@ -35,6 +35,9 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
+// allowHeader is the response header naming the methods a resource accepts.
+const allowHeader = "Allow"
+
 var (
 	errFinalDataAlreadyWritten = fmt.Errorf("final RPC response data already written: %w", context.Canceled)
 )
@@ -59,11 +62,12 @@ type Transcoder struct {
 // services and transcoding protocols and message encoding as needed.
 func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	op := t.newOperation(writer, request)
+	defer op.cancel()
 	err := op.validate(t)
 
 	if t.unknownHandler != nil && errors.Is(err, errNotFound) {
-		request.Header = op.originalHeaders // restore headers, just in case initialization removed keys
-		t.unknownHandler.ServeHTTP(writer, request)
+		op.request.Header = op.originalHeaders // restore headers, just in case initialization removed keys
+		t.unknownHandler.ServeHTTP(writer, op.request)
 		return
 	}
 
@@ -77,8 +81,8 @@ func (t *Transcoder) ServeHTTP(writer http.ResponseWriter, request *http.Request
 		op.client.reqCompression.Name() == op.server.reqCompression.Name() {
 		// No transformation needed. But we do need to restore the original headers first
 		// since extracting request metadata may have removed keys.
-		request.Header = op.originalHeaders
-		op.methodConf.handler.ServeHTTP(writer, request)
+		op.request.Header = op.originalHeaders
+		op.methodConf.handler.ServeHTTP(writer, op.request)
 		return
 	}
 
@@ -626,7 +630,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 		return &httpError{
 			code: http.StatusMethodNotAllowed,
 			header: http.Header{
-				"Allow": []string{sb.String()},
+				allowHeader: []string{sb.String()},
 			},
 		}
 	}
@@ -642,7 +646,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 			return &httpError{
 				code: http.StatusMethodNotAllowed,
 				header: http.Header{
-					"Allow": []string{http.MethodPost},
+					allowHeader: []string{http.MethodPost},
 				},
 			}
 		}
@@ -650,7 +654,7 @@ func (o *operation) resolveMethod(transcoder *Transcoder) error {
 			return &httpError{
 				code: http.StatusMethodNotAllowed,
 				header: http.Header{
-					"Allow": []string{http.MethodGet + "," + http.MethodPost},
+					allowHeader: []string{http.MethodGet + "," + http.MethodPost},
 				},
 			}
 		}

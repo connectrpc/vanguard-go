@@ -821,6 +821,37 @@ func TestTranscoder_Errors(t *testing.T) {
 			},
 			expectedCode: http.StatusUnsupportedMediaType,
 		},
+		// The following three cases verify that charset variants of application/json
+		// are NOT rejected as unsupported media types (415). The requests reach the
+		// handler (which returns a non-protobuf response causing a 500), proving that
+		// the content type check accepts these valid charset variations.
+		{
+			name:          "rest, json with uppercase charset",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/json; charset=UTF-8"},
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+		{
+			name:          "rest, json with no space before charset",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/json;charset=utf-8"},
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+		{
+			name:          "rest, json with mixed case charset",
+			requestURL:    "/v1/shelves/reference-123/books/isbn-0000111230012",
+			requestMethod: "GET",
+			requestHeaders: map[string][]string{
+				"Content-Type": {"application/json; charset=Utf-8"},
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
 		{
 			name:          "connect stream, unknown codec",
 			requestURL:    "/vanguard.test.v1.ContentService/Download",
@@ -1708,4 +1739,62 @@ func rot13(data []byte) {
 		}
 		data[index] = char
 	}
+}
+
+func TestTranscoder_ContextLeak(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success_pass_through", func(t *testing.T) {
+		t.Parallel()
+		ctxChan := make(chan context.Context, 1)
+		rpcHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctxChan <- r.Context()
+			w.WriteHeader(http.StatusOK)
+		})
+		services := []*Service{
+			NewService(testv1connect.LibraryServiceName, rpcHandler),
+		}
+		handler, err := NewTranscoder(services)
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/vanguard.test.v1.LibraryService/GetBook", nil)
+		req.ProtoMajor = 2
+		req.ProtoMinor = 0
+		req.Header.Set("Content-Type", "application/grpc")
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		var handlerCtx context.Context
+		select {
+		case handlerCtx = <-ctxChan:
+		default:
+		}
+		require.NotNil(t, handlerCtx)
+		assert.ErrorIs(t, handlerCtx.Err(), context.Canceled)
+	})
+
+	t.Run("not_found_unknown_handler", func(t *testing.T) {
+		t.Parallel()
+		ctxChan := make(chan context.Context, 1)
+		unknownHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctxChan <- r.Context()
+			w.WriteHeader(http.StatusNotFound)
+		})
+		handler, err := NewTranscoder(nil, WithUnknownHandler(unknownHandler))
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodGet, "/unknown/path", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		var unknownCtx context.Context
+		select {
+		case unknownCtx = <-ctxChan:
+		default:
+		}
+		require.NotNil(t, unknownCtx)
+		assert.ErrorIs(t, unknownCtx.Err(), context.Canceled)
+	})
 }

@@ -141,6 +141,23 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}",
 			expectedVars: map[string]string{"thing.id": "/", "cat": "*/%2F"},
 		},
+		{
+			// A single-segment var decodes %2F to a literal slash.
+			// The multi-segment var enclosing it preserves %2F percent-encoded.
+			path:         "/percent_encoding/A%2Fb/suffix",
+			expectedPath: "/percent_encoding/{outer={inner}/suffix}",
+			expectedVars: map[string]string{
+				"inner": "A/b",          // single-segment: %2F decoded
+				"outer": "A%2Fb/suffix", // bounded multi-segment: %2F preserved
+			},
+		},
+		{
+			// A tail-spanning var ({cat=**}) also preserves %2F percent-encoded,
+			// consistent with all multi-segment vars.
+			path:         "/foo/bar/baz/123/a%2Fb",
+			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}",
+			expectedVars: map[string]string{"thing.id": "123", "cat": "a%2Fb"},
+		},
 	}
 
 	trie := initTrie(t)
@@ -214,6 +231,7 @@ func initTrie(tb testing.TB) *routeTrie {
 		"/foo/bar/{name}/baz/{child}",
 		"/foo/bar/{name}/baz/{child.id}/buzz/{child.thing.id}",
 		"/foo/bar/*/{thing.id}/{cat=**}",
+		"/percent_encoding/{outer={inner}/suffix}",
 		"/foo/bar/*/{thing.id}/{cat=**}:do",
 		"/foo/bar/*/{thing.id}/{cat=**}:cancel",
 		"/foo/bob/{book_id={author}/{isbn}/*}/details",

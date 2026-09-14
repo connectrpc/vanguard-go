@@ -315,7 +315,7 @@ func (v routeTargetVar) index(segments []string) []string {
 func (v routeTargetVar) capture(segments []string) (string, error) {
 	parts := v.index(segments)
 	mode := pathEncodeSingle
-	if v.end == -1 || v.start-v.end > 1 {
+	if v.end == -1 || len(parts) > 1 {
 		mode = pathEncodeMulti
 	}
 	var sb strings.Builder

@@ -4,6 +4,7 @@ linters:
   disable:
     - cyclop
     - depguard
+    - exhaustruct_v5 # unconfigured v5 variant; exhaustruct below carries the include filter
     - funcorder # TODO: re-enable
     - funlen
     - gocognit
@@ -68,7 +69,9 @@ linters:
       - linters:
           - dupl
           - forcetypeassert
+          - goconst
           - nilerr
+          - noctx
           - prealloc
         path: .*_test.go
       - linters:

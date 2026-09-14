@@ -50,7 +50,7 @@ func (g grpcClientProtocol) acceptsStreamType(_ *operation, _ connect.StreamType
 }
 
 func (g grpcClientProtocol) extractProtocolRequestHeaders(_ *operation, headers http.Header) (requestMeta, error) {
-	headers.Del("Te") // no need to propagate "te: trailers" to requests in different protocols
+	headers.Del("TE") // no need to propagate "te: trailers" to requests in different protocols
 	return grpcExtractRequestMeta("application/grpc", "application/grpc+", headers)
 }
 
@@ -111,7 +111,7 @@ func (g grpcServerProtocol) protocol() Protocol {
 
 func (g grpcServerProtocol) addProtocolRequestHeaders(meta requestMeta, headers http.Header) {
 	grpcAddRequestMeta("application/grpc+", meta, headers)
-	headers.Set("Te", "trailers")
+	headers.Set("TE", "trailers")
 }
 
 func (g grpcServerProtocol) extractProtocolResponseHeaders(statusCode int, headers http.Header) (responseMeta, responseEndUnmarshaller, error) {
