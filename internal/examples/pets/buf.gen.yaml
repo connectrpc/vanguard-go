@@ -8,9 +8,9 @@ managed:
     - file_option: go_package_prefix
       value: connectrpc.com/vanguard/internal/examples/pets/internal/gen
 plugins:
-  - remote: buf.build/protocolbuffers/go:v1.31.0
+  - local: protoc-gen-go
     out: internal/gen
     opt: paths=source_relative
-  - remote: buf.build/connectrpc/go:v1.11.0
+  - local: protoc-gen-connect-go
     out: internal/gen
     opt: paths=source_relative

@@ -92,7 +92,7 @@ func Example_restClientToRpcServer() {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.RawQuery = "book_id=2&request_id=123"
 
-	rsp, err := client.Do(req) //nolint:gosec // request to local test server
+	rsp, err := client.Do(req)
 	if err != nil {
 		logger.Println(err)
 		return
@@ -214,7 +214,7 @@ func (s *libraryREST) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
 		body, _ = protojson.Marshal(msg)
 	}
 	rsp.WriteHeader(http.StatusOK)
-	_, _ = rsp.Write(body) //nolint:gosec // writing error response, not user-tainted data
+	_, _ = rsp.Write(body)
 }
 
 type libraryRPC struct {
