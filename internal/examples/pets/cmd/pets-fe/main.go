@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -31,8 +30,6 @@ import (
 	"connectrpc.com/vanguard"
 	"connectrpc.com/vanguard/internal/examples/pets/internal"
 	"connectrpc.com/vanguard/internal/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -63,12 +60,15 @@ func main() {
 	// The gRPC protocol *requires* HTTP/2 and can't work with HTTP 1.1.
 	// So we make the proxy smart enough to always use H2C (to use HTTP/2
 	// without TLS) when the protocol is gRPC.
-	proxy.Transport = h2cIfGRPCTransport{h2c: &http2.Transport{
-		AllowHTTP: true,
-		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, network, addr)
-		},
-	}}
+	var h2cProtocols http.Protocols
+	h2cProtocols.SetUnencryptedHTTP2(true)
+	proxy.Transport = h2cIfGRPCTransport{h2c: &http.Transport{Protocols: &h2cProtocols}}
+
+	// We enable unencrypted HTTP/2 (h2c) to support HTTP/2 without TLS (and thus
+	// support the gRPC protocol).
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
 
 	listeners := make([]net.Listener, 0, len(serverOptions))
 	svrs := make([]*http.Server, 0, len(serverOptions))
@@ -98,7 +98,8 @@ func main() {
 		listeners = append(listeners, listener)
 		svrs = append(svrs, &http.Server{
 			Addr:              ":http",
-			Handler:           h2c.NewHandler(serveMux, &http2.Server{}),
+			Handler:           serveMux,
+			Protocols:         &protocols,
 			ReadHeaderTimeout: 15 * time.Second,
 		})
 	}

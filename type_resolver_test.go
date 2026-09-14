@@ -23,7 +23,6 @@ import (
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -95,39 +94,39 @@ func makeFile(prefix string) (protoreflect.FileDescriptor, error) {
 	}
 	return protodesc.NewFile(
 		&descriptorpb.FileDescriptorProto{
-			Name:       proto.String(pathPrefix + "foo/bar/baz/v1/blah.proto"),
-			Package:    proto.String(pkgPrefix + "foo.bar.baz.v1"),
+			Name:       new(pathPrefix + "foo/bar/baz/v1/blah.proto"),
+			Package:    new(pkgPrefix + "foo.bar.baz.v1"),
 			Dependency: []string{"google/protobuf/timestamp.proto"},
 			MessageType: []*descriptorpb.DescriptorProto{
 				{
-					Name: proto.String("Blah"),
+					Name: new("Blah"),
 				},
 				{
-					Name: proto.String("Blarg"),
+					Name: new("Blarg"),
 				},
 				{
-					Name: proto.String("Blech"),
+					Name: new("Blech"),
 				},
 				{
-					Name: proto.String("Bleep"),
+					Name: new("Bleep"),
 				},
 				{
-					Name: proto.String("Blue"), // not actually used by service below
+					Name: new("Blue"), // not actually used by service below
 				},
 			},
 			Service: []*descriptorpb.ServiceDescriptorProto{
 				{
-					Name: proto.String("BlahService"),
+					Name: new("BlahService"),
 					Method: []*descriptorpb.MethodDescriptorProto{
 						{
-							Name:       proto.String("Do"),
-							InputType:  proto.String("." + pkgPrefix + "foo.bar.baz.v1.Blah"),
-							OutputType: proto.String("." + pkgPrefix + "foo.bar.baz.v1.Blarg"),
+							Name:       new("Do"),
+							InputType:  new("." + pkgPrefix + "foo.bar.baz.v1.Blah"),
+							OutputType: new("." + pkgPrefix + "foo.bar.baz.v1.Blarg"),
 						},
 						{
-							Name:       proto.String("Dont"),
-							InputType:  proto.String("." + pkgPrefix + "foo.bar.baz.v1.Blech"),
-							OutputType: proto.String("." + pkgPrefix + "foo.bar.baz.v1.Bleep"),
+							Name:       new("Dont"),
+							InputType:  new("." + pkgPrefix + "foo.bar.baz.v1.Blech"),
+							OutputType: new("." + pkgPrefix + "foo.bar.baz.v1.Bleep"),
 						},
 					},
 				},

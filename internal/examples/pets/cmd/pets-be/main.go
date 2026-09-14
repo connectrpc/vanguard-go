@@ -27,22 +27,21 @@ import (
 	"connectrpc.com/vanguard"
 	"connectrpc.com/vanguard/internal/examples/pets/internal"
 	"connectrpc.com/vanguard/internal/examples/pets/internal/gen/io/swagger/petstore/v2/petstorev2connect"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 func main() {
 	// Create a reverse proxy, to forward requests to https://petstore.swagger.io/v2/.
-	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "https", Host: "petstore.swagger.io", Path: "/v2/"})
+	target := &url.URL{Scheme: "https", Host: "petstore.swagger.io", Path: "/v2/"}
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(proxyRequest *httputil.ProxyRequest) {
+			// SetURL also clears the outbound Host so it is derived from the target URL.
+			proxyRequest.SetURL(target)
+		},
+	}
 	// Note: we will trace proxied requests to stdout, so that you can see the details
 	// of the transformation with actual requests by running this program and sending
 	// RPC requests to it.
 	proxy.Transport = internal.TraceTransport(http.DefaultTransport)
-	director := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		director(r)
-		r.Host = r.URL.Host
-	}
 
 	// Wrap the proxy handler with Vanguard, so it can accept Connect, gRPC, or gRPC-Web
 	// and transform the requests to REST+JSON.
@@ -67,10 +66,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// We enable unencrypted HTTP/2 (h2c) to support HTTP/2 without TLS (and thus
+	// support the gRPC protocol).
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
 	svr := &http.Server{
-		Addr: ":http",
-		// We use h2c to support HTTP/2 without TLS (and thus support the gRPC protocol).
-		Handler:           h2c.NewHandler(serveMux, &http2.Server{}),
+		Addr:              ":http",
+		Handler:           serveMux,
+		Protocols:         &protocols,
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	err = svr.Serve(listener)

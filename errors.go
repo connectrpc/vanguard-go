@@ -28,8 +28,7 @@ var (
 )
 
 func asConnectError(err error) *connect.Error {
-	var ce *connect.Error
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[*connect.Error](err); ok {
 		return ce
 	}
 	return connect.NewError(connect.CodeInternal, err)
@@ -83,12 +82,10 @@ func asHTTPError(err error) *httpError {
 	if err == nil {
 		return nil
 	}
-	var httpErr *httpError
-	if errors.As(err, &httpErr) {
+	if httpErr, ok := errors.AsType[*httpError](err); ok {
 		return httpErr
 	}
-	var ce *connect.Error
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[*connect.Error](err); ok {
 		return &httpError{
 			code:   httpStatusCodeFromRPC(ce.Code()),
 			header: ce.Meta(),

@@ -22,12 +22,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"buf.build/gen/go/connectrpc/eliza/grpc/go/connectrpc/eliza/v1/elizav1grpc"
 	elizav1 "buf.build/gen/go/connectrpc/eliza/protocolbuffers/go/connectrpc/eliza/v1"
 	"connectrpc.com/vanguard/vanguardgrpc"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
 )
 
@@ -51,10 +50,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	// We use the h2c package in order to support HTTP/2 without TLS,
-	// so we can handle gRPC requests, which requires HTTP/2, in
+	// We enable unencrypted HTTP/2 (h2c) in order to support HTTP/2 without
+	// TLS, so we can handle gRPC requests, which requires HTTP/2, in
 	// addition to Connect and gRPC-Web (which work with HTTP 1.1).
-	err = http.Serve(listener, h2c.NewHandler(handler, &http2.Server{}))
+	var protocols http.Protocols
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	svr := &http.Server{
+		Handler:           handler,
+		Protocols:         &protocols,
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+	err = svr.Serve(listener)
 	if !errors.Is(err, http.ErrServerClosed) {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
