@@ -12,468 +12,411 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package vanguard provides a transcoder that acts like middleware for
-// your RPC handlers, augmenting them to support additional protocols
-// or message formats, including REST+JSON. The transcoder also acts as
-// a router, handling dispatch of configured REST-ful URI paths to the
-// right RPC handlers.
+// Package vanguard provides REST support for services built on
+// connectrpc.com/connect/v2.
 //
-// Use NewService or NewServiceWithSchema to create Service definitions
-// wrap your existing HTTP and/or RPC handlers. Then pass those services
-// to NewTranscoder.
+// When a Protobuf method is annotated with a google.api.http rule, it declares
+// the HTTP method, URL path, and body mapping for that RPC. Vanguard implements
+// these rules in both directions:
+//
+//   - [Mount] exposes a connect.Server over REST, allowing standard HTTP
+//     clients to reach handlers written against generated RPC interfaces.
+//   - [NewTransport] returns a connect.Transport that speaks REST, allowing
+//     generated RPC clients to call a REST server that knows nothing about Connect.
+//
+// Vanguard acts as a peer to connect-go's connecthttp package. While
+// connecthttp serves the Connect, gRPC, and gRPC-Web protocols, Vanguard
+// handles REST. Because [Mount] takes the same multiplexer interface as
+// connecthttp.Mount, and [NewTransport] takes the same HTTP client, REST can
+// be seamlessly added without disturbing existing protocols.
+//
+// Request and response bodies may be compressed, negotiated through the standard
+// Content-Encoding and Accept-Encoding headers. gzip is supported by default.
+// See [WithCompressors].
+//
+// Streaming RPCs are carried over REST when the streamed side is a
+// google.api.HttpBody: a client stream's request body is the whole HTTP request
+// body, and a server stream writes one chunk per message to the HTTP response
+// body. Bidirectional streams have no REST mapping.
+//
+// Server side:
+//
+//	server := connect.NewServer()
+//	pingv1connect.RegisterPingServiceHandler(server, &pingServer{})
+//
+//	mux := http.NewServeMux()
+//	connecthttp.Mount(mux, server) // Connect, gRPC, gRPC-Web
+//	vanguard.Mount(mux, server)    // google.api.http (REST)
+//
+// Client side:
+//
+//	transport, _ := vanguard.NewTransport(http.DefaultClient, "https://api.example.com")
+//	client := pingv1connect.NewPingServiceClient(connect.NewClient(transport))
+//	resp, err := client.Ping(ctx, &pingv1.PingRequest{Number: 42})
+//
+// Proxy, with no generated code for the service:
+//
+//	upstream := connect.NewClient(connecthttp.NewTransport(http.DefaultClient, backendURL))
+//	server.Register(vanguard.ForwardService(upstream, serviceDescriptor)...)
+//	vanguard.Mount(mux, server)
 package vanguard
 
 import (
+	"context"
 	"fmt"
-	"math"
+	"maps"
 	"net/http"
+	"net/url"
+	"slices"
 	"strings"
+	"sync"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectgzip"
+	"connectrpc.com/connect/v2/connecthttp"
+	"connectrpc.com/connect/v2/connectproto"
 	"google.golang.org/genproto/googleapis/api/annotations"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
-const (
-	// CompressionGzip is the name of the gzip compression algorithm.
-	CompressionGzip = "gzip"
-	// CompressionIdentity is the name of the "identity" compression algorithm,
-	// which is the default and indicates no compression.
-	CompressionIdentity = "identity"
-	// TODO: Connect protocol spec also references "br" (Brotli) and "zstd". And gRPC
-	//       protocol spec references "deflate" and "snappy". Should we also support
-	//       those out of the box?
+// Option configures the REST handler installed by Mount or NewTransport.
+type Option interface {
+	applyVanguard(*options)
+}
 
-	// CodecProto is the name of the protobuf codec.
-	CodecProto = "proto"
-	// CodecJSON is the name of the JSON codec.
-	CodecJSON = "json"
-	// TODO: Some grpc impls support "text" out of the box (but not JSON, ironically).
-	//       such as the JS impl. Should we also support it out of the box?
+type options struct {
+	newCodec                  func(connectproto.TypeResolver) RESTCodec
+	resolver                  connectproto.TypeResolver
+	rules                     []*annotations.HttpRule
+	maxReadBytes              int64
+	discardUnknownQueryParams bool
+	compressors               []connect.Compressor
+	sendCompression           string
+}
 
-	// DefaultMaxMessageBufferBytes is the default value for the maximum number
-	// of bytes that can be buffered for a request or response payload. If a
-	// payload exceeds this limit, the RPC will fail with a "resource exhausted"
-	// error.
-	DefaultMaxMessageBufferBytes = math.MaxUint32
-	// DefaultMaxGetURLBytes is the default value for the maximum number of bytes
-	// that can be used for a URL with the Connect unary protocol using the GET
-	// HTTP method. If a URL's length would exceed this limit, the POST HTTP method
-	// will be used instead (and the request contents moved from the URL to the body).
-	DefaultMaxGetURLBytes = 8 * 1024
-)
-
-// NewTranscoder creates a new transcoder that handles the given services, with the
-// configuration described by the given options. A non-nil error is returned if
-// there is an issue with this configuration.
-//
-// The returned handler does the routing and dispatch to the RPC handlers
-// associated with each provided service. Routing supports more than just the
-// service path provided to NewService since HTTP transcoding annotations are
-// used to also support REST-ful URI paths for each method.
-//
-// The returned handler also acts like a middleware, transparently "upgrading"
-// the RPC handlers to support incoming request protocols they wouldn't otherwise
-// support. This can be used to upgrade Connect handlers to support REST requests
-// (based on HTTP transcoding configuration) or gRPC handlers to support Connect,
-// gRPC-Web, or REST. This can even be used with a reverse proxy handler, to
-// translate all incoming requests to a single protocol that another backend server
-// supports.
-//
-// If any options given implement ServiceOption, they are treated as default service
-// options and apply to all configured services, unless overridden by a particular
-// service.
-func NewTranscoder(services []*Service, opts ...TranscoderOption) (*Transcoder, error) {
-	for _, svc := range services {
-		if svc.err != nil {
-			return nil, svc.err
-		}
+// defaultOptions returns the baseline configuration. The codec is
+// constructed lazily in effectiveCodec so that the factory sees the
+// resolver chosen by WithTypeResolver (or the default).
+func defaultOptions() options {
+	return options{
+		maxReadBytes: 4 * 1024 * 1024,
+		compressors:  []connect.Compressor{connectgzip.New()},
 	}
+}
 
-	transcoderOpts := transcoderOptions{
-		codecs: codecMap{
-			CodecProto: func(res TypeResolver) Codec {
-				return NewProtoCodec(res)
-			},
-			CodecJSON: func(res TypeResolver) Codec {
-				return NewJSONCodec(res)
-			},
-		},
-		compressors: compressionMap{
-			CompressionGzip: newCompressionPool(CompressionGzip, defaultGzipCompressor, defaultGzipDecompressor),
-		},
+// effectiveCodec returns a codec constructed with the configured
+// resolver. The factory is either the user-supplied one (WithCodec)
+// or the default JSON factory.
+func (o *options) effectiveCodec() RESTCodec {
+	factory := o.newCodec
+	if factory == nil {
+		factory = func(r connectproto.TypeResolver) RESTCodec { return NewJSONCodec(r) }
 	}
+	return factory(o.resolver)
+}
+
+type optionFunc func(*options)
+
+func (f optionFunc) applyVanguard(o *options) { f(o) }
+
+// WithCodec overrides the RESTCodec factory used to encode and decode
+// bodies. The factory is invoked once per Mount or NewTransport call,
+// after option processing, with the resolver chosen by WithTypeResolver (or
+// protoregistry.GlobalTypes if none).
+//
+//	// Use the default JSON codec but configure it.
+//	vanguard.Mount(mux, server,
+//	    vanguard.WithCodec(func(r connectproto.TypeResolver) vanguard.RESTCodec {
+//	        c := vanguard.NewJSONCodec(r)
+//	        c.MarshalOptions.UseProtoNames = true
+//	        return c
+//	    }),
+//	)
+func WithCodec(newCodec func(connectproto.TypeResolver) RESTCodec) Option {
+	return optionFunc(func(o *options) {
+		o.newCodec = newCodec
+	})
+}
+
+// WithTypeResolver overrides the proto type resolver used when
+// instantiating request and response messages. Defaults to
+// protoregistry.GlobalTypes.
+func WithTypeResolver(resolver connectproto.TypeResolver) Option {
+	return optionFunc(func(o *options) {
+		o.resolver = resolver
+	})
+}
+
+// WithRules attaches HTTP rules that are not embedded directly as google.api.http
+// annotations on the method descriptors. Each rule's selector must match a
+// registered procedure (the fully-qualified method name).
+func WithRules(rules ...*annotations.HttpRule) Option {
+	return optionFunc(func(o *options) {
+		o.rules = append(o.rules, rules...)
+	})
+}
+
+// WithMaxReadBytes caps the size of a body read off the wire: the request
+// body for [Mount], the response body for [NewTransport], measured after any
+// decompression. Bodies exceeding this limit fail with CodeResourceExhausted.
+// The default is 4 MiB. Zero allows any size.
+func WithMaxReadBytes(n int64) Option {
+	return optionFunc(func(o *options) {
+		o.maxReadBytes = n
+	})
+}
+
+// WithCompressors configures the compression algorithms available for request
+// and response bodies, keyed by their Content-Encoding token. A handler
+// decompresses requests sent with a known encoding and compresses responses
+// using the request's encoding, or else the first Accept-Encoding token it
+// supports. A transport advertises the names in Accept-Encoding and
+// decompresses responses.
+//
+// Calling WithCompressors with no arguments disables compression entirely. If
+// multiple compressors share the same name, only the first is kept.
+//
+// The default is gzip.
+func WithCompressors(compressors ...connect.Compressor) Option {
+	return optionFunc(func(o *options) {
+		o.compressors = slices.Clone(compressors)
+	})
+}
+
+// WithSendCompression configures a transport to compress request bodies using
+// the named algorithm, which must be registered via [WithCompressors] (or be
+// the default gzip compressor).
+//
+// By default, transports send uncompressed requests. [Mount] ignores this option.
+func WithSendCompression(name string) Option {
+	return optionFunc(func(o *options) {
+		o.sendCompression = name
+	})
+}
+
+// WithDiscardUnknownQueryParams controls whether unknown query parameters are
+// ignored when decoding a REST request. By default (false), unknown parameters
+// return an error.
+func WithDiscardUnknownQueryParams(discard bool) Option {
+	return optionFunc(func(o *options) {
+		o.discardUnknownQueryParams = discard
+	})
+}
+
+// Mount installs Vanguard's REST router onto mux. Methods registered on the
+// server that carry a google.api.http annotation (or one supplied via WithRules)
+// become REST endpoints. Methods without a rule are silently skipped. A rule
+// on a streaming method whose streamed side is not a google.api.HttpBody is an
+// error.
+//
+// The mux interface is the same [connecthttp.ServeMux] used by
+// [connecthttp.Mount]. This allows a single *http.ServeMux to host Connect,
+// gRPC, and REST routes simultaneously.
+//
+// Vanguard installs a single catch-all "/" handler rather than per-pattern
+// routes, because google.api.http templates support syntax (like `**`,
+// single-segment `*`, and `:verb` suffixes) that net/http's pattern matcher
+// does not. To scope this catch-all, mount Vanguard on a sub-mux (e.g.,
+// `mux.Handle("/api/", subMux)`).
+//
+// Dispatch flows through [connect.Server.Call], ensuring any interceptors
+// registered on the server fire as expected. HTTP has no trailers in this
+// binding, so metadata set on the CallInfo's ResponseTrailer is discarded.
+func Mount(mux connecthttp.ServeMux, server *connect.Server, opts ...Option) error {
+	cfg := defaultOptions()
 	for _, opt := range opts {
-		opt.applyToTranscoder(&transcoderOpts)
+		opt.applyVanguard(&cfg)
+	}
+	methods, routes, err := resolveMethods(server, cfg)
+	if err != nil {
+		return err
+	}
+	mux.Handle("/", &restHandler{
+		server:      server,
+		options:     cfg,
+		codec:       cfg.effectiveCodec(),
+		compressors: newCompressors(cfg.compressors),
+		methods:     methods,
+		routes:      routes,
+	})
+	return nil
+}
+
+type restHandler struct {
+	server      *connect.Server
+	options     options
+	codec       RESTCodec
+	compressors *compressors
+	methods     map[string]*method
+	routes      *routeTrie
+}
+
+func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
+	target, vars, allowedMethods := h.routes.match(request.URL.Path, request.Method)
+	if target == nil {
+		if len(allowedMethods) > 0 {
+			responseWriter.Header().Set("Allow", strings.Join(slices.Sorted(maps.Keys(allowedMethods)), ", "))
+			httpWriteStatus(responseWriter, http.StatusMethodNotAllowed,
+				connect.Errorf(connect.CodeUnimplemented, "HTTP method %s not allowed", request.Method))
+			return
+		}
+		httpWriteError(responseWriter, connect.Errorf(connect.CodeNotFound, "no REST route for %s", request.URL.Path))
+		return
+	}
+	method := target.method
+	ctx := request.Context()
+
+	requestCompressor, responseCompressor, err := h.compressors.negotiate(
+		request.Header.Get("Content-Encoding"), request.Header.Get("Accept-Encoding"))
+	if err != nil {
+		responseWriter.Header().Set("Accept-Encoding", h.compressors.names)
+		httpWriteError(responseWriter, err)
+		return
 	}
 
-	defaultServiceOptions := serviceOptions{
-		maxMsgBufferBytes: DefaultMaxMessageBufferBytes,
-		maxGetURLBytes:    DefaultMaxGetURLBytes,
-		preferredCodec:    CodecProto,
-		codecNames:        map[string]struct{}{CodecProto: {}, CodecJSON: {}},
-		compressorNames:   map[string]struct{}{CompressionGzip: {}},
-		protocols:         map[Protocol]struct{}{ProtocolConnect: {}, ProtocolGRPC: {}, ProtocolGRPCWeb: {}},
+	// Build a CallInfo from the request. Server.Call attaches it to ctx
+	// so handlers and interceptors can read it via
+	// connect.CallInfoForServerContext.
+	info := &connect.CallInfo{
+		Spec:             method.spec,
+		PeerAddr:         request.RemoteAddr,
+		Protocol:         "rest",
+		Codec:            h.codec.Name(),
+		RequestEncoding:  encodingName(requestCompressor),
+		ResponseEncoding: encodingName(responseCompressor),
 	}
-	for _, opt := range transcoderOpts.defaultServiceOptions {
-		opt.applyToService(&defaultServiceOptions)
-	}
-
-	transcoder := &Transcoder{
-		codecs:         transcoderOpts.codecs,
-		compressors:    transcoderOpts.compressors,
-		unknownHandler: transcoderOpts.unknownHandler,
-		methods:        map[string]*methodConfig{},
+	for key, vals := range request.Header {
+		info.RequestHeader().SetValues(key, vals)
 	}
 
-	var restOnlyServices []protoreflect.ServiceDescriptor
-	for _, svc := range services {
-		resolvedOpts := defaultServiceOptions
-		for _, opt := range svc.opts {
-			opt.applyToService(&resolvedOpts)
-		}
-		if err := transcoder.registerService(svc, resolvedOpts); err != nil {
-			return nil, err
-		}
-		if len(resolvedOpts.protocols) == 1 {
-			_, ok := resolvedOpts.protocols[ProtocolREST]
-			if ok {
-				restOnlyServices = append(restOnlyServices, svc.schema)
-			}
+	stream := newServerStream(method, target, vars, &h.options, h.codec, info, responseWriter, request)
+	stream.requestCompressor = requestCompressor
+	stream.responseCompressor = responseCompressor
+	err = h.server.Call(ctx, method.spec.Procedure, info, stream)
+	if err == nil && !stream.sent && method.spec.StreamType&connect.StreamTypeServer == 0 {
+		err = connect.NewError(connect.CodeInternal, "handler sent no response message")
+	}
+	// If the stream has already committed response headers (the handler
+	// called Send before returning the error), the HTTP status is fixed
+	// and we can't insert a JSON error body; drop the error. Otherwise
+	// write the google.rpc.Status body with the mapped HTTP status,
+	// merging response metadata the handler set on info.
+	if err == nil || stream.committed() {
+		_ = stream.close()
+		return
+	}
+	setResponseHeaders(responseWriter.Header(), info.ResponseHeader())
+	httpWriteError(responseWriter, err)
+}
+
+// NewTransport returns a [connect.Transport] that issues REST requests for
+// procedures with a google.api.http annotation (or one supplied via WithRules).
+//
+// The httpClient takes the same interface as [connecthttp.NewTransport]
+// (typically an *http.Client). If nil, http.DefaultClient is used.
+//
+// Each call to NewClientStream resolves the procedure's HTTP rule from the
+// provided Spec. Calling an unknown procedure, or one without an HTTP rule,
+// returns connect.CodeUnimplemented.
+func NewTransport(httpClient connecthttp.HTTPClient, baseURL string, opts ...Option) (connect.Transport, error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	cfg := defaultOptions()
+	for _, opt := range opts {
+		opt.applyVanguard(&cfg)
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse baseURL: %w", err)
+	}
+	compressors := newCompressors(cfg.compressors)
+	var sendCompressor connect.Compressor
+	if name := cfg.sendCompression; name != "" && name != connect.CompressionNameIdentity {
+		if sendCompressor = compressors.get(name); sendCompressor == nil {
+			return nil, fmt.Errorf("unknown compression %q: supported encodings are %v", name, compressors.names)
 		}
 	}
-	if err := transcoder.registerRules(transcoderOpts.rules); err != nil {
+	return &transport{
+		httpClient:     httpClient,
+		baseURL:        parsed,
+		options:        cfg,
+		codec:          cfg.effectiveCodec(),
+		compressors:    compressors,
+		sendCompressor: sendCompressor,
+	}, nil
+}
+
+type transport struct {
+	httpClient     connecthttp.HTTPClient
+	baseURL        *url.URL
+	options        options
+	codec          RESTCodec
+	compressors    *compressors
+	sendCompressor connect.Compressor // nil sends identity
+
+	// methods caches per-procedure rule resolution; the cache key is
+	// the procedure name.
+	methods sync.Map // procedure string -> *method
+}
+
+func (t *transport) NewClientStream(ctx context.Context, spec connect.Spec) (connect.ClientStream, error) {
+	method, err := t.resolveMethod(spec)
+	if err != nil {
 		return nil, err
 	}
+	if info, ok := connect.CallInfoForClientContext(ctx); ok {
+		info.Spec = spec
+		info.PeerAddr = t.baseURL.Host
+		info.Protocol = "rest"
+		info.Codec = t.codec.Name()
+		info.RequestEncoding = encodingName(t.sendCompressor)
+	}
+	return newClientStream(ctx, t, method, spec), nil
+}
 
-	// Finally, check that any services with only REST as target protocol
-	// actually have at least one method with REST mappings.
-	for _, svcDesc := range restOnlyServices {
-		methods := svcDesc.Methods()
-		var numSupportedMethods int
-		for i, length := 0, methods.Len(); i < length; i++ {
-			methodDesc := methods.Get(i)
-			if transcoder.methods[methodPath(methodDesc)].httpRule != nil {
-				numSupportedMethods++
+func (t *transport) resolveMethod(spec connect.Spec) (*method, error) {
+	if v, ok := t.methods.Load(spec.Procedure); ok {
+		if cached, ok := v.(*method); ok {
+			return cached, nil
+		}
+	}
+	method := methodFromSpec(spec, t.options.resolver)
+	if method == nil {
+		// Spec.Schema is not a proto MethodDescriptor, so vanguard
+		// can't route this call. (See the doc on methodFromSpec.)
+		return nil, connect.Errorf(connect.CodeUnimplemented,
+			"vanguard: Spec.Schema for %s is not a protoreflect.MethodDescriptor",
+			spec.Procedure)
+	}
+	rule, ok := getHTTPRuleExtension(method.descriptor)
+	if !ok {
+		// Allow rule lookup via WithRules selectors.
+		for _, external := range t.options.rules {
+			if procedureFromSelector(external.GetSelector()) == spec.Procedure {
+				rule = external
+				ok = true
+				break
 			}
 		}
-		if numSupportedMethods == 0 {
-			return nil, fmt.Errorf("service %s only supports REST target protocol but has no methods with HTTP rules", svcDesc.FullName())
-		}
 	}
-
-	return transcoder, nil
-}
-
-// TranscoderOption is an option used to configure a Transcoder. See NewTranscoder.
-type TranscoderOption interface {
-	applyToTranscoder(*transcoderOptions)
-}
-
-// WithDefaultServiceOptions returns an option that configures the given
-// service options as defaults. They will apply to all services passed to
-// NewTranscoder, except where overridden via an explicit ServiceOption
-// passed to NewService / NewServiceWithSchema.
-//
-// Providing multiple instances of this option will be cumulative: the
-// union of all defaults are used with later options overriding any
-// previous options.
-func WithDefaultServiceOptions(serviceOptions ...ServiceOption) TranscoderOption {
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
-		opts.defaultServiceOptions = append(opts.defaultServiceOptions, serviceOptions...)
-	})
-}
-
-// WithRules returns an option that adds HTTP transcoding configuration to the set of
-// configured services. The given rules must have a selector defined, and the selector
-// must match at least one configured method. Otherwise, NewTranscoder will report a
-// configuration error.
-func WithRules(rules ...*annotations.HttpRule) TranscoderOption {
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
-		opts.rules = append(opts.rules, rules...)
-	})
-}
-
-// WithCodec returns an option that instructs the transcoder to use the given
-// function for instantiating codec implementations. The function is immediately
-// invoked in order to determine the name of the codec. The name reported by codecs
-// created with the function should all return the same name. (Otherwise, behavior
-// is undefined.)
-//
-// By default, "proto" and "json" codecs are supported using default options. This
-// option can be used to support additional codecs or to override the default
-// implementations (such as to change serialization or de-serialization options).
-func WithCodec(newCodec func(TypeResolver) Codec) TranscoderOption {
-	codecName := newCodec(protoregistry.GlobalTypes).Name()
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
-		if opts.codecs == nil {
-			opts.codecs = codecMap{}
-		}
-		opts.codecs[codecName] = newCodec
-	})
-}
-
-// WithCompression returns an option that instructs the transcoder to use the given
-// functions to instantiate compressors and decompressors for the given compression
-// algorithm name.
-//
-// By default, "gzip" compression is supported using default options. This option can be
-// used to support additional compression algorithms or to override the default "gzip"
-// implementation (such as to change the compression level).
-func WithCompression(name string, newCompressor func() connect.Compressor, newDecompressor func() connect.Decompressor) TranscoderOption {
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
-		if opts.codecs == nil {
-			opts.compressors = compressionMap{}
-		}
-		opts.compressors[name] = newCompressionPool(name, newCompressor, newDecompressor)
-	})
-}
-
-// WithUnknownHandler returns an option that instructs the transcoder to delegate to
-// the given handler when a request arrives for an unknown endpoint. If no such option
-// is used, the transcoder will reply with a simple "404 Not Found" error.
-func WithUnknownHandler(unknownHandler http.Handler) TranscoderOption {
-	return transcoderOptionFunc(func(opts *transcoderOptions) {
-		opts.unknownHandler = unknownHandler
-	})
-}
-
-// Service represents the configuration for a single RPC service.
-type Service struct {
-	err     error
-	schema  protoreflect.ServiceDescriptor
-	handler http.Handler
-	opts    []ServiceOption
-}
-
-// NewService creates a new service definition for the given service path and handler.
-// The service path must be the service's fully-qualified name, with an optional leading
-// and trailing slash. This means you can provide generated constants for service names
-// or you can provide the path returned by a New*Handler function generated by the
-// [Protobuf plugin for Connect]. In fact, if you do not need to specify any
-// service-specific options, you can directly wrap the call to the generated
-// constructor with NewService:
-//
-//	vanguard.NewService(elizav1connect.NewElizaServiceHandler(elizaImpl))
-//
-// If the given service path does not correspond to a known service (one whose
-// schema is registered with the Protobuf runtime, usually from generated
-// code), NewTranscoder will return an error. For these cases, where the
-// corresponding service schema may be dynamically retrieved, use
-// NewServiceWithSchema instead.
-//
-// [Protobuf plugin for Connect Go]: https://pkg.go.dev/connectrpc.com/connect/cmd/protoc-gen-connect-go
-func NewService(servicePath string, handler http.Handler, opts ...ServiceOption) *Service {
-	serviceName := strings.TrimSuffix(strings.TrimPrefix(servicePath, "/"), "/")
-	desc, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(serviceName))
-	if err != nil {
-		return &Service{err: fmt.Errorf("could not resolve schema for service at path %q: %w", servicePath, err)}
-	}
-	svcDesc, ok := desc.(protoreflect.ServiceDescriptor)
 	if !ok {
-		return &Service{
-			err: fmt.Errorf("could not resolve schema for service at path %q: resolved descriptor is %s, not a service", servicePath, descKind(desc)),
-		}
+		return nil, connect.Errorf(connect.CodeUnimplemented,
+			"no google.api.http rule for %s", spec.Procedure)
 	}
-	return NewServiceWithSchema(svcDesc, handler, opts...)
-}
-
-// NewServiceWithSchema creates a new service using the given schema and handler.
-// This option is appropriate for use with dynamic schemas.
-//
-// The default type resolver for the service will use [protoregistry.GlobalTypes]
-// if the given service matches a descriptor of the same name registered in
-// [protoregistry.GlobalFiles]. Otherwise, the default resolver will use
-// [dynamic messages] for the given service's request and response types. In
-// either case, the default resolver will fall back to [protoregistry.GlobalTypes]
-// for resolving extensions and message types for messages inside [anypb.Any]
-// values.
-//
-// [dynamic messages]: https://pkg.go.dev/google.golang.org/protobuf/types/dynamicpb#Message
-// [anypb.Any]: https://pkg.go.dev/google.golang.org/protobuf/types/known/anypb#Any
-func NewServiceWithSchema(schema protoreflect.ServiceDescriptor, handler http.Handler, opts ...ServiceOption) *Service {
-	return &Service{
-		schema:  schema,
-		handler: handler,
-		opts:    opts,
+	// Build a one-method routeTrie so makeTarget runs and validates the
+	// rule. Only the primary binding is used on the client side; the
+	// trie is for path-matching, which clients don't need.
+	trie := &routeTrie{}
+	target, err := trie.addRoute(method, rule)
+	if err != nil {
+		return nil, fmt.Errorf("attach rule for %s: %w", spec.Procedure, err)
 	}
+	method.httpRule = target
+
+	// Concurrent calls may race to resolve the same procedure; the
+	// results are equivalent, so whichever is stored first wins.
+	t.methods.LoadOrStore(spec.Procedure, method)
+	return method, nil
 }
 
-// A ServiceOption configures how a Transcoder handles requests to a particular
-// RPC service. ServiceOptions can be passed to [NewService] and
-// [NewServiceWithSchema]. Default ServiceOptions, that apply to all services,
-// can be defined by passing a WithDefaultServiceOptions option to NewTranscoder.
-// This is useful when all or many services use the same options.
-type ServiceOption interface {
-	applyToService(*serviceOptions)
-}
-
-// WithTargetProtocols returns a service option indicating that the service handler
-// supports the listed protocols. By default, the handler is assumed to support
-// all but the REST protocol, which is true if the handler is a Connect handler
-// (created using generated code from the protoc-gen-connect-go plugin or an
-// explicit call to [connect.NewUnaryHandler] or its streaming equivalents).
-func WithTargetProtocols(protocols ...Protocol) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.protocols = make(map[Protocol]struct{}, len(protocols))
-		for _, p := range protocols {
-			opts.protocols[p] = struct{}{}
-		}
-	})
-}
-
-// WithTargetCodecs returns a service option indicating that the service handler supports
-// the given codecs. By default, the handler is assumed only to support the "proto"
-// codec.
-func WithTargetCodecs(names ...string) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.codecNames = make(map[string]struct{}, len(names))
-		for _, n := range names {
-			opts.codecNames[n] = struct{}{}
-		}
-		if len(names) > 0 {
-			opts.preferredCodec = names[0]
-		} else {
-			opts.preferredCodec = ""
-		}
-	})
-}
-
-// WithTargetCompression returns a service option indicating that the service handler supports
-// the given compression algorithms. By default, the handler is assumed only to support
-// the "gzip" compression algorithm.
-//
-// To configure the handler to not use any compression, one could use this option and supply
-// no names. However, to make this scenario more readable, prefer WithNoTargetCompression instead.
-func WithTargetCompression(names ...string) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.compressorNames = make(map[string]struct{}, len(names))
-		for _, n := range names {
-			opts.compressorNames[n] = struct{}{}
-		}
-	})
-}
-
-// WithNoTargetCompression returns a service option indicating that the server handler does
-// not support compression.
-func WithNoTargetCompression() ServiceOption {
-	return WithTargetCompression()
-}
-
-// WithTypeResolver returns a service option to use the given resolver when serializing
-// and de-serializing messages. If not specified, this defaults to
-// [protoregistry.GlobalTypes].
-func WithTypeResolver(resolver TypeResolver) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.resolver = resolver
-	})
-}
-
-// WithMaxMessageBufferBytes returns a service option that limits buffering of data
-// when handling the service to the given limit. If any payload in a request or
-// response exceeds this, the RPC will fail with a "resource exhausted" error.
-//
-// If set to zero or a negative value, a limit of 4 GB will be used.
-func WithMaxMessageBufferBytes(limit uint32) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.maxMsgBufferBytes = limit
-	})
-}
-
-// WithMaxGetURLBytes returns a service option that limits the size of URLs with
-// the Connect unary protocol using the GET HTTP method. If a URL's length would
-// exceed this limit, the POST HTTP method will be used instead (and the request
-// contents moved from the URL to the body).
-//
-// If set to zero or a negative value, a limit of 8 KB will be used.
-func WithMaxGetURLBytes(limit uint32) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.maxGetURLBytes = limit
-	})
-}
-
-// WithRESTUnmarshalOptions returns a service option that sets the unmarshal options for use with the REST protocol.
-func WithRESTUnmarshalOptions(options RESTUnmarshalOptions) ServiceOption {
-	return serviceOptionFunc(func(opts *serviceOptions) {
-		opts.restUnmarshalOptions = options
-	})
-}
-
-// RESTUnmarshalOptions contains options for unmarshalling REST requests.
-type RESTUnmarshalOptions struct {
-	// If DiscardUnknownQueryParams is true, any query parameters in a request that do not correspond to a field in the
-	// request message will be ignored. If false, such query parameters will cause an error. Defaults to false.
-	DiscardUnknownQueryParams bool
-}
-
-type transcoderOptions struct {
-	defaultServiceOptions []ServiceOption
-	rules                 []*annotations.HttpRule
-	unknownHandler        http.Handler
-	codecs                codecMap
-	compressors           compressionMap
-}
-
-type transcoderOptionFunc func(*transcoderOptions)
-
-func (f transcoderOptionFunc) applyToTranscoder(opts *transcoderOptions) {
-	f(opts)
-}
-
-type serviceOptionFunc func(*serviceOptions)
-
-func (f serviceOptionFunc) applyToService(opts *serviceOptions) {
-	f(opts)
-}
-
-type serviceOptions struct {
-	resolver                    TypeResolver
-	protocols                   map[Protocol]struct{}
-	codecNames, compressorNames map[string]struct{}
-	preferredCodec              string
-	maxMsgBufferBytes           uint32
-	maxGetURLBytes              uint32
-	restUnmarshalOptions        RESTUnmarshalOptions
-}
-
-type methodConfig struct {
-	*serviceOptions
-
-	descriptor                protoreflect.MethodDescriptor
-	requestType, responseType protoreflect.MessageType
-	methodPath                string
-	streamType                connect.StreamType
-	handler                   http.Handler
-	httpRule                  *routeTarget // First HTTP rule, if any.
-}
-
-func descKind(desc protoreflect.Descriptor) string {
-	switch desc := desc.(type) {
-	case protoreflect.FileDescriptor:
-		return "a file"
-	case protoreflect.MessageDescriptor:
-		return "a message"
-	case protoreflect.FieldDescriptor:
-		if desc.IsExtension() {
-			return "an extension"
-		}
-		return "a field"
-	case protoreflect.OneofDescriptor:
-		return "a oneof"
-	case protoreflect.EnumDescriptor:
-		return "an enum"
-	case protoreflect.EnumValueDescriptor:
-		return "an enum value"
-	case protoreflect.ServiceDescriptor:
-		return "a service"
-	case protoreflect.MethodDescriptor:
-		return "a method"
-	default:
-		return fmt.Sprintf("%T", desc)
-	}
-}
-
-func methodPath(methodDesc protoreflect.MethodDescriptor) string {
-	return "/" + string(methodDesc.Parent().FullName()) + "/" + string(methodDesc.Name())
-}
+var _ connect.Transport = (*transport)(nil)

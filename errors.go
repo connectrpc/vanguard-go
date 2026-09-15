@@ -16,102 +16,45 @@ package vanguard
 
 import (
 	"errors"
-	"fmt"
-	"net/http"
 
-	"connectrpc.com/connect"
-)
-
-var (
-	errNoTimeout = errors.New("no timeout")
-	errNotFound  = &httpError{code: http.StatusNotFound}
+	"connectrpc.com/connect/v2"
+	"google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 func asConnectError(err error) *connect.Error {
-	if ce, ok := errors.AsType[*connect.Error](err); ok {
-		return ce
+	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
+		if connectErr.IsRemote() {
+			// Don't forward a peer's RPC verdict as this handler's own.
+			return connect.NewError(connect.CodeInternal, "").WithCause(err)
+		}
+		return connectErr
 	}
-	return connect.NewError(connect.CodeInternal, err)
+	return connect.NewError(connect.CodeUnknown, "").WithCause(err)
 }
 
-type httpError struct {
-	code   int
-	header http.Header
-	err    error
-}
-
-func newHTTPError(statusCode int, msgFormat string, args ...any) *httpError {
-	return &httpError{
-		code: statusCode,
-		err:  fmt.Errorf(msgFormat, args...),
+// wrapError classifies err under code with a message prefix. An error that
+// already carries a code is returned unchanged.
+func wrapError(code connect.Code, prefix string, err error) *connect.Error {
+	if connectErr, ok := errors.AsType[*connect.Error](err); ok {
+		return connectErr
 	}
+	return connect.Errorf(code, "%s: %s", prefix, err).WithCause(err)
 }
 
-func (e *httpError) Error() string {
-	if e.err != nil {
-		return e.err.Error()
+func grpcStatusFromError(err *connect.Error) *status.Status {
+	stat := &status.Status{
+		Code:    int32(err.Code()), //nolint:gosec // No information loss.
+		Message: err.Message(),
 	}
-	return http.StatusText(e.code)
-}
-
-func (e *httpError) Unwrap() error {
-	return e.err
-}
-
-func (e *httpError) EncodeHeaders(header http.Header) {
-	if e == nil {
-		return
-	}
-	for key, vals := range e.header {
-		for _, val := range vals {
-			header.Add(key, val)
+	if details := err.Details(); len(details) > 0 {
+		stat.Details = make([]*anypb.Any, len(details))
+		for i, detail := range details {
+			stat.Details[i] = &anypb.Any{
+				TypeUrl: "type.googleapis.com/" + detail.Type,
+				Value:   detail.Value,
+			}
 		}
 	}
-}
-
-func (e *httpError) Encode(writer http.ResponseWriter) {
-	if e == nil {
-		writer.WriteHeader(http.StatusOK)
-		return
-	}
-	e.EncodeHeaders(writer.Header())
-	http.Error(writer, e.Error(), e.code)
-}
-
-func asHTTPError(err error) *httpError {
-	if err == nil {
-		return nil
-	}
-	if httpErr, ok := errors.AsType[*httpError](err); ok {
-		return httpErr
-	}
-	if ce, ok := errors.AsType[*connect.Error](err); ok {
-		return &httpError{
-			code:   httpStatusCodeFromRPC(ce.Code()),
-			header: ce.Meta(),
-			err:    err,
-		}
-	}
-	return &httpError{code: http.StatusInternalServerError, err: err}
-}
-
-func protocolError(msg string, args ...any) error {
-	return fmt.Errorf("protocol error: "+msg, args...)
-}
-
-func bufferLimitError(limit int64) error {
-	return sizeLimitError("max buffer size", limit)
-}
-
-func contentLengthError(limit int64) error {
-	return sizeLimitError("content length", limit)
-}
-
-func sizeLimitError(what string, limit int64) error {
-	return connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("%s (%d) exceeded", what, limit))
-}
-
-func malformedRequestError(err error) error {
-	// Adds 400 Bad Request / InvalidArgument status codes to error
-	return connect.NewError(connect.CodeInvalidArgument, err)
+	return stat
 }
