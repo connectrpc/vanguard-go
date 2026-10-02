@@ -86,6 +86,38 @@ func TestTransport_Unary(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(stream.CloseSend()))
 }
 
+func TestTransport_EscapedPath(t *testing.T) {
+	t.Parallel()
+
+	spec := methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetBook"))
+	echo := func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+		req := &testv1.GetBookRequest{}
+		if err := stream.Receive(req); err != nil {
+			return err
+		}
+		return stream.Send(&testv1.Book{Name: req.GetName()})
+	}
+	handler := http.StripPrefix("/base", mountTestHandler(t, spec, echo))
+	escapedPaths := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		escapedPaths <- r.URL.EscapedPath()
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	restTransport, err := NewTransport(srv.Client(), srv.URL+"/base")
+	require.NoError(t, err)
+	stream, err := restTransport.NewClientStream(t.Context(), spec)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stream.Close() })
+	require.NoError(t, stream.Send(&testv1.GetBookRequest{Name: "shelves/a%2Fb/books/c d"}))
+	require.NoError(t, stream.CloseSend())
+	var got testv1.Book
+	require.NoError(t, stream.Receive(&got))
+	assert.Equal(t, "shelves/a%2Fb/books/c d", got.GetName())
+	assert.Equal(t, "/base/v1/shelves/a%2Fb/books/c%20d", <-escapedPaths)
+}
+
 func TestTransport_ClientStream_RequestFails(t *testing.T) {
 	t.Parallel()
 

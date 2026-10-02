@@ -17,7 +17,6 @@ package vanguard
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,6 +27,20 @@ import (
 func TestRouteTrie_Insert(t *testing.T) {
 	t.Parallel()
 	_ = initTrie(t)
+}
+
+func TestRouteTrie_InsertDuplicate(t *testing.T) {
+	t.Parallel()
+	var trie routeTrie
+	template, variables, err := parsePathTemplate("/foo%2fbar/*:%2c")
+	require.NoError(t, err)
+	testMethod := &method{descriptor: &fakeMethodDescriptor{name: "Dup"}}
+	target, err := makeTarget(testMethod, http.MethodGet, "", "", template, variables)
+	require.NoError(t, err)
+	require.NoError(t, trie.insert(http.MethodGet, target))
+	var existsErr alreadyExistsError
+	require.ErrorAs(t, trie.insert(http.MethodGet, target), &existsErr)
+	assert.Equal(t, "/foo%2Fbar/*:%2C", existsErr.pathPattern)
 }
 
 func TestRouteTrie_FindTarget(t *testing.T) {
@@ -175,26 +188,24 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			for _, method := range present {
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target, vars, _ := trie.match(testCase.path, method)
+					target, _ := trie.match(testCase.path, method)
 					require.NotNil(t, target)
 					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.method.descriptor.Name())
-					require.Len(t, vars, len(testCase.expectedVars))
-					for _, varMatch := range vars {
-						names := make([]string, len(varMatch.fields))
-						for i, fld := range varMatch.fields {
-							names[i] = string(fld.Name())
-						}
-						name := strings.Join(names, ".")
-						expectedValue, ok := testCase.expectedVars[name]
-						assert.True(t, ok, name)
-						require.Equal(t, expectedValue, varMatch.value, name)
+					require.Len(t, target.vars, len(testCase.expectedVars))
+					path, _ := splitVerb(testCase.path)
+					for _, variable := range target.vars {
+						expectedValue, ok := testCase.expectedVars[variable.fieldPath]
+						assert.True(t, ok, variable.fieldPath)
+						value, err := variable.capture(path)
+						require.NoError(t, err)
+						require.Equal(t, expectedValue, value, variable.fieldPath)
 					}
 				})
 			}
 			for _, method := range absent {
 				t.Run(method, func(t *testing.T) {
 					t.Parallel()
-					target, _, _ := trie.match(testCase.path, method)
+					target, _ := trie.match(testCase.path, method)
 					require.Nil(t, target)
 				})
 			}
@@ -207,14 +218,23 @@ func BenchmarkTrieMatch(b *testing.B) {
 	path := "/foo/blah/A/B/C/foo/D/E/F/G/foo/H/I/J/K/L/M:details"
 	var (
 		method *routeTarget
-		vars   []routeTargetVarMatch
+		vars   []string
 	)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		method, vars, _ = trie.match(path, http.MethodPost)
+		method, _ = trie.match(path, http.MethodPost)
 		if method == nil {
 			b.Fatal("method not found")
+		}
+		vars = vars[:0]
+		matched, _ := splitVerb(path)
+		for _, variable := range method.vars {
+			value, err := variable.capture(matched)
+			if err != nil {
+				b.Fatal(err)
+			}
+			vars = append(vars, value)
 		}
 	}
 	b.StopTimer()
@@ -240,7 +260,7 @@ func initTrie(tb testing.TB) *routeTrie {
 		"/trailing/**:slash",
 		"/verb",
 	} {
-		segments, variables, err := parsePathTemplate(route)
+		template, variables, err := parsePathTemplate(route)
 		require.NoError(tb, err)
 
 		for _, httpMethod := range []string{http.MethodGet, http.MethodPost} {
@@ -249,9 +269,9 @@ func initTrie(tb testing.TB) *routeTrie {
 					name: fmt.Sprintf("%s %s", httpMethod, route),
 				},
 			}
-			target, err := makeTarget(m, "POST", "*", "*", segments, variables)
+			target, err := makeTarget(m, "POST", "*", "*", template, variables)
 			require.NoError(tb, err)
-			err = trie.insert(httpMethod, target, segments)
+			err = trie.insert(httpMethod, target)
 			require.NoError(tb, err)
 		}
 	}

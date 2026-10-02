@@ -251,7 +251,7 @@ type restHandler struct {
 }
 
 func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
-	target, vars, allowedMethods := h.routes.match(request.URL.Path, request.Method)
+	target, allowedMethods := h.routes.match(request.URL.EscapedPath(), request.Method)
 	if target == nil {
 		if len(allowedMethods) > 0 {
 			responseWriter.Header().Set("Allow", strings.Join(slices.Sorted(maps.Keys(allowedMethods)), ", "))
@@ -298,7 +298,7 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 		info.RequestHeader().SetValues(key, vals)
 	}
 
-	stream := newServerStream(method, target, vars, &h.options, h.codec, info, responseWriter, request)
+	stream := newServerStream(method, target, &h.options, h.codec, info, responseWriter, request)
 	stream.requestCompressor = requestCompressor
 	stream.responseCompressor = responseCompressor
 	err = h.server.Call(ctx, method.spec.Procedure, info, stream)
