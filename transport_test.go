@@ -69,6 +69,7 @@ func TestTransport_Unary(t *testing.T) {
 	stream, err = restTransport.NewClientStream(t.Context(), spec)
 	require.NoError(t, err)
 	require.NoError(t, stream.Send(&testv1.GetBookRequest{Name: "shelves/s/books/b"}))
+	require.NoError(t, stream.CloseSend())
 	err = stream.Receive(&got)
 	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
 	assert.Contains(t, err.Error(), "zero-length payload")

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect/v2"
 )
@@ -93,8 +94,14 @@ type decompressedBody struct {
 
 	decompressor io.Closer
 	body         io.Closer
+	closeOnce    sync.Once
+	closeErr     error
 }
 
+// Close is idempotent, so a pooled decompressor is released only once.
 func (d *decompressedBody) Close() error {
-	return errors.Join(d.decompressor.Close(), d.body.Close())
+	d.closeOnce.Do(func() {
+		d.closeErr = errors.Join(d.decompressor.Close(), d.body.Close())
+	})
+	return d.closeErr
 }

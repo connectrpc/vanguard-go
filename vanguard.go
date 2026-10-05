@@ -304,7 +304,7 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 		_ = stream.close()
 		return
 	}
-	setResponseHeaders(responseWriter.Header(), info.ResponseHeader())
+	setMetadataHeaders(responseWriter.Header(), info.ResponseHeader())
 	httpWriteError(responseWriter, err)
 }
 

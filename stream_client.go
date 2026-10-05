@@ -20,9 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
+	"sync"
 
 	"connectrpc.com/connect/v2"
 	"google.golang.org/protobuf/proto"
@@ -32,29 +32,48 @@ import (
 // request. A unary request is marshaled into a buffer and dispatched by
 // CloseSend. A client stream is dispatched on the first Send and each
 // google.api.HttpBody is written straight to the request body. Receive
-// decodes the response, in chunks for a server stream.
+// waits for the response and decodes it, in chunks for a server stream.
+//
+// The send side (Send, CloseSend) and the receive side (Receive) may run on
+// different goroutines. They meet only at ready, which publishes response
+// and dispatch.
 type clientStream struct {
 	ctx       context.Context //nolint:containedctx // stream methods take no ctx; scoped to one RPC
+	cancel    context.CancelFunc
 	transport *transport
 	method    *method
 	spec      connect.Spec
 
-	sendClosed bool
-	received   bool
-
+	// Send side.
+	sendClosed     bool
 	reqURL         *url.URL // set by the first Send
 	contentType    string
 	body           bytes.Buffer   // unary request body
 	pipe           *io.PipeWriter // client-stream request body
 	compressWriter io.WriteCloser
-	inflight       chan struct{} // closed once the piped request has a response
 
-	response *http.Response
-	dispatch error
+	// Receive side.
+	received bool
+
+	mu        sync.Mutex
+	ready     chan struct{} // closed once response or dispatch is set
+	responded bool          // guarded by mu
+	closed    bool          // guarded by mu
+	response  *http.Response
+	rawBody   io.Closer // response body before decoding; safe to close from Close
+	dispatch  error
 }
 
 func newClientStream(ctx context.Context, t *transport, method *method, spec connect.Spec) *clientStream {
-	return &clientStream{ctx: ctx, transport: t, method: method, spec: spec}
+	ctx, cancel := context.WithCancel(ctx)
+	return &clientStream{
+		ctx:       ctx,
+		cancel:    cancel,
+		transport: t,
+		method:    method,
+		spec:      spec,
+		ready:     make(chan struct{}),
+	}
 }
 
 // SendHeaders is a no-op: headers go with the first Send or CloseSend.
@@ -64,6 +83,18 @@ func (s *clientStream) Send(msg any) error {
 	if s.sendClosed {
 		return io.EOF
 	}
+	err := s.send(msg)
+	if err != nil && !errors.Is(err, io.EOF) {
+		// The request cannot complete, so fail it for Receive too.
+		if s.pipe != nil {
+			_ = s.pipe.CloseWithError(err)
+		}
+		s.respond(nil, err)
+	}
+	return err
+}
+
+func (s *clientStream) send(msg any) error {
 	first := s.reqURL == nil
 	if !first && s.spec.StreamType&connect.StreamTypeClient == 0 {
 		return errors.New("vanguard: Send called more than once on REST unary stream")
@@ -102,13 +133,10 @@ func (s *clientStream) Send(msg any) error {
 	return nil
 }
 
-// requestDone reports whether a piped request has finished, successfully or not.
+// requestDone reports whether the request has finished, successfully or not.
 func (s *clientStream) requestDone() bool {
-	if s.inflight == nil {
-		return false
-	}
 	select {
-	case <-s.inflight:
+	case <-s.ready:
 		return true
 	default:
 		return false
@@ -129,17 +157,14 @@ func (s *clientStream) openBody(target *routeTarget) error {
 			return err
 		}
 		s.pipe = writer
-		s.inflight = make(chan struct{})
 		go func() {
-			resp, err := s.transport.httpClient.Do(req) //nolint:bodyclose // closed by Receive or Close
+			resp, err := s.transport.httpClient.Do(req)
 			if err != nil {
-				s.dispatch = connect.Errorf(connect.CodeUnavailable, "http do: %s", err).WithCause(err)
-			}
-			s.response = resp
-			close(s.inflight)
-			if err != nil {
+				s.respond(nil, s.doError(err))
 				reader.CloseWithError(err) // unblock a pending Send
+				return
 			}
+			s.respond(resp, nil)
 		}()
 		sink = writer
 	}
@@ -190,7 +215,7 @@ func (s *clientStream) newRequest(body io.Reader) (*http.Request, error) {
 		return nil, connect.Errorf(connect.CodeInternal, "build request: %s", err).WithCause(err)
 	}
 	if info, ok := connect.CallInfoForClientContext(s.ctx); ok {
-		maps.Insert(req.Header, info.RequestHeader().All())
+		setMetadataHeaders(req.Header, info.RequestHeader())
 	}
 	if s.contentType != "" {
 		req.Header.Set("Content-Type", s.contentType)
@@ -208,14 +233,16 @@ func (s *clientStream) newRequest(body io.Reader) (*http.Request, error) {
 	return req, nil
 }
 
-// CloseSend finishes the request. Its error is also returned by Receive.
+// CloseSend finishes the request and waits for the response. Its error is
+// also returned by Receive.
 func (s *clientStream) CloseSend() error {
-	if s.sendClosed {
-		return s.dispatch
+	if !s.sendClosed {
+		s.sendClosed = true
+		if err := s.finishSend(); err != nil {
+			s.respond(nil, err)
+		}
 	}
-	s.sendClosed = true
-	s.dispatch = s.finishSend()
-	return s.dispatch
+	return s.awaitResponse()
 }
 
 func (s *clientStream) finishSend() error {
@@ -230,11 +257,7 @@ func (s *clientStream) finishSend() error {
 	}
 	if s.pipe != nil {
 		_ = s.pipe.Close()
-		<-s.inflight
-		if s.dispatch != nil {
-			return s.dispatch
-		}
-		return s.finishResponse(s.response)
+		return nil // the request goroutine publishes the response
 	}
 	var bodyReader io.Reader
 	if s.method.httpRule.requestBodyFields != nil {
@@ -246,14 +269,57 @@ func (s *clientStream) finishSend() error {
 	}
 	resp, err := s.transport.httpClient.Do(req)
 	if err != nil {
-		return connect.Errorf(connect.CodeUnavailable, "http do: %s", err).WithCause(err)
+		return s.doError(err)
 	}
-	return s.finishResponse(resp)
+	s.respond(resp, nil)
+	return nil
 }
 
-// finishResponse records resp, decompressing its body if needed.
+// respond publishes the outcome of the request to Receive. Only the first
+// outcome is kept; a later response is closed.
+func (s *clientStream) respond(resp *http.Response, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.responded {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		return
+	}
+	if err == nil {
+		s.rawBody = resp.Body
+		err = s.finishResponse(resp)
+	}
+	if err == nil {
+		s.response = resp
+		if s.closed {
+			_ = resp.Body.Close()
+		}
+	}
+	s.dispatch = err
+	s.responded = true
+	close(s.ready)
+}
+
+// awaitResponse blocks until the request has an outcome or the stream is
+// canceled.
+func (s *clientStream) awaitResponse() error {
+	select {
+	case <-s.ready:
+		return s.dispatch
+	default:
+	}
+	select {
+	case <-s.ready:
+		return s.dispatch
+	case <-s.ctx.Done():
+		return contextError(s.ctx.Err())
+	}
+}
+
+// finishResponse prepares resp for reading, decompressing its body if needed.
+// On error it closes the body.
 func (s *clientStream) finishResponse(resp *http.Response) error {
-	s.response = resp
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && encoding != connect.CompressionNameIdentity {
 		compressor := s.transport.compressors.get(encoding)
 		if compressor == nil {
@@ -287,12 +353,9 @@ func (s *clientStream) Receive(msg any) error {
 	if s.received {
 		return io.EOF
 	}
-	if !s.sendClosed {
-		_ = s.CloseSend() // error surfaces via s.dispatch below
-	}
-	if s.dispatch != nil {
+	if err := s.awaitResponse(); err != nil {
 		s.received = true
-		return s.dispatch
+		return err
 	}
 	contentType := s.response.Header.Get("Content-Type")
 	if s.response.StatusCode/100 != 2 {
@@ -348,17 +411,35 @@ func (s *clientStream) receiveChunk(pmsg proto.Message, contentType string) erro
 	return nil
 }
 
-// Close releases the request pipe and any response body not yet drained.
+// Close cancels the request and releases any response body not yet drained.
+// It is safe to call concurrently with Send and Receive.
 func (s *clientStream) Close() error {
-	if s.pipe != nil && !s.sendClosed {
-		s.sendClosed = true
-		_ = s.pipe.CloseWithError(errors.New("vanguard: stream closed"))
-		<-s.inflight
-	}
-	if s.response != nil {
-		_ = s.response.Body.Close()
+	s.cancel() // aborts an in-flight request, unblocking Send and Receive
+	s.mu.Lock()
+	s.closed = true
+	rawBody := s.rawBody
+	s.mu.Unlock()
+	if rawBody != nil {
+		// Receive may still be decoding, so leave the decompressor to it.
+		_ = rawBody.Close()
 	}
 	return nil
+}
+
+// doError classifies a failed HTTP round trip.
+func (s *clientStream) doError(err error) error {
+	if ctxErr := s.ctx.Err(); ctxErr != nil {
+		return contextError(ctxErr)
+	}
+	return connect.Errorf(connect.CodeUnavailable, "http do: %s", err).WithCause(err)
+}
+
+// contextError classifies a canceled or expired stream context.
+func contextError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return connect.NewError(connect.CodeDeadlineExceeded, err.Error()).WithCause(err)
+	}
+	return connect.NewError(connect.CodeCanceled, err.Error()).WithCause(err)
 }
 
 func joinPath(base, suffix string) string {

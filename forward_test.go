@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"connectrpc.com/connect/v2"
@@ -179,6 +180,160 @@ func TestForwardService(t *testing.T) {
 	})
 }
 
+func TestForwardService_RESTUpstream(t *testing.T) {
+	t.Parallel()
+
+	backend := connect.NewServer()
+	testv1connect.RegisterLibraryServiceHandler(backend, forwardBackend{t: t})
+	files := &memoryContentServer{files: map[string]*httpbody.HttpBody{}}
+	testv1connect.RegisterContentServiceHandler(backend, files)
+	backendMux := http.NewServeMux()
+	require.NoError(t, Mount(backendMux, backend))
+	var (
+		requestsMu sync.Mutex
+		requests   = map[string]recordedRequest{}
+	)
+	backendSrv := newHTTP2Server(t, http.HandlerFunc(func(responseWriter http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		assert.NoError(t, err)
+		requestsMu.Lock()
+		requests[request.URL.Path] = recordedRequest{
+			method:      request.Method,
+			uri:         request.URL.RequestURI(),
+			contentType: request.Header.Get("Content-Type"),
+			encoding:    request.Header.Get("Content-Encoding"),
+			tenant:      request.Header.Get("X-Tenant"),
+			custom:      request.Header.Get("Grpc-Custom"),
+			version:     request.Header.Get("Connect-Protocol-Version"),
+			body:        string(body),
+		}
+		requestsMu.Unlock()
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		backendMux.ServeHTTP(responseWriter, request)
+	}))
+	requestFor := func(path string) recordedRequest {
+		requestsMu.Lock()
+		defer requestsMu.Unlock()
+		return requests[path]
+	}
+
+	restTransport, err := NewTransport(backendSrv.Client(), backendSrv.URL)
+	require.NoError(t, err)
+	upstream := connect.NewClient(restTransport)
+	proxy := connect.NewServer()
+	for _, name := range []protoreflect.FullName{testv1connect.LibraryServiceName, testv1connect.ContentServiceName} {
+		desc, err := protoregistry.GlobalFiles.FindDescriptorByName(name)
+		require.NoError(t, err)
+		service, ok := desc.(protoreflect.ServiceDescriptor)
+		require.True(t, ok)
+		proxy.Register(ForwardService(upstream, service)...)
+	}
+	proxyMux := http.NewServeMux()
+	connecthttp.Mount(proxyMux, proxy)
+	proxySrv := newHTTP2Server(t, proxyMux)
+
+	viaProxy := connect.NewClient(connecthttp.NewTransport(proxySrv.Client(), proxySrv.URL, connecthttp.WithSendGzip()))
+	library := testv1connect.NewLibraryServiceClient(viaProxy)
+	content := testv1connect.NewContentServiceClient(viaProxy)
+
+	t.Run("unary", func(t *testing.T) {
+		t.Parallel()
+		ctx, info := connect.NewClientContext(t.Context())
+		info.RequestHeader().Set("X-Tenant", "acme")
+		info.RequestHeader().Set("Grpc-Custom", "kept")
+		book, err := library.GetBook(ctx, &testv1.GetBookRequest{Name: "shelves/s/books/b"})
+		require.NoError(t, err)
+		assert.Equal(t, "shelves/s/books/b", book.GetName())
+		assert.Equal(t, "yes", info.ResponseHeader().Get("X-Backend"))
+		assert.Equal(t, recordedRequest{
+			method: http.MethodGet,
+			uri:    "/v1/shelves/s/books/b",
+			tenant: "acme",
+			custom: "kept",
+		}, requestFor("/v1/shelves/s/books/b"))
+
+		ctx, info = connect.NewClientContext(t.Context())
+		info.RequestHeader().Set("X-Tenant", "acme")
+		_, err = library.GetBook(ctx, &testv1.GetBookRequest{Name: "shelves/s/books/denied"})
+		assert.Equal(t, connect.CodePermissionDenied, connect.CodeOf(err))
+		require.ErrorContains(t, err, "denied")
+		connectErr, ok := errors.AsType[*connect.Error](err)
+		require.True(t, ok)
+		assert.Len(t, connectErr.Details(), 1)
+	})
+
+	t.Run("unary_body", func(t *testing.T) {
+		t.Parallel()
+		book, err := library.CreateBook(t.Context(), &testv1.CreateBookRequest{
+			Parent:    "shelves/s",
+			BookId:    "b",
+			RequestId: "r",
+			Book:      &testv1.Book{Title: "Dune"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "shelves/s/books/b", book.GetName())
+		assert.Equal(t, "Dune", book.GetTitle())
+		got := requestFor("/v1/shelves/s/books")
+		assert.JSONEq(t, `{"name":"","parent":"","createTime":null,"updateTime":null,`+
+			`"title":"Dune","author":"","description":"","labels":{}}`, got.body)
+		got.body = ""
+		assert.Equal(t, recordedRequest{
+			method:      http.MethodPost,
+			uri:         "/v1/shelves/s/books?bookId=b&requestId=r",
+			contentType: "application/json",
+		}, got)
+	})
+
+	t.Run("client_stream", func(t *testing.T) {
+		t.Parallel()
+		stream, err := content.Upload(t.Context())
+		require.NoError(t, err)
+		require.NoError(t, stream.Send(&testv1.UploadRequest{
+			Filename: "dir/upload.txt",
+			File:     &httpbody.HttpBody{ContentType: "text/plain", Data: []byte("hello")},
+		}))
+		require.NoError(t, stream.Send(&testv1.UploadRequest{File: &httpbody.HttpBody{Data: []byte(" world")}}))
+		_, err = stream.CloseAndReceive()
+		require.NoError(t, err)
+		assert.Equal(t, "hello world", string(files.get("dir/upload.txt").GetData()))
+		assert.Equal(t, "text/plain", files.get("dir/upload.txt").GetContentType())
+		assert.Equal(t, recordedRequest{
+			method:      http.MethodPost,
+			uri:         "/dir/upload.txt:upload",
+			contentType: "text/plain",
+			body:        "hello world",
+		}, requestFor("/dir/upload.txt:upload"))
+	})
+
+	t.Run("server_stream", func(t *testing.T) {
+		t.Parallel()
+		big := bytes.Repeat([]byte("0123456789abcdef"), 5*1024)
+		files.put("big.bin", &httpbody.HttpBody{ContentType: "application/octet-stream", Data: big})
+		stream, err := content.Download(t.Context(), &testv1.DownloadRequest{Filename: "big.bin"})
+		require.NoError(t, err)
+		var got []byte
+		for {
+			res, err := stream.Receive()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "application/octet-stream", res.GetFile().GetContentType())
+			got = append(got, res.GetFile().GetData()...)
+		}
+		assert.Equal(t, big, got)
+		assert.Equal(t, recordedRequest{
+			method: http.MethodGet,
+			uri:    "/big.bin:download",
+		}, requestFor("/big.bin:download"))
+
+		stream, err = content.Download(t.Context(), &testv1.DownloadRequest{Filename: "missing.bin"})
+		require.NoError(t, err)
+		_, err = stream.Receive()
+		assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+	})
+}
+
 type forwardBackend struct {
 	testv1connect.UnimplementedLibraryServiceHandler
 
@@ -199,6 +354,23 @@ func (b forwardBackend) GetBook(ctx context.Context, req *testv1.GetBookRequest)
 			WithDetail(&connect.ErrorDetail{Type: "vanguard.test.v1.Book", Value: detail})
 	}
 	return &testv1.Book{Name: req.GetName()}, nil
+}
+
+func (b forwardBackend) CreateBook(_ context.Context, req *testv1.CreateBookRequest) (*testv1.Book, error) {
+	book := proto.CloneOf(req.GetBook())
+	book.Name = req.GetParent() + "/books/" + req.GetBookId()
+	return book, nil
+}
+
+type recordedRequest struct {
+	method      string
+	uri         string
+	contentType string
+	encoding    string
+	tenant      string
+	custom      string
+	version     string
+	body        string
 }
 
 func newHTTP2Server(t *testing.T, handler http.Handler) *httptest.Server {

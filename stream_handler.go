@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"connectrpc.com/connect/v2"
 	"google.golang.org/protobuf/proto"
@@ -223,7 +222,7 @@ func (s *serverStream) flushHeaders(compress bool) error {
 	if s.headersSet {
 		return nil
 	}
-	setResponseHeaders(s.response.Header(), s.info.ResponseHeader())
+	setMetadataHeaders(s.response.Header(), s.info.ResponseHeader())
 	if compress {
 		writer, err := s.responseCompressor.Compress(s.response)
 		if err != nil {
@@ -239,15 +238,37 @@ func (s *serverStream) flushHeaders(compress bool) error {
 
 // close commits the headers of an empty response and finishes a compressed body.
 
-// setResponseHeaders copies handler metadata onto the HTTP response,
+// protocolHeaders are owned by the wire protocol, never by RPC metadata. It
+// mirrors connecthttp so metadata crosses either transport the same way.
+//
+//nolint:gochecknoglobals
+var protocolHeaders = map[string]struct{}{
+	// HTTP headers.
+	"Content-Type":     {},
+	"Content-Length":   {},
+	"Content-Encoding": {},
+	"Trailer":          {},
+	"Date":             {},
+	// Connect headers.
+	"Accept-Encoding":          {},
+	"Connect-Content-Encoding": {},
+	"Connect-Accept-Encoding":  {},
+	"Connect-Timeout-Ms":       {},
+	"Connect-Protocol-Version": {},
+	// gRPC headers.
+	"Grpc-Encoding":           {},
+	"Grpc-Accept-Encoding":    {},
+	"Grpc-Timeout":            {},
+	"Grpc-Status":             {},
+	"Grpc-Message":            {},
+	"Grpc-Status-Details-Bin": {},
+}
+
+// setMetadataHeaders copies RPC metadata onto an HTTP request or response,
 // leaving the headers the REST encoding owns to the stream.
-func setResponseHeaders(dst http.Header, src *connect.Header) {
+func setMetadataHeaders(dst http.Header, src *connect.Header) {
 	for key, vals := range src.All() {
-		switch key {
-		case "Content-Type", "Content-Length", "Content-Encoding", "Transfer-Encoding", "Trailer", "Date":
-			continue
-		}
-		if strings.HasPrefix(key, "Connect-") || strings.HasPrefix(key, "Grpc-") {
+		if _, isProtocolHeader := protocolHeaders[key]; isProtocolHeader {
 			continue
 		}
 		dst[key] = vals
