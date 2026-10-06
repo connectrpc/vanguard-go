@@ -36,6 +36,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"reflect"
 	"strings"
 
@@ -44,6 +46,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/encoding"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -224,12 +227,16 @@ func makeSpec(
 // The gRPC interceptor argument is nil: interceptors registered on the
 // connect.Server run a layer above, and gRPC-style per-method
 // interceptors are not supported here.
-func unaryServerFunc(impl any, h grpc.MethodHandler) connect.ServerFunc {
-	return func(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+func unaryServerFunc(impl any, handler grpc.MethodHandler) connect.ServerFunc {
+	return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+		ctx, _, err := newGRPCContext(ctx, spec, stream)
+		if err != nil {
+			return err
+		}
 		dec := func(req any) error {
 			return stream.Receive(req)
 		}
-		resp, err := h(impl, ctx, dec, nil)
+		resp, err := handler(impl, ctx, dec, nil)
 		if err != nil {
 			return convertError(err)
 		}
@@ -240,10 +247,14 @@ func unaryServerFunc(impl any, h grpc.MethodHandler) connect.ServerFunc {
 // streamServerFunc adapts a [grpc.StreamHandler] into a
 // [connect.ServerFunc]. The gRPC stub receives a serverStreamAdapter
 // that forwards SendMsg / RecvMsg / Context onto the connect stream.
-func streamServerFunc(impl any, h grpc.StreamHandler) connect.ServerFunc {
-	return func(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-		adapter := &serverStreamAdapter{ctx: ctx, stream: stream}
-		if err := h(impl, adapter); err != nil {
+func streamServerFunc(impl any, handler grpc.StreamHandler) connect.ServerFunc {
+	return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+		ctx, transport, err := newGRPCContext(ctx, spec, stream)
+		if err != nil {
+			return err
+		}
+		adapter := &serverStreamAdapter{ctx: ctx, stream: stream, transport: transport}
+		if err := handler(impl, adapter); err != nil {
 			return convertError(err)
 		}
 		return nil
@@ -280,18 +291,122 @@ func typeNameFromURL(url string) string {
 	return url[strings.LastIndexByte(url, '/')+1:]
 }
 
+// newGRPCContext gives a gRPC handler the context grpc-go would: the
+// request headers as incoming [metadata], the caller as a [peer], and a
+// [grpc.ServerTransportStream] so [grpc.Method], [grpc.SetHeader],
+// [grpc.SendHeader] and [grpc.SetTrailer] work.
+func newGRPCContext(
+	ctx context.Context,
+	spec connect.Spec,
+	stream connect.ServerStream,
+) (context.Context, *transportStream, error) {
+	info, ok := connect.CallInfoForServerContext(ctx)
+	if !ok {
+		info = &connect.CallInfo{} // no transport to carry metadata
+	}
+	incoming, err := incomingMetadata(info.RequestHeader())
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx = metadata.NewIncomingContext(ctx, incoming)
+	if info.PeerAddr != "" {
+		ctx = peer.NewContext(ctx, &peer.Peer{Addr: peerAddr(info.PeerAddr)})
+	}
+	transport := &transportStream{method: spec.Procedure, info: info, stream: stream}
+	return grpc.NewContextWithServerTransportStream(ctx, transport), transport, nil
+}
+
+// incomingMetadata converts request headers to gRPC metadata the way
+// grpc-go does: protocol headers are dropped and -bin values decoded.
+func incomingMetadata(header *connect.Header) (metadata.MD, error) {
+	incoming := metadata.MD{}
+	for key, values := range header.All() {
+		key = strings.ToLower(key)
+		if _, reserved := reservedHeaders[key]; reserved {
+			continue
+		}
+		for _, value := range values {
+			if strings.HasSuffix(key, binaryHeaderSuffix) {
+				decoded, err := connect.DecodeBinaryHeader(value)
+				if err != nil {
+					return nil, connect.Errorf(connect.CodeInternal,
+						"malformed binary metadata %q in header %q: %s", value, key, err).WithCause(err)
+				}
+				value = string(decoded)
+			}
+			incoming.Append(key, value)
+		}
+	}
+	return incoming, nil
+}
+
+// binaryHeaderSuffix marks metadata whose values are raw bytes, sent
+// base64-encoded on the wire.
+const binaryHeaderSuffix = "-bin"
+
+// reservedHeaders are the protocol headers grpc-go keeps out of incoming
+// metadata.
+//
+//nolint:gochecknoglobals
+var reservedHeaders = map[string]struct{}{
+	"grpc-message-type": {},
+	"grpc-encoding":     {},
+	"grpc-message":      {},
+	"grpc-status":       {},
+	"grpc-timeout":      {},
+	"te":                {},
+}
+
+// peerAddr parses a [connect.CallInfo] PeerAddr. grpc-go reports a
+// *net.TCPAddr, so that is used when the address parses as one.
+func peerAddr(addr string) net.Addr {
+	if addrPort, err := netip.ParseAddrPort(addr); err == nil {
+		return net.TCPAddrFromAddrPort(addrPort)
+	}
+	return stringAddr(addr)
+}
+
+type stringAddr string
+
+func (a stringAddr) Network() string { return "unknown" }
+func (a stringAddr) String() string  { return string(a) }
+
+// transportStream implements [grpc.ServerTransportStream] on the call's
+// [connect.CallInfo]. SetHeader and SetTrailer merge metadata into the
+// response header and trailer; SendHeader merges and then flushes.
+// Unlike grpc-go, flushing twice is not an error, because
+// [connect.ServerStream.SendHeaders] is idempotent.
+type transportStream struct {
+	method string
+	info   *connect.CallInfo
+	stream connect.ServerStream
+}
+
+func (t *transportStream) Method() string { return t.method }
+
+func (t *transportStream) SetHeader(meta metadata.MD) error {
+	mergeMetadata(t.info.ResponseHeader(), meta)
+	return nil
+}
+
+func (t *transportStream) SendHeader(meta metadata.MD) error {
+	mergeMetadata(t.info.ResponseHeader(), meta)
+	return t.stream.SendHeaders()
+}
+
+func (t *transportStream) SetTrailer(meta metadata.MD) error {
+	mergeMetadata(t.info.ResponseTrailer(), meta)
+	return nil
+}
+
 // serverStreamAdapter satisfies [grpc.ServerStream] by forwarding onto
 // a [connect.ServerStream]. Generated gRPC stubs receive this in
-// place of grpc-go's *serverStream and drive it the same way.
-//
-// SetHeader and SetTrailer merge metadata into the response header and
-// trailer on the call's [connect.CallInfo] (reachable via
-// [connect.CallInfoForServerContext]); SendHeader merges and then
-// flushes. Unlike grpc-go, flushing twice is not an error, because
-// [connect.ServerStream.SendHeaders] is idempotent.
+// place of grpc-go's *serverStream and drive it the same way. Metadata
+// goes through the call's [transportStream].
 type serverStreamAdapter struct {
-	ctx    context.Context //nolint:containedctx // matches grpc-go's ServerStream contract
-	stream connect.ServerStream
+	ctx       context.Context //nolint:containedctx // matches grpc-go's ServerStream contract
+	stream    connect.ServerStream
+	transport *transportStream
 }
 
 func (s *serverStreamAdapter) Context() context.Context { return s.ctx }
@@ -305,35 +420,27 @@ func (s *serverStreamAdapter) RecvMsg(m any) error {
 }
 
 func (s *serverStreamAdapter) SetHeader(meta metadata.MD) error {
-	info, ok := connect.CallInfoForServerContext(s.ctx)
-	if !ok {
-		return connect.NewError(connect.CodeInternal,
-			"vanguardgrpc: no call info on server context")
-	}
-	mergeMetadata(info.ResponseHeader(), meta)
-	return nil
+	return s.transport.SetHeader(meta)
 }
 
 func (s *serverStreamAdapter) SendHeader(meta metadata.MD) error {
-	if err := s.SetHeader(meta); err != nil {
-		return err
-	}
-	return s.stream.SendHeaders()
+	return s.transport.SendHeader(meta)
 }
 
 func (s *serverStreamAdapter) SetTrailer(meta metadata.MD) {
-	// grpc.ServerStream gives SetTrailer no way to report failure, so a
-	// missing CallInfo can only be dropped.
-	if info, ok := connect.CallInfoForServerContext(s.ctx); ok {
-		mergeMetadata(info.ResponseTrailer(), meta)
-	}
+	_ = s.transport.SetTrailer(meta) // never fails
 }
 
 // mergeMetadata appends meta onto header, matching grpc-go's SetHeader
 // and SetTrailer, which merge with metadata set earlier in the call.
+// Values of -bin keys are raw bytes, so they are base64-encoded.
 func mergeMetadata(header *connect.Header, meta metadata.MD) {
 	for key, values := range meta {
+		binary := strings.HasSuffix(strings.ToLower(key), binaryHeaderSuffix)
 		for _, value := range values {
+			if binary {
+				value = connect.EncodeBinaryHeader([]byte(value))
+			}
 			header.Add(key, value)
 		}
 	}

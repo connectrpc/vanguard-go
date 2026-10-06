@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"testing"
 
 	"connectrpc.com/connect/v2"
@@ -28,6 +29,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -155,12 +157,51 @@ func TestConvertError(t *testing.T) {
 	})
 }
 
+func TestUnaryAdapter_GRPCContext(t *testing.T) {
+	t.Parallel()
+	server := connect.NewServer()
+	library := &metadataLibraryServer{}
+	testv1.RegisterLibraryServiceServer(NewServiceRegistrar(server), library)
+
+	info := &connect.CallInfo{PeerAddr: "192.0.2.1:8080"}
+	info.RequestHeader().Set("X-Tenant", "acme")
+	info.RequestHeader().Set("X-Token-Bin", connect.EncodeBinaryHeader([]byte{0, 1, 2}))
+	info.RequestHeader().Set("Grpc-Timeout", "1S")
+	stream := &fakeServerStream{
+		recvQueue: []proto.Message{&testv1.GetBookRequest{Name: "shelves/s/books/b"}},
+	}
+	err := server.Call(context.Background(), getBookProcedure, info, stream)
+	require.NoError(t, err)
+
+	assert.Equal(t, getBookProcedure, library.method)
+	assert.Equal(t, []string{"acme"}, library.incoming.Get("x-tenant"))
+	assert.Equal(t, []string{"\x00\x01\x02"}, library.incoming.Get("x-token-bin"))
+	assert.Empty(t, library.incoming.Get("grpc-timeout"))
+	require.NotNil(t, library.peer)
+	assert.Equal(t, "192.0.2.1:8080", library.peer.Addr.String())
+	assert.IsType(t, &net.TCPAddr{}, library.peer.Addr)
+
+	assert.Equal(t, []string{"one", "two"}, info.ResponseHeader().Values("x-header"))
+	assert.Equal(t, connect.EncodeBinaryHeader([]byte{0, 255}), info.ResponseHeader().Get("x-raw-bin"))
+	assert.Equal(t, "three", info.ResponseTrailer().Get("x-trailer"))
+
+	info = &connect.CallInfo{}
+	info.RequestHeader().Set("X-Token-Bin", "not base64!")
+	stream = &fakeServerStream{
+		recvQueue: []proto.Message{&testv1.GetBookRequest{Name: "shelves/s/books/b"}},
+	}
+	err = server.Call(context.Background(), getBookProcedure, info, stream)
+	assert.Equal(t, connect.CodeInternal, connect.CodeOf(err))
+}
+
 func TestServerStreamAdapter_Metadata(t *testing.T) {
 	t.Parallel()
 	server := connect.NewServer()
-	testv1.RegisterContentServiceServer(NewServiceRegistrar(server), &metadataContentServer{})
+	content := &metadataContentServer{}
+	testv1.RegisterContentServiceServer(NewServiceRegistrar(server), content)
 
 	info := &connect.CallInfo{}
+	info.RequestHeader().Set("X-Tenant", "acme")
 	stream := &fakeServerStream{
 		recvQueue: []proto.Message{&testv1.DownloadRequest{Filename: "f"}},
 	}
@@ -172,6 +213,7 @@ func TestServerStreamAdapter_Metadata(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	assert.Equal(t, []string{"acme"}, content.incoming.Get("x-tenant"))
 	assert.Equal(t, []string{"one", "two"}, info.ResponseHeader().Values("x-header"))
 	assert.Equal(t, "three", info.ResponseTrailer().Get("x-trailer"))
 }
@@ -251,14 +293,41 @@ func (s *fakeServerStream) Send(msg any) error {
 	return nil
 }
 
+type metadataLibraryServer struct {
+	testv1.UnimplementedLibraryServiceServer
+
+	method   string
+	incoming metadata.MD
+	peer     *peer.Peer
+}
+
+func (s *metadataLibraryServer) GetBook(ctx context.Context, req *testv1.GetBookRequest) (*testv1.Book, error) {
+	s.method, _ = grpc.Method(ctx)
+	s.incoming, _ = metadata.FromIncomingContext(ctx)
+	s.peer, _ = peer.FromContext(ctx)
+	if err := grpc.SetHeader(ctx, metadata.Pairs("x-header", "one", "x-raw-bin", "\x00\xff")); err != nil {
+		return nil, err
+	}
+	if err := grpc.SendHeader(ctx, metadata.Pairs("x-header", "two")); err != nil {
+		return nil, err
+	}
+	if err := grpc.SetTrailer(ctx, metadata.Pairs("x-trailer", "three")); err != nil {
+		return nil, err
+	}
+	return &testv1.Book{Name: req.GetName()}, nil
+}
+
 type metadataContentServer struct {
 	testv1.UnimplementedContentServiceServer
+
+	incoming metadata.MD
 }
 
 func (s *metadataContentServer) Download(
 	_ *testv1.DownloadRequest,
 	stream grpc.ServerStreamingServer[testv1.DownloadResponse],
 ) error {
+	s.incoming, _ = metadata.FromIncomingContext(stream.Context())
 	if err := stream.SetHeader(metadata.Pairs("x-header", "one")); err != nil {
 		return err
 	}
