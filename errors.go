@@ -15,6 +15,7 @@
 package vanguard
 
 import (
+	"context"
 	"errors"
 
 	"connectrpc.com/connect/v2"
@@ -30,7 +31,18 @@ func asConnectError(err error) *connect.Error {
 		}
 		return connectErr
 	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return contextError(err)
+	}
 	return connect.NewError(connect.CodeUnknown, "").WithCause(err)
+}
+
+// contextError classifies a canceled or expired context.
+func contextError(err error) *connect.Error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return connect.NewError(connect.CodeDeadlineExceeded, err.Error()).WithCause(err)
+	}
+	return connect.NewError(connect.CodeCanceled, err.Error()).WithCause(err)
 }
 
 // wrapError classifies err under code with a message prefix. An error that

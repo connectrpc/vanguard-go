@@ -50,11 +50,12 @@ func TestMount_RESTRequests(t *testing.T) {
 	t.Parallel()
 
 	type input struct {
-		method string
-		path   string
-		values url.Values
-		body   proto.Message
-		meta   http.Header
+		method        string
+		path          string
+		values        url.Values
+		body          proto.Message
+		meta          http.Header
+		unknownLength bool
 	}
 	type output struct {
 		code    int
@@ -214,6 +215,124 @@ func TestMount_RESTRequests(t *testing.T) {
 			body: &status.Status{
 				Code:    int32(connect.CodeUnauthenticated + 1),
 				Message: "beyond the known codes",
+			},
+		},
+	}, {
+		name: "GetBook-SendHeadersFirst",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+				}},
+				{sendHeaders: true},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/1"},
+			meta: http.Header{
+				"Content-Type": []string{"application/json"},
+			},
+		},
+	}, {
+		name: "GetBook-UnexpectedBody",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+			body:   &testv1.GetBookRequest{Name: "ignored"},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+					err: connect.NewError(connect.CodeInvalidArgument, ""),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "request should have no body",
+			},
+		},
+	}, {
+		name: "GetBook-UnknownLengthEmpty",
+		input: input{
+			method:        http.MethodGet,
+			path:          "/v1/shelves/1/books/1",
+			unknownLength: true,
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/1"},
+		},
+	}, {
+		name: "GetBook-UnknownLengthBody",
+		input: input{
+			method:        http.MethodGet,
+			path:          "/v1/shelves/1/books/1",
+			body:          &testv1.GetBookRequest{Name: "ignored"},
+			unknownLength: true,
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+					err: connect.NewError(connect.CodeInvalidArgument, ""),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "request should have no body",
+			},
+		},
+	}, {
+		name: "GetBook-DeadlineExceeded",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+				}},
+				{out: &testMsgOut{
+					err: fmt.Errorf("lookup: %w", context.DeadlineExceeded),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusGatewayTimeout,
+			body: &status.Status{
+				Code:    int32(connect.CodeDeadlineExceeded),
+				Message: "lookup: context deadline exceeded",
 			},
 		},
 	}, {
@@ -540,7 +659,8 @@ func TestMount_RESTRequests(t *testing.T) {
 		output: output{
 			code: http.StatusOK,
 			meta: http.Header{
-				"Message": []string{"world"},
+				"Message":      []string{"world"},
+				"Content-Type": []string{"application/octet-stream"},
 			},
 		},
 	}, {
@@ -622,6 +742,9 @@ func TestMount_RESTRequests(t *testing.T) {
 			body = bytes.NewReader(data)
 		}
 		req := httptest.NewRequestWithContext(t.Context(), input.method, input.path, body)
+		if input.unknownLength {
+			req.ContentLength = -1
+		}
 		maps.Copy(req.Header, input.meta)
 		if compress {
 			if body != nil {
@@ -891,8 +1014,9 @@ type testStream struct {
 }
 
 type testMsg struct {
-	in  *testMsgIn
-	out *testMsgOut
+	in          *testMsgIn
+	out         *testMsgOut
+	sendHeaders bool
 }
 
 type testMsgIn struct {
@@ -902,7 +1026,7 @@ type testMsgIn struct {
 
 type testMsgOut struct {
 	msg proto.Message
-	err *connect.Error
+	err error
 }
 
 type testScript struct {
@@ -961,6 +1085,10 @@ func (s *testScripts) serve(ctx context.Context, spec connect.Spec, stream conne
 			if diff := cmp.Diff(msg.in.msg, got, protocmp.Transform()); diff != "" {
 				assert.Fail(script.T, "message didn't match", diff)
 				return fmt.Errorf("message didn't match: %s", diff)
+			}
+		case msg.sendHeaders:
+			if err := stream.SendHeaders(); err != nil {
+				return err
 			}
 		case msg.out != nil && msg.out.err != nil:
 			return msg.out.err

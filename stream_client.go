@@ -434,14 +434,6 @@ func (s *clientStream) doError(err error) error {
 	return connect.Errorf(connect.CodeUnavailable, "http do: %s", err).WithCause(err)
 }
 
-// contextError classifies a canceled or expired stream context.
-func contextError(err error) error {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return connect.NewError(connect.CodeDeadlineExceeded, err.Error()).WithCause(err)
-	}
-	return connect.NewError(connect.CodeCanceled, err.Error()).WithCause(err)
-}
-
 func joinPath(base, suffix string) string {
 	switch {
 	case base == "":

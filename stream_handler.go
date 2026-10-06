@@ -135,7 +135,7 @@ func (s *serverStream) Receive(msg any) error {
 // prepares the request body: decompressed, then capped at maxReadBytes.
 func (s *serverStream) openBody() error {
 	if s.target.requestBodyFields == nil {
-		if s.request.ContentLength != 0 {
+		if hasBody(s.request) {
 			return connect.Errorf(connect.CodeInvalidArgument, "request should have no body")
 		}
 		s.body = http.NoBody
@@ -154,6 +154,17 @@ func (s *serverStream) openBody() error {
 	}
 	s.body = body
 	return nil
+}
+
+// hasBody reports whether request carries body bytes. An unknown length
+// (chunked, or HTTP/2 without END_STREAM) costs a one-byte read.
+func hasBody(request *http.Request) bool {
+	if request.ContentLength >= 0 {
+		return request.ContentLength > 0
+	}
+	var probe [1]byte
+	n, _ := io.ReadFull(request.Body, probe[:])
+	return n > 0
 }
 
 func (s *serverStream) decodeURL(msg proto.Message) error {
@@ -223,6 +234,15 @@ func (s *serverStream) flushHeaders(compress bool) error {
 		return nil
 	}
 	setMetadataHeaders(s.response.Header(), s.info.ResponseHeader())
+	if s.response.Header().Get("Content-Type") == "" {
+		// Headers committed before the first Send. An HttpBody's type
+		// comes from the message, so it falls back like Send's default.
+		contentType := "application/" + s.codec.Name()
+		if isHTTPBodyResponse(s.target, s.method.descriptor.Output()) {
+			contentType = "application/octet-stream"
+		}
+		s.response.Header().Set("Content-Type", contentType)
+	}
 	if compress {
 		writer, err := s.responseCompressor.Compress(s.response)
 		if err != nil {
