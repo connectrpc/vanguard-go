@@ -21,6 +21,8 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -224,4 +226,23 @@ func walkBodyFields(
 		leaf = field
 	}
 	return host, leaf, nil
+}
+
+func restDecodeTimeout(timeout string) (time.Duration, error) {
+	if timeout == "" {
+		return 0, nil
+	}
+	val, err := strconv.ParseFloat(timeout, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid timeout %q: %w", timeout, err)
+	}
+	return time.Duration(val * float64(time.Second)), nil
+}
+
+// Encode timeout as a float in seconds for X-Server-Timeout header.
+func restEncodeTimeout(timeout time.Duration) string {
+	if timeout == 0 {
+		return ""
+	}
+	return strconv.FormatFloat(timeout.Seconds(), 'f', -1, 64)
 }

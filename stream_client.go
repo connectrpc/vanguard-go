@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect/v2"
 	"google.golang.org/protobuf/proto"
@@ -216,6 +217,12 @@ func (s *clientStream) newRequest(body io.Reader) (*http.Request, error) {
 	}
 	if info, ok := connect.CallInfoForClientContext(s.ctx); ok {
 		setMetadataHeaders(req.Header, info.RequestHeader())
+	}
+	req.Header.Del("X-Server-Timeout") // derived from the deadline, never from metadata
+	if deadline, ok := s.ctx.Deadline(); ok {
+		if timeout := time.Until(deadline); timeout > 0 {
+			req.Header.Set("X-Server-Timeout", restEncodeTimeout(timeout))
+		}
 	}
 	if s.contentType != "" {
 		req.Header.Set("Content-Type", s.contentType)

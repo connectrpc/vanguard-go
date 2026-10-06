@@ -39,6 +39,7 @@ build: generate ## Build all packages
 .PHONY: generate
 generate: $(BIN)/buf $(BIN)/license-header $(BIN)/protoc-gen-connect-go $(BIN)/protoc-gen-go $(BIN)/protoc-gen-go-grpc ## Regenerate code and licenses
 	$(BIN)/buf generate internal/proto
+	$(GO) mod tidy
 	@# We want to operate on a list of modified and new files, excluding
 	@# deleted and ignored files. git-ls-files can't do this alone. comm -23 takes
 	@# two files and prints the union, dropping lines common to both (-3) and

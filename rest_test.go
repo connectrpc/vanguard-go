@@ -312,6 +312,25 @@ func TestMount_RESTRequests(t *testing.T) {
 			},
 		},
 	}, {
+		name: "GetBook-InvalidTimeout",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+			meta: http.Header{
+				"X-Server-Timeout": []string{"soon"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: `invalid timeout "soon": strconv.ParseFloat: parsing "soon": invalid syntax`,
+			},
+		},
+	}, {
 		name: "GetBook-DeadlineExceeded",
 		input: input{
 			method: http.MethodGet,

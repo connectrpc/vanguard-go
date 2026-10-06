@@ -87,7 +87,7 @@ func forward(
 	spec connect.Spec,
 	requestType, responseType protoreflect.MessageType,
 	downstream connect.ServerStream,
-) error {
+) (err error) {
 	info, _ := connect.CallInfoForServerContext(ctx)
 	upstreamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -99,7 +99,7 @@ func forward(
 	if err != nil {
 		return forwardError(err)
 	}
-	defer upstream.Close()
+	defer func() { errors.Join(err, upstream.Close()) }()
 
 	sent := make(chan error, 1)
 	go func() {

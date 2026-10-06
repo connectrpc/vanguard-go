@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connectgzip"
@@ -39,7 +40,9 @@ func TestTransport_Unary(t *testing.T) {
 	t.Parallel()
 
 	spec := methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetBook"))
-	echo := func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var serverDeadline time.Time
+	echo := func(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+		serverDeadline, _ = ctx.Deadline()
 		req := &testv1.GetBookRequest{}
 		if err := stream.Receive(req); err != nil {
 			return err
@@ -51,7 +54,10 @@ func TestTransport_Unary(t *testing.T) {
 
 	restTransport, err := NewTransport(srv.Client(), srv.URL)
 	require.NoError(t, err)
-	stream, err := restTransport.NewClientStream(t.Context(), spec)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	t.Cleanup(cancel)
+	clientDeadline, _ := ctx.Deadline()
+	stream, err := restTransport.NewClientStream(ctx, spec)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = stream.Close() })
 	require.NoError(t, stream.Send(&testv1.GetBookRequest{Name: "shelves/s/books/b"}))
@@ -61,6 +67,7 @@ func TestTransport_Unary(t *testing.T) {
 	assert.Equal(t, "shelves/s/books/b", got.GetName())
 	assert.Equal(t, "round-trip", got.GetTitle())
 	require.ErrorIs(t, stream.Receive(&got), io.EOF)
+	assert.WithinDuration(t, clientDeadline, serverDeadline, time.Second, "X-Server-Timeout carries the deadline")
 
 	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	t.Cleanup(empty.Close)

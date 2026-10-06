@@ -272,6 +272,16 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 		httpWriteError(responseWriter, err)
 		return
 	}
+	if timeoutStr := request.Header.Get("X-Server-Timeout"); timeoutStr != "" {
+		timeout, err := restDecodeTimeout(timeoutStr)
+		if err != nil {
+			httpWriteError(responseWriter, connect.NewError(connect.CodeInvalidArgument, err.Error()))
+			return
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
 	// Build a CallInfo from the request. Server.Call attaches it to ctx
 	// so handlers and interceptors can read it via
