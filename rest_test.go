@@ -193,6 +193,30 @@ func TestMount_RESTRequests(t *testing.T) {
 			},
 		},
 	}, {
+		name: "GetBook-UnknownCode",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+				}},
+				{out: &testMsgOut{
+					err: connect.NewError(connect.CodeUnauthenticated+1, "beyond the known codes"),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusInternalServerError,
+			body: &status.Status{
+				Code:    int32(connect.CodeUnauthenticated + 1),
+				Message: "beyond the known codes",
+			},
+		},
+	}, {
 		name: "GetBook-NoResponse",
 		input: input{
 			method: http.MethodGet,
@@ -706,6 +730,12 @@ func TestMount_RejectsUnsupportedStreamType(t *testing.T) {
 		Body:     "*",
 	}))
 	require.ErrorContains(t, err, "stream type bidi not supported")
+
+	err = Mount(http.NewServeMux(), server, WithRules(&annotations.HttpRule{
+		Selector: "Download",
+		Pattern:  &annotations.HttpRule_Get{Get: "/download"},
+	}))
+	require.ErrorContains(t, err, `selector "Download" is not a fully-qualified method name`)
 
 	err = Mount(http.NewServeMux(), server, WithRules(&annotations.HttpRule{
 		Selector: "vanguard.test.v1.ContentService.Download",

@@ -17,6 +17,7 @@ package vanguard
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connectproto"
@@ -127,7 +128,10 @@ func resolveMethods(
 		if selector == "" {
 			return nil, nil, errors.New("WithRules: rule has no selector")
 		}
-		procedure := procedureFromSelector(selector)
+		procedure, ok := procedureFromSelector(selector)
+		if !ok {
+			return nil, nil, fmt.Errorf("WithRules: selector %q is not a fully-qualified method name", selector)
+		}
 		method, ok := methodsByProcedure[procedure]
 		if !ok {
 			return nil, nil, fmt.Errorf("WithRules: selector %q does not match a registered procedure", selector)
@@ -151,18 +155,12 @@ func resolveMethods(
 
 // procedureFromSelector converts a google.api.http selector
 // ("foo.bar.Service.Method") to a connect procedure
-// ("/foo.bar.Service/Method"). The selector is the fully-qualified
-// method name; the last dot separates service from method.
-func procedureFromSelector(selector string) string {
-	last := -1
-	for i := len(selector) - 1; i >= 0; i-- {
-		if selector[i] == '.' {
-			last = i
-			break
-		}
+// ("/foo.bar.Service/Method"). The selector is the fully-qualified method
+// name, the last dot separates service from method.
+func procedureFromSelector(selector string) (string, bool) {
+	last := strings.LastIndexByte(selector, '.')
+	if last <= 0 || last == len(selector)-1 {
+		return "", false
 	}
-	if last < 0 {
-		return "/" + selector
-	}
-	return "/" + selector[:last] + "/" + selector[last+1:]
+	return "/" + selector[:last] + "/" + selector[last+1:], true
 }

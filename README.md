@@ -113,7 +113,9 @@ pingv1grpc.RegisterPingServiceServer(registrar, &pingServer{})
 
 mux := http.NewServeMux()
 connecthttp.Mount(mux, server) // Connect, gRPC, gRPC-Web
-vanguard.Mount(mux, server)    // google.api.http
+if err := vanguard.Mount(mux, server); err != nil { // google.api.http
+	log.Fatal(err)
+}
 ```
 
 ## Status: Alpha

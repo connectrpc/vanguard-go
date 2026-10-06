@@ -392,7 +392,7 @@ func (t *transport) resolveMethod(spec connect.Spec) (*method, error) {
 	if !ok {
 		// Allow rule lookup via WithRules selectors.
 		for _, external := range t.options.rules {
-			if procedureFromSelector(external.GetSelector()) == spec.Procedure {
+			if procedure, valid := procedureFromSelector(external.GetSelector()); valid && procedure == spec.Procedure {
 				rule = external
 				ok = true
 				break
