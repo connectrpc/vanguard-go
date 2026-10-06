@@ -305,14 +305,13 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 	if err == nil && !stream.sent && method.spec.StreamType&connect.StreamTypeServer == 0 {
 		err = connect.NewError(connect.CodeInternal, "handler sent no response message")
 	}
-	// If the stream has already committed response headers (the handler
-	// called Send before returning the error), the HTTP status is fixed
-	// and we can't insert a JSON error body; drop the error. Otherwise
-	// write the google.rpc.Status body with the mapped HTTP status,
-	// merging response metadata the handler set on info.
-	if err == nil || stream.committed() {
+	if err == nil {
 		_ = stream.close()
 		return
+	}
+	if stream.committed() {
+		// The status line is sent, so aborting is the only way to report the error.
+		panic(http.ErrAbortHandler) //nolint:forbidigo // net/http aborts the response without logging
 	}
 	setMetadataHeaders(responseWriter.Header(), info.ResponseHeader())
 	httpWriteError(responseWriter, err)

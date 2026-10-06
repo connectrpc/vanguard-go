@@ -31,9 +31,8 @@ import (
 //
 // Terminal-error encoding is owned by the dispatcher, not the stream.
 // When [connect.Server.Call] returns an error, restHandler.ServeHTTP
-// inspects committed() and either writes a google.rpc.Status body
-// (uncommitted) or drops the error (the status line is already on the
-// wire).
+// writes a google.rpc.Status body, or aborts the response once
+// committed() is true.
 type serverStream struct {
 	method  *method
 	target  *routeTarget

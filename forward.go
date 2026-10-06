@@ -99,7 +99,7 @@ func forward(
 	if err != nil {
 		return forwardError(err)
 	}
-	defer func() { errors.Join(err, upstream.Close()) }()
+	defer func() { err = errors.Join(err, upstream.Close()) }()
 
 	sent := make(chan error, 1)
 	go func() {

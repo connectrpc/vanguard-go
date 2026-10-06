@@ -62,6 +62,7 @@ func TestMount_RESTRequests(t *testing.T) {
 		body    any
 		rawBody string
 		meta    http.Header
+		aborted bool
 	}
 	type testRequest struct {
 		name   string
@@ -162,8 +163,8 @@ func TestMount_RESTRequests(t *testing.T) {
 			},
 		},
 		output: output{
-			code: http.StatusOK,
-			body: &testv1.Book{Name: "shelves/1/books/1"},
+			code:    http.StatusOK,
+			aborted: true,
 		},
 	}, {
 		name: "GetBook-Error",
@@ -796,10 +797,18 @@ func TestMount_RESTRequests(t *testing.T) {
 					req := buildRequest(t, testCase.input, compress)
 					req.Header.Set("Test", t.Name())
 					rsp := httptest.NewRecorder()
-					mux.ServeHTTP(rsp, req)
+					recovered := serveRecovered(mux, rsp, req)
+					recoveredErr, _ := recovered.(error)
+					aborted := errors.Is(recoveredErr, http.ErrAbortHandler)
+					if !aborted {
+						require.Nil(t, recovered, "handler panicked")
+					}
 
 					want := testCase.output
 					if !assert.Equal(t, want.code, rsp.Code, "status code: %s", rsp.Body.String()) {
+						return
+					}
+					if assert.Equal(t, want.aborted, aborted, "aborted") && aborted {
 						return
 					}
 					for key, vals := range want.meta {
@@ -958,6 +967,57 @@ func TestMount_CompressionOptions(t *testing.T) {
 	assert.Empty(t, rec.Header().Get("Content-Encoding"))
 	rec = post(bookEchoHandler(t, WithCompressors()), "gzip")
 	assert.Equal(t, http.StatusNotImplemented, rec.Code)
+}
+
+func TestMount_AbortsAfterCommit(t *testing.T) {
+	t.Parallel()
+
+	server := connect.NewServer()
+	server.Register(connect.Method{
+		Spec: methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetBook")),
+		Handler: func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+			if err := stream.Receive(&testv1.GetBookRequest{}); err != nil {
+				return err
+			}
+			if err := stream.Send(&testv1.Book{Name: "shelves/1/books/1"}); err != nil {
+				return err
+			}
+			return connect.NewError(connect.CodeInternal, "late failure")
+		},
+	}, connect.Method{
+		Spec: methodSpec(methodDesc(t, "vanguard.test.v1.ContentService.Download")),
+		Handler: func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+			if err := stream.Receive(&testv1.DownloadRequest{}); err != nil {
+				return err
+			}
+			if err := stream.Send(&testv1.DownloadResponse{File: &httpbody.HttpBody{Data: []byte("partial")}}); err != nil {
+				return err
+			}
+			return connect.NewError(connect.CodeInternal, "late failure")
+		},
+	})
+	mux := http.NewServeMux()
+	require.NoError(t, Mount(mux, server))
+	http1 := httptest.NewServer(mux)
+	t.Cleanup(http1.Close)
+	servers := map[string]*httptest.Server{"http1": http1, "http2": newHTTP2Server(t, mux)}
+
+	for name, srv := range servers {
+		for _, path := range []string{"/v1/shelves/1/books/1", "/message.txt:download"} {
+			t.Run(name+path, func(t *testing.T) {
+				t.Parallel()
+				req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+path, nil)
+				require.NoError(t, err)
+				rsp, err := srv.Client().Do(req)
+				if err != nil {
+					return
+				}
+				defer rsp.Body.Close()
+				_, err = io.ReadAll(rsp.Body)
+				require.Error(t, err, "client must not see a complete response")
+			})
+		}
+	}
 }
 
 func TestMount_CallInfoEncoding(t *testing.T) {
@@ -1182,4 +1242,10 @@ func gunzipBytes(t *testing.T, data []byte) []byte {
 	out, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	return out
+}
+
+func serveRecovered(handler http.Handler, responseWriter http.ResponseWriter, request *http.Request) (recovered any) {
+	defer func() { recovered = recover() }()
+	handler.ServeHTTP(responseWriter, request)
+	return nil
 }
