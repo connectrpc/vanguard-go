@@ -220,6 +220,11 @@ func (s *serverStream) Send(msg any) error {
 	if !streaming {
 		return nil
 	}
+	if flusher, ok := s.compressWriter.(interface{ Flush() error }); ok {
+		if err := flusher.Flush(); err != nil {
+			return connect.Errorf(connect.CodeInternal, "flush compressor: %s", err).WithCause(err)
+		}
+	}
 	if err := http.NewResponseController(s.response).Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
 		return err
 	}

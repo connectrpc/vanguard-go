@@ -61,7 +61,7 @@ type clientStream struct {
 	responded bool          // guarded by mu
 	closed    bool          // guarded by mu
 	response  *http.Response
-	rawBody   io.Closer // response body before decoding; safe to close from Close
+	rawBody   io.Closer // undecoded response body, closed by Close
 	dispatch  error
 }
 
@@ -282,8 +282,7 @@ func (s *clientStream) finishSend() error {
 	return nil
 }
 
-// respond publishes the outcome of the request to Receive. Only the first
-// outcome is kept; a later response is closed.
+// respond publishes the first outcome of the request to Receive.
 func (s *clientStream) respond(resp *http.Response, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

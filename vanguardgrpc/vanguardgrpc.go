@@ -372,10 +372,7 @@ func (a stringAddr) Network() string { return "unknown" }
 func (a stringAddr) String() string  { return string(a) }
 
 // transportStream implements [grpc.ServerTransportStream] on the call's
-// [connect.CallInfo]. SetHeader and SetTrailer merge metadata into the
-// response header and trailer; SendHeader merges and then flushes.
-// Unlike grpc-go, flushing twice is not an error, because
-// [connect.ServerStream.SendHeaders] is idempotent.
+// [connect.CallInfo].
 type transportStream struct {
 	method string
 	info   *connect.CallInfo
