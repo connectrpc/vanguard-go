@@ -31,6 +31,7 @@ import (
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/vanguard"
 	v2 "connectrpc.com/vanguard/internal/gen/io/swagger/petstore/v2"
+	"connectrpc.com/vanguard/internal/gen/io/swagger/petstore/v2/petstorev2connect"
 )
 
 func main() {
@@ -50,7 +51,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("build transport: %w", err)
 	}
-	client := NewPetServiceClient(transport)
+	client := petstorev2connect.NewPetServiceClient(connect.NewClient(transport))
 
 	// Find a handful of available pets. FindPetsByStatus is GET-shaped
 	// with status=available as a query parameter.
