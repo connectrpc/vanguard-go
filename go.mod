@@ -3,7 +3,7 @@ module connectrpc.com/vanguard
 go 1.26.0
 
 require (
-	connectrpc.com/connect/v2 v2.0.0-alpha.1
+	connectrpc.com/connect/v2 v2.0.0-rc.1
 	github.com/google/go-cmp v0.7.0
 	github.com/stretchr/testify v1.12.1
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa
