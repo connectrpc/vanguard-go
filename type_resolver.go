@@ -15,23 +15,13 @@
 package vanguard
 
 import (
+	"connectrpc.com/connect/v2/connectproto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-// TypeResolver can resolve message and extension types and is used to instantiate
-// messages as needed for the middleware to serialize/de-serialize request and
-// response payloads.
-//
-// Implementations of this interface should be comparable, so they can be used as
-// map keys. Typical implementations are pointers to structs, which are suitable.
-type TypeResolver interface {
-	protoregistry.MessageTypeResolver
-	protoregistry.ExtensionTypeResolver
-}
-
-type fallbackResolver []TypeResolver
+type fallbackResolver []connectproto.TypeResolver
 
 func (f fallbackResolver) FindMessageByName(message protoreflect.FullName) (protoreflect.MessageType, error) {
 	var lastErr error
@@ -93,14 +83,14 @@ func (f fallbackResolver) FindExtensionByNumber(message protoreflect.FullName, f
 	return nil, lastErr
 }
 
-func resolverForService(service protoreflect.ServiceDescriptor) TypeResolver {
+func resolverForService(service protoreflect.ServiceDescriptor) connectproto.TypeResolver {
 	if canUseGlobalTypes(service) {
 		return protoregistry.GlobalTypes
 	}
 	return resolverForFile(service.ParentFile())
 }
 
-func resolverForFile(file protoreflect.FileDescriptor) TypeResolver {
+func resolverForFile(file protoreflect.FileDescriptor) connectproto.TypeResolver {
 	if file == nil {
 		// Can't create a bespoke resolver for this file.
 		return protoregistry.GlobalTypes

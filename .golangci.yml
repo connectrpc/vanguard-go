@@ -4,10 +4,12 @@ linters:
   disable:
     - cyclop
     - depguard
-    - exhaustruct_v5 # unconfigured v5 variant; exhaustruct below carries the include filter
+    - exhaustruct # deprecated in v2.13.0
+    - exhaustruct_v5
     - funcorder # TODO: re-enable
     - funlen
     - gocognit
+    - gomodguard # deprecated in v2.12.0
     - gosmopolitan
     - inamedparam
     - ireturn
@@ -25,9 +27,6 @@ linters:
   settings:
     errcheck:
       check-type-assertions: true
-    exhaustruct:
-      include:
-        - github\.com/bufbuild/vanguard\..*[cC]onfig
     forbidigo:
       forbid:
         - pattern: ^fmt\.Print

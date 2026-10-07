@@ -16,122 +16,57 @@ package vanguard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 
-	"google.golang.org/protobuf/encoding/protojson"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-// Codec is a message encoding format. It handles unmarshalling
-// messages from bytes and back.
-type Codec interface {
-	// Name returns the name of this codec. This is used in content-type
-	// strings to indicate this codec in the various RPC protocols.
-	Name() string
-	// MarshalAppend marshals the given message to bytes, appended to the
-	// given base byte slice. The given slice may be empty, but its
-	// capacity should be used when marshalling to bytes to reduce
-	// additional allocations.
-	MarshalAppend(base []byte, msg proto.Message) ([]byte, error)
-	// Unmarshal unmarshals the given data into the given target message.
-	Unmarshal(data []byte, msg proto.Message) error
-}
-
-// StableCodec is an encoding format that can produce stable, deterministic
-// output when marshalling data. This stable form is the result of the
-// MarshalAppendStable method. So the codec's MarshalAppend method is
-// free to produce unstable/non-deterministic output, if useful for
-// improved performance. The performance penalty of stable output will
-// only be taken when necessary.
-//
-// This is used to encode messages that end up in the URL query string,
-// for the Connect protocol when unary methods use the HTTP GET method.
-// If the codec in use does not implement StableCodec then HTTP GET
-// methods will not be used; a Transcoder will send all unary RPCs that use the
-// Connect protocol and that codec as POST requests.
-type StableCodec interface {
-	Codec
-
-	// MarshalAppendStable is the same as MarshalAppend except that the
-	// bytes produced must be deterministic and stable. Ideally, the
-	// produced bytes represent a *canonical* encoding. But this is not
-	// required as many codecs (including binary Protobuf and JSON) do
-	// not have a well-defined canonical encoding format.
-	MarshalAppendStable(b []byte, msg proto.Message) ([]byte, error)
-	// IsBinary returns true for non-text formats. This is used to decide
-	// whether the message query string parameter should be base64-encoded.
-	IsBinary() bool
-}
-
-// RESTCodec is a Codec with additional methods for marshalling and unmarshalling
-// individual fields of a message. This is necessary to support query string
-// variables and request and response bodies whose value is a specific field, not
-// an entire message. The extra methods are only used by the REST protocol.
+// RESTCodec extends [connect.Codec] with methods for marshaling and
+// unmarshaling individual message fields. This supports query string variables
+// and body mappings that target specific fields rather than the entire message.
+// These extra methods are only used by the REST protocol.
 type RESTCodec interface {
-	Codec
+	connect.Codec
 
 	// MarshalAppendField marshals just the given field of the given message to
 	// bytes, and appends it to the given base byte slice.
-	MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
+	MarshalAppendField(ctx context.Context, base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error)
 	// UnmarshalField unmarshals the given data into the given field of the given
 	// message.
-	UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
+	UnmarshalField(ctx context.Context, data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error
 }
 
-// JSONCodec implements [Codec], [StableCodec], and [RESTCodec] for the JSON
-// format. It uses the [protojson] package for its implementation.
+// JSONCodec implements [connect.Codec], [connect.StableCodec], and
+// [RESTCodec] for the JSON format. It embeds [connectproto.JSONCodec] for its
+// implementation.
 type JSONCodec struct {
-	MarshalOptions   protojson.MarshalOptions
-	UnmarshalOptions protojson.UnmarshalOptions
+	connectproto.JSONCodec
 }
 
-var _ StableCodec = JSONCodec{}
-var _ RESTCodec = JSONCodec{}
+var _ connect.StableCodec = (*JSONCodec)(nil)
+var _ RESTCodec = (*JSONCodec)(nil)
 
-// NewJSONCodec is the default codec factory used for the codec named
-// "json". The given resolver is used to unmarshal extensions and also to
-// marshal and unmarshal instances of google.protobuf.Any.
+// NewJSONCodec is the default codec factory for the "json" codec. The provided
+// resolver is used to unmarshal extensions and to marshal/unmarshal instances
+// of google.protobuf.Any.
 //
-// By default, the returned codec is configured to emit unpopulated fields
-// when marshalling and to discard unknown fields when unmarshalling.
-func NewJSONCodec(res TypeResolver) *JSONCodec {
-	return &JSONCodec{
-		MarshalOptions:   protojson.MarshalOptions{Resolver: res, EmitUnpopulated: true},
-		UnmarshalOptions: protojson.UnmarshalOptions{Resolver: res, DiscardUnknown: true},
-	}
-}
-
-// Name returns "json". Implements [Codec].
-func (j JSONCodec) Name() string {
-	return CodecJSON
-}
-
-// IsBinary returns false, indicating that JSON is a text format. Implements
-// [StableCodec].
-func (j JSONCodec) IsBinary() bool {
-	return false
-}
-
-// MarshalAppend implements [Codec].
-func (j JSONCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
-	return j.MarshalOptions.MarshalAppend(base, msg)
-}
-
-// MarshalAppendStable implements [StableCodec].
-func (j JSONCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
-	data, err := j.MarshalOptions.MarshalAppend(base, msg)
-	if err != nil {
-		return nil, err
-	}
-	return jsonStabilize(data)
+// By default, the returned codec emits unpopulated fields when marshaling and
+// discards unknown fields when unmarshaling.
+func NewJSONCodec(res connectproto.TypeResolver) *JSONCodec {
+	codec := connectproto.NewJSONCodec(connectproto.WithTypeResolver(res))
+	codec.MarshalOptions.EmitUnpopulated = true
+	return &JSONCodec{JSONCodec: *codec}
 }
 
 // MarshalAppendField implements [RESTCodec].
-func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
+func (j *JSONCodec) MarshalAppendField(_ context.Context, base []byte, msg proto.Message, field protoreflect.FieldDescriptor) ([]byte, error) {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
-		return j.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
+		return j.MarshalOptions.MarshalAppend(base, msg.ProtoReflect().Get(field).Message().Interface())
 	}
 	opts := j.MarshalOptions // copy marshal options, so we might modify them
 	msgReflect := msg.ProtoReflect()
@@ -188,9 +123,9 @@ func (j JSONCodec) MarshalAppendField(base []byte, msg proto.Message, field prot
 }
 
 // UnmarshalField implements [RESTCodec].
-func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
+func (j *JSONCodec) UnmarshalField(_ context.Context, data []byte, msg proto.Message, field protoreflect.FieldDescriptor) error {
 	if field.Message() != nil && field.Cardinality() != protoreflect.Repeated {
-		return j.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
+		return j.UnmarshalOptions.Unmarshal(data, msg.ProtoReflect().Mutable(field).Message().Interface())
 	}
 	// It would be nice if we could weave a bufferPool to here...
 	fieldName := j.fieldName(field)
@@ -205,15 +140,10 @@ func (j JSONCodec) UnmarshalField(data []byte, msg proto.Message, field protoref
 	// We could possibly manually perform the unmarshaling, but that is
 	// a decent bit of protojson to reproduce (lot of new code to test
 	// and to maintain) and risks inadvertently diverging from protojson.
-	return j.Unmarshal(buf.Bytes(), msg)
+	return j.UnmarshalOptions.Unmarshal(buf.Bytes(), msg)
 }
 
-// Unmarshal implements [Codec].
-func (j JSONCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return j.UnmarshalOptions.Unmarshal(bytes, msg)
-}
-
-func (j JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
+func (j *JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
 	if !j.MarshalOptions.UseProtoNames {
 		return field.JSONName()
 	}
@@ -222,70 +152,4 @@ func (j JSONCodec) fieldName(field protoreflect.FieldDescriptor) string {
 		return "[" + string(field.FullName()) + "]"
 	}
 	return string(field.Name())
-}
-
-// ProtoCodec implements [Codec] and [StableCodec] for the binary Protobuf
-// format. It uses the [proto] package for its implementation.
-type ProtoCodec struct {
-	unmarshal proto.UnmarshalOptions
-}
-
-var _ StableCodec = (*ProtoCodec)(nil)
-
-// NewProtoCodec is the default codec factory used for the codec name "proto".
-// The given resolver is used to unmarshal extensions.
-func NewProtoCodec(res TypeResolver) *ProtoCodec {
-	return &ProtoCodec{
-		unmarshal: proto.UnmarshalOptions{Resolver: res},
-	}
-}
-
-// Name returns "proto". Implements [Codec].
-func (p *ProtoCodec) Name() string {
-	return CodecProto
-}
-
-// IsBinary returns true, indicating that Protobuf is a binary format. Implements
-// [StableCodec].
-func (p *ProtoCodec) IsBinary() bool {
-	return true
-}
-
-// MarshalAppend implements [Codec].
-func (p *ProtoCodec) MarshalAppend(base []byte, msg proto.Message) ([]byte, error) {
-	return proto.MarshalOptions{}.MarshalAppend(base, msg)
-}
-
-// MarshalAppendStable implements [StableCodec].
-func (p *ProtoCodec) MarshalAppendStable(base []byte, msg proto.Message) ([]byte, error) {
-	return proto.MarshalOptions{Deterministic: true}.MarshalAppend(base, msg)
-}
-
-// Unmarshal implements [Codec].
-func (p *ProtoCodec) Unmarshal(bytes []byte, msg proto.Message) error {
-	return p.unmarshal.Unmarshal(bytes, msg)
-}
-
-func jsonStabilize(data []byte) ([]byte, error) {
-	// Because json.Compact only removes whitespace, never elongating data, it is
-	// safe to use the same backing slice as source and destination. This is safe
-	// for the same reason that copy is safe even when the two slices overlap.
-	buf := bytes.NewBuffer(data[:0])
-	if err := json.Compact(buf, data); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-type codecMap map[string]func(TypeResolver) Codec
-
-func (m codecMap) get(name string, resolver TypeResolver) Codec {
-	if m == nil {
-		return nil
-	}
-	codecFn, ok := m[name]
-	if !ok {
-		return nil
-	}
-	return codecFn(resolver)
 }

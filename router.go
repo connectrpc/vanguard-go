@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strings"
 
+	"connectrpc.com/connect/v2"
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -44,25 +45,25 @@ type routeTrie struct {
 // HTTP rule. Only the rule itself is added. If the rule indicates additional
 // bindings, they are ignored. To add routes for all bindings, callers must
 // invoke this method for each rule.
-func (t *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (*routeTarget, error) {
-	var method, template string
+func (t *routeTrie) addRoute(method *method, rule *annotations.HttpRule) (*routeTarget, error) {
+	var httpMethod, template string
 	switch pattern := rule.GetPattern().(type) {
 	case *annotations.HttpRule_Get:
-		method, template = http.MethodGet, pattern.Get
+		httpMethod, template = http.MethodGet, pattern.Get
 	case *annotations.HttpRule_Put:
-		method, template = http.MethodPut, pattern.Put
+		httpMethod, template = http.MethodPut, pattern.Put
 	case *annotations.HttpRule_Post:
-		method, template = http.MethodPost, pattern.Post
+		httpMethod, template = http.MethodPost, pattern.Post
 	case *annotations.HttpRule_Delete:
-		method, template = http.MethodDelete, pattern.Delete
+		httpMethod, template = http.MethodDelete, pattern.Delete
 	case *annotations.HttpRule_Patch:
-		method, template = http.MethodPatch, pattern.Patch
+		httpMethod, template = http.MethodPatch, pattern.Patch
 	case *annotations.HttpRule_Custom:
-		method, template = pattern.Custom.GetKind(), pattern.Custom.GetPath()
+		httpMethod, template = pattern.Custom.GetKind(), pattern.Custom.GetPath()
 	default:
 		return nil, fmt.Errorf("invalid type of pattern for HTTP rule: %T", pattern)
 	}
-	if method == "" {
+	if httpMethod == "" {
 		return nil, errors.New("invalid HTTP rule: method is blank")
 	}
 	if template == "" {
@@ -72,11 +73,11 @@ func (t *routeTrie) addRoute(config *methodConfig, rule *annotations.HttpRule) (
 	if err != nil {
 		return nil, err
 	}
-	target, err := makeTarget(config, method, rule.GetBody(), rule.GetResponseBody(), segments, variables)
+	target, err := makeTarget(method, httpMethod, rule.GetBody(), rule.GetResponseBody(), segments, variables)
 	if err != nil {
 		return nil, err
 	}
-	if err := t.insert(method, target, segments); err != nil {
+	if err := t.insert(httpMethod, target, segments); err != nil {
 		return nil, err
 	}
 	return target, nil
@@ -203,8 +204,8 @@ func (t *routeTrie) getTarget(verb, method string) (*routeTarget, routeMethods) 
 type routeMethods map[string]*routeTarget
 
 type routeTarget struct {
-	config                *methodConfig
-	method                string // HTTP method
+	method                *method
+	httpMethod            string // HTTP method
 	path                  []string
 	verb                  string
 	requestBodyFieldPath  string
@@ -215,8 +216,8 @@ type routeTarget struct {
 }
 
 func makeTarget(
-	config *methodConfig,
-	method, requestBody, responseBody string,
+	method *method,
+	httpMethod, requestBody, responseBody string,
 	segments pathSegments,
 	variables []pathVariable,
 ) (*routeTarget, error) {
@@ -227,7 +228,7 @@ func makeTarget(
 	} else if requestBody != "" {
 		var err error
 		requestBodyFields, err = resolvePathToFieldDescriptors(
-			config.descriptor.Input(), requestBody, false,
+			method.descriptor.Input(), requestBody, false,
 		)
 		if err != nil {
 			return nil, err
@@ -246,7 +247,7 @@ func makeTarget(
 	} else if responseBody != "" {
 		var err error
 		responseBodyFields, err = resolvePathToFieldDescriptors(
-			config.descriptor.Output(), responseBody, false,
+			method.descriptor.Output(), responseBody, false,
 		)
 		if err != nil {
 			return nil, err
@@ -261,7 +262,7 @@ func makeTarget(
 	routeTargetVars := make([]routeTargetVar, len(variables))
 	for i, variable := range variables {
 		fields, err := resolvePathToFieldDescriptors(
-			config.descriptor.Input(), variable.fieldPath, false,
+			method.descriptor.Input(), variable.fieldPath, false,
 		)
 		if err != nil {
 			return nil, err
@@ -277,9 +278,9 @@ func makeTarget(
 			fields:       fields,
 		}
 	}
-	return &routeTarget{
-		config:                config,
+	target := &routeTarget{
 		method:                method,
+		httpMethod:            httpMethod,
 		path:                  segments.path,
 		verb:                  segments.verb,
 		requestBodyFieldPath:  requestBody,
@@ -287,7 +288,34 @@ func makeTarget(
 		responseBodyFieldPath: responseBody,
 		responseBodyFields:    responseBodyFields,
 		vars:                  routeTargetVars,
-	}, nil
+	}
+	if err := checkStreamType(target); err != nil {
+		return nil, err
+	}
+	return target, nil
+}
+
+// checkStreamType rejects streams REST cannot carry: an HTTP body has no
+// message framing, so the streamed side must be a google.api.HttpBody.
+func checkStreamType(target *routeTarget) error {
+	method := target.method
+	streamType := method.spec.StreamType
+	switch streamType {
+	case connect.StreamTypeUnary:
+		return nil
+	case connect.StreamTypeClient:
+		if isHTTPBodyRequest(target, method.descriptor.Input()) {
+			return nil
+		}
+		return fmt.Errorf("stream type %s requires a google.api.HttpBody request body", streamType)
+	case connect.StreamTypeServer:
+		if isHTTPBodyResponse(target, method.descriptor.Output()) {
+			return nil
+		}
+		return fmt.Errorf("stream type %s requires a google.api.HttpBody response body", streamType)
+	case connect.StreamTypeBidi:
+	}
+	return fmt.Errorf("stream type %s not supported", streamType)
 }
 
 type routeTargetVar struct {
@@ -429,5 +457,5 @@ type alreadyExistsError struct {
 }
 
 func (a alreadyExistsError) Error() string {
-	return fmt.Sprintf("target for %s, method %s already exists: %s", a.pathPattern, a.method, a.existing.config.descriptor.FullName())
+	return fmt.Sprintf("target for %s, method %s already exists: %s", a.pathPattern, a.method, a.existing.method.descriptor.FullName())
 }

@@ -1,17 +1,6 @@
 version: v2
 modules:
   - path: internal/proto
-  - path: internal/examples/pets/internal/proto
-    lint:
-      use:
-        - STANDARD
-      except:
-        - ENUM_VALUE_PREFIX
-        - ENUM_VALUE_UPPER_SNAKE_CASE
-        - ENUM_ZERO_VALUE_SUFFIX
-        - RPC_REQUEST_RESPONSE_UNIQUE
-        - RPC_REQUEST_STANDARD_NAME
-        - RPC_RESPONSE_STANDARD_NAME
 deps:
   - buf.build/googleapis/googleapis
 lint:
@@ -20,6 +9,16 @@ lint:
   except:
     - RPC_REQUEST_RESPONSE_UNIQUE
     - RPC_RESPONSE_STANDARD_NAME
+  ignore_only:
+    # Mirrors the public Swagger petstore API, so its names follow that API.
+    ENUM_VALUE_PREFIX:
+      - internal/proto/io/swagger/petstore
+    ENUM_VALUE_UPPER_SNAKE_CASE:
+      - internal/proto/io/swagger/petstore
+    ENUM_ZERO_VALUE_SUFFIX:
+      - internal/proto/io/swagger/petstore
+    RPC_REQUEST_STANDARD_NAME:
+      - internal/proto/io/swagger/petstore
 breaking:
   use:
     - WIRE_JSON
