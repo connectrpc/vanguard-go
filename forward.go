@@ -26,6 +26,22 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
+// hopByHopHeaders describe one HTTP connection and never cross a proxy.
+//
+//nolint:gochecknoglobals
+var hopByHopHeaders = map[string]struct{}{
+	"Connection":          {},
+	"Content-Length":      {},
+	"Host":                {},
+	"Keep-Alive":          {},
+	"Proxy-Authenticate":  {},
+	"Proxy-Authorization": {},
+	"Te":                  {},
+	"Trailer":             {},
+	"Transfer-Encoding":   {},
+	"Upgrade":             {},
+}
+
 // Forward returns a [connect.Method] that relays calls for desc to client.
 // Metadata and errors pass through in both directions. Messages are
 // instantiated from desc, so a proxy needs no generated code.
@@ -87,7 +103,7 @@ func forward(
 	spec connect.Spec,
 	requestType, responseType protoreflect.MessageType,
 	downstream connect.ServerStream,
-) (err error) {
+) (retErr error) {
 	info, _ := connect.CallInfoForServerContext(ctx)
 	upstreamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -99,7 +115,7 @@ func forward(
 	if err != nil {
 		return forwardError(err)
 	}
-	defer func() { err = errors.Join(err, upstream.Close()) }()
+	defer func() { retErr = errors.Join(retErr, upstream.Close()) }()
 
 	sent := make(chan error, 1)
 	go func() {
@@ -184,22 +200,6 @@ func forwardError(err error) error {
 		forwarded = forwarded.WithDetail(detail)
 	}
 	return forwarded
-}
-
-// hopByHopHeaders describe one HTTP connection and never cross a proxy.
-//
-//nolint:gochecknoglobals
-var hopByHopHeaders = map[string]struct{}{
-	"Connection":          {},
-	"Content-Length":      {},
-	"Host":                {},
-	"Keep-Alive":          {},
-	"Proxy-Authenticate":  {},
-	"Proxy-Authorization": {},
-	"Te":                  {},
-	"Trailer":             {},
-	"Transfer-Encoding":   {},
-	"Upgrade":             {},
 }
 
 func copyHeader(dst, src *connect.Header) {

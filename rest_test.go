@@ -332,6 +332,68 @@ func TestMount_RESTRequests(t *testing.T) {
 			},
 		},
 	}, {
+		name: "GetBook-NegativeTimeout",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+			meta: http.Header{
+				"X-Server-Timeout": []string{"-1"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: `invalid timeout "-1": must be a non-negative number of seconds`,
+			},
+		},
+	}, {
+		name: "GetBook-NaNTimeout",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+			meta: http.Header{
+				"X-Server-Timeout": []string{"NaN"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: `invalid timeout "NaN": must be a non-negative number of seconds`,
+			},
+		},
+	}, {
+		name: "GetBook-UnboundedTimeout",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/1",
+			meta: http.Header{
+				"X-Server-Timeout": []string{"1e400"},
+			},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/1"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/1"},
+		},
+	}, {
 		name: "GetBook-DeadlineExceeded",
 		input: input{
 			method: http.MethodGet,

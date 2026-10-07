@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -228,13 +229,20 @@ func walkBodyFields(
 	return host, leaf, nil
 }
 
+// restDecodeTimeout parses seconds, capping values past the longest time.Duration.
 func restDecodeTimeout(timeout string) (time.Duration, error) {
 	if timeout == "" {
 		return 0, nil
 	}
 	val, err := strconv.ParseFloat(timeout, 64)
-	if err != nil {
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		return 0, fmt.Errorf("invalid timeout %q: %w", timeout, err)
+	}
+	if math.IsNaN(val) || val < 0 {
+		return 0, fmt.Errorf("invalid timeout %q: must be a non-negative number of seconds", timeout)
+	}
+	if val >= math.MaxInt64/float64(time.Second) {
+		return math.MaxInt64, nil
 	}
 	return time.Duration(val * float64(time.Second)), nil
 }

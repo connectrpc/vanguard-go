@@ -24,6 +24,32 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// protocolHeaders are owned by the wire protocol, never by RPC metadata. It
+// mirrors connecthttp so metadata crosses either transport the same way.
+//
+//nolint:gochecknoglobals
+var protocolHeaders = map[string]struct{}{
+	// HTTP headers.
+	"Content-Type":     {},
+	"Content-Length":   {},
+	"Content-Encoding": {},
+	"Trailer":          {},
+	"Date":             {},
+	// Connect headers.
+	"Accept-Encoding":          {},
+	"Connect-Content-Encoding": {},
+	"Connect-Accept-Encoding":  {},
+	"Connect-Timeout-Ms":       {},
+	"Connect-Protocol-Version": {},
+	// gRPC headers.
+	"Grpc-Encoding":           {},
+	"Grpc-Accept-Encoding":    {},
+	"Grpc-Timeout":            {},
+	"Grpc-Status":             {},
+	"Grpc-Message":            {},
+	"Grpc-Status-Details-Bin": {},
+}
+
 // serverStream implements [connect.ServerStream] for an inbound REST
 // request. The request body is one message, so Receive succeeds once
 // then returns io.EOF. Unary methods Send once. Server-streaming methods
@@ -261,32 +287,6 @@ func (s *serverStream) flushHeaders(compress bool) error {
 }
 
 // close commits the headers of an empty response and finishes a compressed body.
-
-// protocolHeaders are owned by the wire protocol, never by RPC metadata. It
-// mirrors connecthttp so metadata crosses either transport the same way.
-//
-//nolint:gochecknoglobals
-var protocolHeaders = map[string]struct{}{
-	// HTTP headers.
-	"Content-Type":     {},
-	"Content-Length":   {},
-	"Content-Encoding": {},
-	"Trailer":          {},
-	"Date":             {},
-	// Connect headers.
-	"Accept-Encoding":          {},
-	"Connect-Content-Encoding": {},
-	"Connect-Accept-Encoding":  {},
-	"Connect-Timeout-Ms":       {},
-	"Connect-Protocol-Version": {},
-	// gRPC headers.
-	"Grpc-Encoding":           {},
-	"Grpc-Accept-Encoding":    {},
-	"Grpc-Timeout":            {},
-	"Grpc-Status":             {},
-	"Grpc-Message":            {},
-	"Grpc-Status-Details-Bin": {},
-}
 
 // setMetadataHeaders copies RPC metadata onto an HTTP request or response,
 // leaving the headers the REST encoding owns to the stream.

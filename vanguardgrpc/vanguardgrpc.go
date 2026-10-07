@@ -54,6 +54,23 @@ import (
 	"google.golang.org/protobuf/types/descriptorpb"
 )
 
+// binaryHeaderSuffix marks metadata whose values are raw bytes, sent
+// base64-encoded on the wire.
+const binaryHeaderSuffix = "-bin"
+
+// reservedHeaders are the protocol headers grpc-go keeps out of incoming
+// metadata.
+//
+//nolint:gochecknoglobals
+var reservedHeaders = map[string]struct{}{
+	"grpc-message-type": {},
+	"grpc-encoding":     {},
+	"grpc-message":      {},
+	"grpc-status":       {},
+	"grpc-timeout":      {},
+	"te":                {},
+}
+
 var _ grpc.ServerStream = (*serverStreamAdapter)(nil)
 
 // NewCodec returns a gRPC [encoding.Codec] that uses the given
@@ -338,23 +355,6 @@ func incomingMetadata(header *connect.Header) (metadata.MD, error) {
 		}
 	}
 	return incoming, nil
-}
-
-// binaryHeaderSuffix marks metadata whose values are raw bytes, sent
-// base64-encoded on the wire.
-const binaryHeaderSuffix = "-bin"
-
-// reservedHeaders are the protocol headers grpc-go keeps out of incoming
-// metadata.
-//
-//nolint:gochecknoglobals
-var reservedHeaders = map[string]struct{}{
-	"grpc-message-type": {},
-	"grpc-encoding":     {},
-	"grpc-message":      {},
-	"grpc-status":       {},
-	"grpc-timeout":      {},
-	"te":                {},
 }
 
 // peerAddr parses a [connect.CallInfo] PeerAddr. grpc-go reports a

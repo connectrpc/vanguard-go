@@ -43,6 +43,25 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+var indexHTMLTemplate = template.Must(template.New("index").Parse(`
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>{{.Title}}</title>
+</head>
+<body>
+  <pre>
+  {{- if ne .Title "."}}
+  <a href="/">..</a>
+  {{- end}}
+  {{- range $path, $name := .Files}}
+  <a href="/{{$path}}">{{$name}}</a>
+  {{- end}}
+  </pre>
+</body>
+</html>
+`))
+
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -212,22 +231,3 @@ func (c *contentServer) Download(
 		}
 	}
 }
-
-var indexHTMLTemplate = template.Must(template.New("index").Parse(`
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>{{.Title}}</title>
-</head>
-<body>
-  <pre>
-  {{- if ne .Title "."}}
-  <a href="/">..</a>
-  {{- end}}
-  {{- range $path, $name := .Files}}
-  <a href="/{{$path}}">{{$name}}</a>
-  {{- end}}
-  </pre>
-</body>
-</html>
-`))
