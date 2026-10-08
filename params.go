@@ -15,7 +15,6 @@
 package vanguard
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -72,8 +71,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	}
 	field := fields[len(fields)-1]
 
-	data := []byte(param)
-	value, err := unmarshalFieldValue(leaf, field, data)
+	value, err := unmarshalFieldValue(leaf, field, param)
 	if err != nil {
 		// Resolve the field path for the error message in proto format.
 		// The JSON format is not used for consistency with other errors.
@@ -83,7 +81,7 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 			strings.HasPrefix(err.Error(), "proto") {
 			return connect.Errorf(connect.CodeInvalidArgument,
 				"invalid parameter %q value for type %q: %s",
-				fieldPath, field.Kind(), data,
+				fieldPath, field.Kind(), param,
 			)
 		}
 		return connect.Errorf(connect.CodeInvalidArgument,
@@ -102,35 +100,41 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	return nil
 }
 
-func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
+func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, data string) (protoreflect.Value, error) {
 	switch kind := field.Kind(); kind {
 	case protoreflect.BoolKind:
+		switch data {
+		case "true":
+			return protoreflect.ValueOfBool(true), nil
+		case "false":
+			return protoreflect.ValueOfBool(false), nil
+		}
 		var b bool
-		if err := json.Unmarshal(data, &b); err != nil {
+		if err := json.Unmarshal([]byte(data), &b); err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfBool(b), nil
 	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
-		var x int32
-		if err := json.Unmarshal(data, &x); err != nil {
+		x, err := unmarshalInt[int32](data, 32)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfInt32(x), nil
 	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
-		var x int64
-		if err := json.Unmarshal(data, &x); err != nil {
+		x, err := unmarshalInt[int64](data, 64)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfInt64(x), nil
 	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
-		var x uint32
-		if err := json.Unmarshal(data, &x); err != nil {
+		x, err := unmarshalUint[uint32](data, 32)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfUint32(x), nil
 	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
-		var x uint64
-		if err := json.Unmarshal(data, &x); err != nil {
+		x, err := unmarshalUint[uint64](data, 64)
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfUint64(x), nil
@@ -139,31 +143,29 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 	case protoreflect.DoubleKind:
 		return unmarshalFloat(data, 64)
 	case protoreflect.StringKind:
-		return protoreflect.ValueOfString(string(data)), nil
+		return protoreflect.ValueOfString(data), nil
 	case protoreflect.BytesKind:
 		enc := base64.StdEncoding
-		if bytes.ContainsAny(data, "-_") {
+		if strings.ContainsAny(data, "-_") {
 			enc = base64.URLEncoding
 		}
 		if len(data)%4 != 0 {
 			enc = enc.WithPadding(base64.NoPadding)
 		}
 		dst := make([]byte, enc.DecodedLen(len(data)))
-		n, err := enc.Decode(dst, data)
+		n, err := enc.Decode(dst, []byte(data))
 		if err != nil {
 			return protoreflect.Value{}, err
 		}
 		return protoreflect.ValueOfBytes(dst[:n]), nil
 	case protoreflect.EnumKind:
-		var x protoreflect.EnumNumber
-		if err := json.Unmarshal(data, &x); err == nil {
+		if x, err := unmarshalInt[protoreflect.EnumNumber](data, 32); err == nil {
 			return protoreflect.ValueOfEnum(x), nil
 		}
-		s := string(data)
-		if isNullValue(field) && s == "null" {
+		if isNullValue(field) && data == "null" {
 			return protoreflect.ValueOfEnum(0), nil
 		}
-		enumVal := field.Enum().Values().ByName(protoreflect.Name(s))
+		enumVal := field.Enum().Values().ByName(protoreflect.Name(data))
 		if enumVal == nil {
 			return protoreflect.Value{}, fmt.Errorf("unknown enum: %s", data)
 		}
@@ -176,7 +178,7 @@ func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescr
 }
 
 // unmarshalFieldWKT unmarshals well known JSON scalars to their message types.
-func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
+func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescriptor, data string) (protoreflect.Value, error) {
 	if !isWKTWithScalarJSONMapping(field) {
 		return protoreflect.Value{}, fmt.Errorf("unsupported message type %s", field.Message().FullName())
 	}
@@ -191,9 +193,9 @@ func unmarshalFieldWKT(msg protoreflect.Message, field protoreflect.FieldDescrip
 		value.Message().Set(subField, subValue)
 		return value, nil
 	case "Timestamp", "Duration", "BytesValue", "StringValue", "FieldMask":
-		data = quote(data)
+		return unmarshalFieldMessage(msg, field, quote([]byte(data)))
 	}
-	return unmarshalFieldMessage(msg, field, data)
+	return unmarshalFieldMessage(msg, field, []byte(data))
 }
 
 func unmarshalFieldMessage(msg protoreflect.Message, field protoreflect.FieldDescriptor, data []byte) (protoreflect.Value, error) {
@@ -204,9 +206,9 @@ func unmarshalFieldMessage(msg protoreflect.Message, field protoreflect.FieldDes
 	return value, nil
 }
 
-func unmarshalFloat(data []byte, bitSize int) (protoreflect.Value, error) {
+func unmarshalFloat(data string, bitSize int) (protoreflect.Value, error) {
 	var value float64
-	switch string(data) {
+	switch data {
 	case "NaN":
 		value = math.NaN()
 	case "Infinity":
@@ -215,22 +217,87 @@ func unmarshalFloat(data []byte, bitSize int) (protoreflect.Value, error) {
 		value = math.Inf(-1)
 	default:
 		if bitSize == 32 {
-			var x float32
-			if err := json.Unmarshal(data, &x); err != nil {
+			float, err := unmarshalNumber(data, func(data string) (float32, error) {
+				x, err := strconv.ParseFloat(data, 32)
+				return float32(x), err
+			})
+			if err != nil {
 				return protoreflect.Value{}, err
 			}
-			return protoreflect.ValueOfFloat32(x), nil
+			return protoreflect.ValueOfFloat32(float), nil
 		}
-		var x float64
-		if err := json.Unmarshal(data, &x); err != nil {
+		double, err := unmarshalNumber(data, func(data string) (float64, error) {
+			return strconv.ParseFloat(data, 64)
+		})
+		if err != nil {
 			return protoreflect.Value{}, err
 		}
-		return protoreflect.ValueOfFloat64(x), nil
+		return protoreflect.ValueOfFloat64(double), nil
 	}
 	if bitSize == 32 {
 		return protoreflect.ValueOfFloat32(float32(value)), nil
 	}
 	return protoreflect.ValueOfFloat64(value), nil
+}
+
+func unmarshalInt[T ~int32 | ~int64](data string, bitSize int) (T, error) {
+	return unmarshalNumber(data, func(data string) (T, error) {
+		x, err := strconv.ParseInt(data, 10, bitSize)
+		return T(x), err
+	})
+}
+
+func unmarshalUint[T ~uint32 | ~uint64](data string, bitSize int) (T, error) {
+	return unmarshalNumber(data, func(data string) (T, error) {
+		x, err := strconv.ParseUint(data, 10, bitSize)
+		return T(x), err
+	})
+}
+
+// unmarshalNumber parses a JSON number with parse, falling back to
+// [json.Unmarshal] for the errors of any input parse rejects.
+func unmarshalNumber[T any](data string, parse func(string) (T, error)) (T, error) {
+	if isJSONNumber(data) {
+		if x, err := parse(data); err == nil {
+			return x, nil
+		}
+	}
+	var x T
+	err := json.Unmarshal([]byte(data), &x)
+	return x, err
+}
+
+// isJSONNumber reports whether data matches the JSON number grammar.
+func isJSONNumber(data string) bool {
+	digits := func(data string) (string, bool) {
+		trimmed := strings.TrimLeft(data, "0123456789")
+		return trimmed, len(trimmed) < len(data)
+	}
+	data = strings.TrimPrefix(data, "-")
+	switch {
+	case strings.HasPrefix(data, "0"):
+		data = data[1:]
+	case data != "" && data[0] >= '1' && data[0] <= '9':
+		data, _ = digits(data)
+	default:
+		return false
+	}
+	if rest, ok := strings.CutPrefix(data, "."); ok {
+		if data, ok = digits(rest); !ok {
+			return false
+		}
+	}
+	if len(data) > 0 && (data[0] == 'e' || data[0] == 'E') {
+		rest := strings.TrimLeft(data[1:], "+-")
+		if len(data)-len(rest) > 2 {
+			return false
+		}
+		var ok bool
+		if data, ok = digits(rest); !ok {
+			return false
+		}
+	}
+	return data == ""
 }
 
 func quote(raw []byte) []byte {

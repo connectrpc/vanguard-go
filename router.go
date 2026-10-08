@@ -381,12 +381,20 @@ func segmentOffset(path string, index int) int {
 func resolvePathToFieldDescriptors(
 	msg protoreflect.MessageDescriptor, path string, fromJSON bool,
 ) ([]protoreflect.FieldDescriptor, error) {
+	result := make([]protoreflect.FieldDescriptor, 0, strings.Count(path, ".")+1)
+	return appendPathToFieldDescriptors(result, msg, path, fromJSON)
+}
+
+// appendPathToFieldDescriptors is like [resolvePathToFieldDescriptors], but
+// appends the fields to result.
+func appendPathToFieldDescriptors(
+	result []protoreflect.FieldDescriptor, msg protoreflect.MessageDescriptor, path string, fromJSON bool,
+) ([]protoreflect.FieldDescriptor, error) {
 	if path == "" {
 		return nil, errors.New("empty field path")
 	}
 	fields := msg.Fields()
-	result := make([]protoreflect.FieldDescriptor, strings.Count(path, ".")+1)
-	for i, remaining := 0, path; remaining != ""; i++ {
+	for remaining := path; remaining != ""; {
 		part := remaining
 		if i := strings.IndexByte(remaining, '.'); i >= 0 {
 			part, remaining = remaining[:i], remaining[i+1:]
@@ -404,7 +412,7 @@ func resolvePathToFieldDescriptors(
 					errUnknownField, path, part, msg.FullName())
 			}
 		}
-		result[i] = field
+		result = append(result, field)
 		if remaining == "" {
 			break
 		}
