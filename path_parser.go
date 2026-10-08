@@ -53,13 +53,6 @@ func parsePathTemplate(template string) (
 	if err := parser.parseTemplate(); err != nil {
 		return "", nil, err
 	}
-	for i, variable := range parser.variables {
-		for _, seen := range parser.variables[:i] {
-			if seen.fieldPath == variable.fieldPath {
-				return "", nil, fmt.Errorf("duplicate variable %q", variable.fieldPath)
-			}
-		}
-	}
 	return parser.output.String(), parser.variables, nil
 }
 
@@ -185,7 +178,12 @@ func (p *pathParser) parseLiteral() (string, error) {
 	}
 	unescaped, err := pathUnescape(literal, pathEncodeSingle)
 	if err != nil {
-		p.pos = start
+		for i := range len(literal) {
+			if literal[i] == '%' && validateHex(literal[i:]) != nil {
+				p.pos = start + i // point at the invalid escape.
+				break
+			}
+		}
 		return "", p.errSyntax(err.Error())
 	}
 	return pathEscape(unescaped, pathEncodeSingle), nil
@@ -208,6 +206,11 @@ func (p *pathParser) parseVariable() error {
 	fieldPath, err := p.parseFieldPath()
 	if err != nil {
 		return err
+	}
+	for _, seen := range p.variables {
+		if seen.fieldPath == fieldPath {
+			return fmt.Errorf("duplicate variable %q", fieldPath)
+		}
 	}
 	variable := pathVariable{fieldPath: fieldPath, start: p.segmentCount}
 	if p.consume('=') {

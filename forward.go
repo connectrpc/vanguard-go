@@ -138,8 +138,8 @@ func forwardRequests(
 	requestType protoreflect.MessageType,
 	cancel context.CancelFunc,
 ) error {
-	request := requestType.New().Interface()
 	for {
+		request := requestType.New().Interface()
 		err := downstream.Receive(request)
 		if errors.Is(err, io.EOF) {
 			return forwardError(upstream.CloseSend())
@@ -164,8 +164,8 @@ func forwardResponses(
 	info, upstreamInfo *connect.CallInfo,
 ) error {
 	headersCopied := false
-	response := responseType.New().Interface()
 	for {
+		response := responseType.New().Interface()
 		err := upstream.Receive(response)
 		if info != nil {
 			// Unary trailers ride in the headers, so they must be known

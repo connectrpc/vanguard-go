@@ -90,7 +90,7 @@ func TestPath_ParsePathTemplate(t *testing.T) {
 		},
 	}, {
 		tmpl:        "/foo/bar%55:baz%1",
-		expectedErr: "syntax error at column 13: invalid URL escape \"%1\"",
+		expectedErr: "syntax error at column 16: invalid URL escape \"%1\"",
 	}, {
 		tmpl:        "/foo/bar*",
 		expectedErr: "syntax error at column 9: unexpected '*'", // wildcard must be entire path component
