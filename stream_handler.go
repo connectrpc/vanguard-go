@@ -62,7 +62,6 @@ var protocolHeaders = map[string]struct{}{
 type serverStream struct {
 	method  *method
 	target  *routeTarget
-	vars    []routeTargetVarMatch
 	options *options
 	codec   RESTCodec
 	info    *connect.CallInfo
@@ -84,7 +83,6 @@ type serverStream struct {
 func newServerStream(
 	method *method,
 	target *routeTarget,
-	vars []routeTargetVarMatch,
 	opts *options,
 	codec RESTCodec,
 	info *connect.CallInfo,
@@ -94,7 +92,6 @@ func newServerStream(
 	return &serverStream{
 		method:   method,
 		target:   target,
-		vars:     vars,
 		options:  opts,
 		codec:    codec,
 		info:     info,
@@ -193,7 +190,7 @@ func hasBody(request *http.Request) bool {
 }
 
 func (s *serverStream) decodeURL(msg proto.Message) error {
-	if err := decodeRequestURL(s.request, s.vars, s.options, msg); err != nil {
+	if err := decodeRequestURL(s.request, s.target, s.options, msg); err != nil {
 		return s.decodeError(err)
 	}
 	return nil

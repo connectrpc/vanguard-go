@@ -45,15 +45,20 @@ const bodyChunkSize = 32 * 1024
 // decodeRequestURL merges path variables and query parameters into msg.
 func decodeRequestURL(
 	request *http.Request,
-	vars []routeTargetVarMatch,
+	target *routeTarget,
 	opts *options,
 	msg proto.Message,
 ) error {
 	// Path variables (in reverse so earlier matches stay authoritative
 	// after later ones are set — mirrors the legacy ordering).
 	mreflect := msg.ProtoReflect()
-	for _, v := range slices.Backward(vars) {
-		if err := setParameter(mreflect, v.fields, v.value); err != nil {
+	path, _ := splitVerb(request.URL.EscapedPath())
+	for _, variable := range slices.Backward(target.vars) {
+		value, err := variable.capture(path)
+		if err != nil {
+			return fmt.Errorf("path variable: %w", err)
+		}
+		if err := setParameter(mreflect, variable.fields, value); err != nil {
 			return fmt.Errorf("path variable: %w", err)
 		}
 	}

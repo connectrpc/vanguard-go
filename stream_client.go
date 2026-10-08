@@ -198,7 +198,11 @@ func (s *clientStream) requestURL(msg proto.Message, target *routeTarget) (*url.
 		return nil, err
 	}
 	reqURL := *s.transport.baseURL
-	reqURL.Path = joinPath(reqURL.Path, path)
+	reqURL.RawPath = joinPath(reqURL.EscapedPath(), path)
+	reqURL.Path, err = url.PathUnescape(reqURL.RawPath)
+	if err != nil {
+		return nil, err
+	}
 	if q := query.Encode(); q != "" {
 		if reqURL.RawQuery == "" {
 			reqURL.RawQuery = q
