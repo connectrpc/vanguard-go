@@ -31,7 +31,7 @@ type pathVariable struct {
 	start, end int    // start and end path segments, inclusive-exclusive, -1 for unbounded.
 }
 
-// parsePathTemplate parsers a methods template into its canonical form and
+// parsePathTemplate parses a method's template into its canonical form and
 // variables. The canonical template escapes each literal, so '/', ':' and '*'
 // only appear as separators and wildcards.
 //
