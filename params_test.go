@@ -18,6 +18,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"math"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -97,6 +98,23 @@ func TestUnmarshalNumber_MatchesJSON(t *testing.T) {
 		assertMatchesJSON(t, input, func(data string) (float64, error) {
 			return unmarshalNumber(data, func(data string) (float64, error) { return strconv.ParseFloat(data, 64) })
 		})
+	}
+}
+
+func TestQueryValues_MatchesParseQuery(t *testing.T) {
+	t.Parallel()
+	queries := []string{
+		"", "a=1", "a=1&b=2", "a=1&a=2&b=3&a=4", "a", "a=", "=1", "&&a=1&&",
+		"a=1;b=2", "a=1&b=2;c=3&d=4", "a%3Db=c%26d", "a+b=c+d", "a%20b=c%2Bd",
+		"a=%zz&b=2", "%zz=1&b=2", "a=1=2", "a.b.c=x&a.b.c=y", "%E2%9C%93=%E2%9C%93",
+	}
+	for _, query := range queries {
+		got := url.Values{}
+		for key, value := range queryValues(query) {
+			got[key] = append(got[key], value)
+		}
+		want, _ := url.ParseQuery(query)
+		assert.Equal(t, want, got, "query %q", query)
 	}
 }
 
