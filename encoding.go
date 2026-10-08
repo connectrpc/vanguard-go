@@ -55,8 +55,9 @@ func decodeRequestURL(
 		}
 	}
 	// Query parameters.
+	var buffer [8]protoreflect.FieldDescriptor
 	for fieldPath, values := range request.URL.Query() {
-		fields, err := resolvePathToFieldDescriptors(mreflect.Descriptor(), fieldPath, true)
+		fields, err := appendPathToFieldDescriptors(buffer[:0], mreflect.Descriptor(), fieldPath, true)
 		if err != nil {
 			if opts.discardUnknownQueryParams && errors.Is(err, errUnknownField) {
 				continue
