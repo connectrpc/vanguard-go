@@ -16,7 +16,9 @@ package vanguard
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"math"
+	"net/url"
 	"strconv"
 	"testing"
 	"time"
@@ -66,6 +68,53 @@ func TestIsParameter(t *testing.T) {
 			field := fields[len(fields)-1]
 			assert.Equal(t, testCase.isParam, isParameterType(field))
 		})
+	}
+}
+
+func TestUnmarshalNumber_MatchesJSON(t *testing.T) {
+	t.Parallel()
+	inputs := []string{
+		"0", "-0", "1", "-1", "12", "012", "+1", " 1", "1 ", "", "-", "1.", ".1",
+		"1.5", "-1.5", "1e3", "1E+3", "1e-3", "1e", "1e+", "1e+-3", "0x10", "1_000",
+		"Infinity", "NaN", "inf", "null", "true", "\"1\"", "nan",
+		"2147483647", "2147483648", "-2147483648", "-2147483649",
+		"4294967295", "4294967296", "9223372036854775807", "9223372036854775808",
+		"18446744073709551615", "18446744073709551616", "3.4e38", "3.5e38", "1e400", "1e-400",
+	}
+	for _, input := range inputs {
+		assertMatchesJSON(t, input, func(data string) (int32, error) { return unmarshalInt[int32](data, 32) })
+		assertMatchesJSON(t, input, func(data string) (int64, error) { return unmarshalInt[int64](data, 64) })
+		assertMatchesJSON(t, input, func(data string) (uint32, error) { return unmarshalUint[uint32](data, 32) })
+		assertMatchesJSON(t, input, func(data string) (uint64, error) { return unmarshalUint[uint64](data, 64) })
+		assertMatchesJSON(t, input, func(data string) (protoreflect.EnumNumber, error) {
+			return unmarshalInt[protoreflect.EnumNumber](data, 32)
+		})
+		assertMatchesJSON(t, input, func(data string) (float32, error) {
+			return unmarshalNumber(data, func(data string) (float32, error) {
+				x, err := strconv.ParseFloat(data, 32)
+				return float32(x), err
+			})
+		})
+		assertMatchesJSON(t, input, func(data string) (float64, error) {
+			return unmarshalNumber(data, func(data string) (float64, error) { return strconv.ParseFloat(data, 64) })
+		})
+	}
+}
+
+func TestQueryValues_MatchesParseQuery(t *testing.T) {
+	t.Parallel()
+	queries := []string{
+		"", "a=1", "a=1&b=2", "a=1&a=2&b=3&a=4", "a", "a=", "=1", "&&a=1&&",
+		"a=1;b=2", "a=1&b=2;c=3&d=4", "a%3Db=c%26d", "a+b=c+d", "a%20b=c%2Bd",
+		"a=%zz&b=2", "%zz=1&b=2", "a=1=2", "a.b.c=x&a.b.c=y", "%E2%9C%93=%E2%9C%93",
+	}
+	for _, query := range queries {
+		got := url.Values{}
+		for key, value := range queryValues(query) {
+			got[key] = append(got[key], value)
+		}
+		want, _ := url.ParseQuery(query)
+		assert.Equal(t, want, got, "query %q", query)
 	}
 }
 
@@ -720,4 +769,17 @@ func TestGetParameter(t *testing.T) {
 			assert.Equal(t, testCase.want, value)
 		})
 	}
+}
+
+func assertMatchesJSON[T any](t *testing.T, input string, unmarshal func(string) (T, error)) {
+	t.Helper()
+	var want T
+	wantErr := json.Unmarshal([]byte(input), &want)
+	got, err := unmarshal(input)
+	if wantErr != nil {
+		assert.EqualError(t, err, wantErr.Error(), "%T %q", want, input)
+		return
+	}
+	require.NoError(t, err, "%T %q", want, input)
+	assert.Equal(t, want, got, "%T %q", want, input)
 }

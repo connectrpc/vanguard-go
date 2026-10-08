@@ -19,10 +19,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"math"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -55,21 +58,44 @@ func decodeRequestURL(
 		}
 	}
 	// Query parameters.
-	for fieldPath, values := range request.URL.Query() {
-		fields, err := resolvePathToFieldDescriptors(mreflect.Descriptor(), fieldPath, true)
+	var buffer [8]protoreflect.FieldDescriptor
+	for fieldPath, value := range queryValues(request.URL.RawQuery) {
+		fields, err := appendPathToFieldDescriptors(buffer[:0], mreflect.Descriptor(), fieldPath, true)
 		if err != nil {
 			if opts.discardUnknownQueryParams && errors.Is(err, errUnknownField) {
 				continue
 			}
 			return fmt.Errorf("query parameter %q: %w", fieldPath, err)
 		}
-		for _, value := range values {
-			if err := setParameter(mreflect, fields, value); err != nil {
-				return fmt.Errorf("query parameter %q: %w", fieldPath, err)
-			}
+		if err := setParameter(mreflect, fields, value); err != nil {
+			return fmt.Errorf("query parameter %q: %w", fieldPath, err)
 		}
 	}
 	return nil
+}
+
+// queryValues yields the unescaped key and value pairs of a raw query in
+// order, skipping the pairs [url.ParseQuery] rejects.
+func queryValues(rawQuery string) iter.Seq2[string, string] {
+	return func(yield func(string, string) bool) {
+		for pair := range strings.SplitSeq(rawQuery, "&") {
+			if pair == "" || strings.Contains(pair, ";") {
+				continue
+			}
+			key, value, _ := strings.Cut(pair, "=")
+			key, err := url.QueryUnescape(key)
+			if err != nil {
+				continue
+			}
+			value, err = url.QueryUnescape(value)
+			if err != nil {
+				continue
+			}
+			if !yield(key, value) {
+				return
+			}
+		}
+	}
 }
 
 // readChunk returns the next slice of body, or io.EOF once it is exhausted.
