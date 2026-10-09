@@ -16,6 +16,7 @@ package vanguard
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,7 +71,7 @@ func TestPath_ParsePathTemplate(t *testing.T) {
 		expectedErr: "syntax error at column 1: expected '/', got 'f'", // must start with slash
 	}, {
 		tmpl:        "/foo/bar/",
-		expectedErr: "syntax error at column 9: expected path value", // must not end in slash
+		expectedErr: "syntax error at column 10: expected path value", // must not end in slash
 	}, {
 		tmpl:        "/foo/bar:baz/buzz",
 		expectedErr: "syntax error at column 13: unexpected '/'", // ":baz" verb can only come at the very end
@@ -89,7 +90,7 @@ func TestPath_ParsePathTemplate(t *testing.T) {
 		},
 	}, {
 		tmpl:        "/foo/bar%55:baz%1",
-		expectedErr: "syntax error at column 17: invalid URL escape \"%1\"",
+		expectedErr: "syntax error at column 16: invalid URL escape \"%1\"",
 	}, {
 		tmpl:        "/foo/bar*",
 		expectedErr: "syntax error at column 9: unexpected '*'", // wildcard must be entire path component
@@ -232,15 +233,16 @@ func TestPath_ParsePathTemplate(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.tmpl, func(t *testing.T) {
 			t.Parallel()
-			segments, variables, err := parsePathTemplate(testCase.tmpl)
+			template, variables, err := parsePathTemplate(testCase.tmpl)
 			if testCase.expectedErr != "" {
 				assert.ErrorContains(t, err, testCase.expectedErr)
 				return
 			}
-			t.Log(segments)
+			t.Log(template)
 			require.NoError(t, err)
-			assert.ElementsMatch(t, testCase.wantPath, segments.path, "path mismatch")
-			assert.Equal(t, testCase.wantVerb, segments.verb, "verb mismatch")
+			path, verb := splitVerb(template)
+			assert.Equal(t, testCase.wantPath, strings.Split(path[1:], "/"), "path mismatch")
+			assert.Equal(t, testCase.wantVerb, verb, "verb mismatch")
 			assert.ElementsMatch(t, testCase.wantVars, variables, "variables mismatch")
 		})
 	}
@@ -249,9 +251,9 @@ func TestPath_ParsePathTemplate(t *testing.T) {
 func TestPath_SafeLiterals(t *testing.T) {
 	t.Parallel()
 	literalvalues := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._%25~"
-	for _, r := range literalvalues {
-		if !isLiteral(r) {
-			t.Errorf("isLiteral(%q) = false, want true", r)
+	for _, char := range []byte(literalvalues) {
+		if !isLiteral(char) {
+			t.Errorf("isLiteral(%q) = false, want true", char)
 		}
 	}
 	unescaped, err := url.PathUnescape(literalvalues)

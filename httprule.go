@@ -156,9 +156,9 @@ func httpSplitVar(variable string, multi bool) []string {
 func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 	path string, query url.Values, err error,
 ) {
-	// Copy segments to build URL
-	segments := make([]string, len(target.path))
-	copy(segments, target.path)
+	// Split segments to build URL
+	templatePath, verb := splitVerb(target.template)
+	segments := strings.Split(templatePath[1:], "/")
 
 	// Count the number of times each field path is used.
 	// Singular fields can be referenced multiple times.
@@ -218,9 +218,9 @@ func httpEncodePathValues(input protoreflect.Message, target *routeTarget) (
 		pathURL.WriteByte('/')
 		pathURL.WriteString(segment)
 	}
-	if target.verb != "" {
+	if verb != "" {
 		pathURL.WriteByte(':')
-		pathURL.WriteString(target.verb)
+		pathURL.WriteString(verb)
 	}
 	path = pathURL.String()
 

@@ -127,6 +127,27 @@ func TestMount_RESTRequests(t *testing.T) {
 			},
 		},
 	}, {
+		name: "GetBook-EscapedPath",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/%73helves/a%2Fb/books/c%20d",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/a%2Fb/books/c d"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/a%2Fb/books/c d"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/a%2Fb/books/c d"},
+		},
+	}, {
 		name: "GetBook-NotAllowed",
 		input: input{
 			method: http.MethodPut,

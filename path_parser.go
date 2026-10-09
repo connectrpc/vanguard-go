@@ -20,32 +20,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
-
-// pathSegments holds the path segments for a method.
-// The verb is the final segment, if any. Wildcards segments are annotated by
-// '*' and '**' path values. Each segment is URL unescaped.
-type pathSegments struct {
-	path []string // segment path values.
-	verb string   // final segment verb, if any.
-}
-
-// String returns the URL path representation of the segments.
-func (s pathSegments) String() string {
-	var out strings.Builder
-	for _, value := range s.path {
-		out.WriteByte('/')
-		if value != "*" && value != "**" {
-			value = url.PathEscape(value)
-		}
-		out.WriteString(value)
-	}
-	if s.verb != "" {
-		out.WriteByte(':')
-		out.WriteString(url.PathEscape(s.verb))
-	}
-	return out.String()
-}
 
 // pathVariable holds the path variables for a method.
 // The start and end fields are the start and end path segments, inclusive-exclusive.
@@ -55,7 +31,9 @@ type pathVariable struct {
 	start, end int    // start and end path segments, inclusive-exclusive, -1 for unbounded.
 }
 
-// parsePathTemplate parsers a methods template into path segments and variables.
+// parsePathTemplate parses a method's template into its canonical form and
+// variables. The canonical template escapes each literal, so '/', ':' and '*'
+// only appear as separators and wildcards.
 //
 // The grammar for the path template is given in the protobuf definition
 // in [google/api/http.proto].
@@ -69,65 +47,86 @@ type pathVariable struct {
 //
 // [google/api/http.proto]: https://github.com/googleapis/googleapis/blob/ecb1cf0a0021267dd452289fc71c75674ae29fe3/google/api/http.proto#L227-L235
 func parsePathTemplate(template string) (
-	pathSegments, []pathVariable, error,
+	string, []pathVariable, error,
 ) {
-	parser := &pathParser{scan: pathScanner{input: template}}
+	parser := &pathParser{input: template}
 	if err := parser.parseTemplate(); err != nil {
-		return pathSegments{}, nil, err
+		return "", nil, err
 	}
-	return parser.segments, parser.variables, nil
+	return parser.output.String(), parser.variables, nil
 }
 
 // pathParser holds the state for the recursive descent path template parser.
+// The grammar is ASCII, so the input is scanned byte by byte.
 type pathParser struct {
-	scan           pathScanner     // scanner for the input.
-	seenVars       map[string]bool // set of field paths.
+	input          string          // the template being parsed.
+	pos            int             // offset of the next unread byte.
 	seenDoubleStar bool            // true if we've seen a double star wildcard.
-	segments       pathSegments    // output segments.
+	segmentCount   int             // number of segments written to output.
+	output         strings.Builder // output canonical template.
 	variables      []pathVariable  // output variables.
 }
 
+func (p *pathParser) writeSegment(segment string) {
+	p.output.WriteByte('/')
+	p.output.WriteString(segment)
+	p.segmentCount++
+}
+
+func (p *pathParser) peek() byte {
+	if p.pos < len(p.input) {
+		return p.input[p.pos]
+	}
+	return 0
+}
+func (p *pathParser) consume(expected byte) bool {
+	if p.pos < len(p.input) && p.input[p.pos] == expected {
+		p.pos++
+		return true
+	}
+	return false
+}
+func (p *pathParser) consumeRun(isValid func(byte) bool) string {
+	start := p.pos
+	for p.pos < len(p.input) && isValid(p.input[p.pos]) {
+		p.pos++
+	}
+	return p.input[start:p.pos]
+}
+
 func (p *pathParser) currentChar() string {
-	if char := p.scan.current(); char != eof {
+	if p.pos < len(p.input) {
+		char, _ := utf8.DecodeRuneInString(p.input[p.pos:])
 		return strconv.QuoteRune(char)
 	}
 	return "EOF"
 }
 func (p *pathParser) errSyntax(msg string) error {
-	return fmt.Errorf("syntax error at column %v: %s", p.scan.pos, msg)
+	return fmt.Errorf("syntax error at column %v: %s", p.pos+1, msg)
 }
 func (p *pathParser) errUnexpected() error {
 	return p.errSyntax("unexpected " + p.currentChar())
 }
-func (p *pathParser) errExpected(expected rune) error {
-	return p.errSyntax("expected " + strconv.QuoteRune(expected) + ", got " + p.currentChar())
+func (p *pathParser) errExpected(expected byte) error {
+	return p.errSyntax("expected " + strconv.QuoteRune(rune(expected)) + ", got " + p.currentChar())
 }
 
 func (p *pathParser) parseTemplate() error {
-	if !p.scan.consume('/') {
+	if !p.consume('/') {
 		return p.errExpected('/') // empty path is not allowed.
 	}
 	if err := p.parseSegments(); err != nil {
 		return err
 	}
-	switch p.scan.next() {
-	case ':':
-		p.scan.discard()
-		return p.parseVerb()
-	case eof:
-		return nil
-	default:
-		return p.errUnexpected()
+	if p.consume(':') {
+		verb, err := p.parseLiteral()
+		if err != nil {
+			return err
+		}
+		p.output.WriteByte(':')
+		p.output.WriteString(verb)
 	}
-}
-
-func (p *pathParser) parseVerb() error {
-	literal, err := p.parseLiteral()
-	if err != nil {
-		return err
-	}
-	p.segments.verb = literal
-	if !p.scan.consume(eof) {
+	if p.pos != len(p.input) {
 		return p.errUnexpected()
 	}
 	return nil
@@ -138,69 +137,67 @@ func (p *pathParser) parseSegments() error {
 		if err := p.parseSegment(); err != nil {
 			return err
 		}
-		if p.scan.next() != '/' {
-			p.scan.backup()
+		if !p.consume('/') {
 			return nil
 		}
-		p.scan.discard()
 		if p.seenDoubleStar {
 			return errors.New("double wildcard '**' must be the final path segment")
 		}
 	}
 }
 
+func (p *pathParser) parseSegment() error {
+	switch {
+	case p.consume('*'):
+		segment := "*"
+		if p.consume('*') {
+			segment = "**"
+			p.seenDoubleStar = true
+		}
+		p.writeSegment(segment)
+		return nil
+	case p.consume('{'):
+		return p.parseVariable()
+	case !isLiteral(p.peek()):
+		return p.errSyntax("expected path value")
+	}
+	literal, err := p.parseLiteral()
+	if err != nil {
+		return err
+	}
+	p.writeSegment(literal)
+	return nil
+}
+
 // parseLiteral parses a URL path segment in URL path escaped form.
 func (p *pathParser) parseLiteral() (string, error) {
-	literal := p.scan.captureRun(isLiteral)
+	start := p.pos
+	literal := p.consumeRun(isLiteral)
 	if literal == "" {
-		p.scan.next()
 		return "", p.errUnexpected()
 	}
 	unescaped, err := pathUnescape(literal, pathEncodeSingle)
 	if err != nil {
+		for i := range len(literal) {
+			if literal[i] == '%' && validateHex(literal[i:]) != nil {
+				p.pos = start + i // point at the invalid escape.
+				break
+			}
+		}
 		return "", p.errSyntax(err.Error())
 	}
 	return pathEscape(unescaped, pathEncodeSingle), nil
 }
 
-func (p *pathParser) parseSegment() error {
-	var segment string
-	switch p.scan.next() {
-	case '*':
-		if p.scan.next() == '*' {
-			p.seenDoubleStar = true
-		} else {
-			p.scan.backup()
-		}
-		segment = p.scan.capture()
-	case '{':
-		p.scan.discard()
-		return p.parseVariable()
-	default:
-		if !isLiteral(p.scan.current()) {
-			return p.errSyntax("expected path value")
-		}
-		literal, err := p.parseLiteral()
-		if err != nil {
-			return err
-		}
-		segment = literal
-	}
-	p.segments.path = append(p.segments.path, segment)
-	return nil
-}
-
 func (p *pathParser) parseFieldPath() (string, error) {
+	start := p.pos
 	for {
-		if !isIdentStart(p.scan.next()) {
+		if !isIdentStart(p.peek()) {
 			return "", p.errSyntax("expected identifier")
 		}
-		for isIdent(p.scan.next()) {
-			continue
-		}
-		if p.scan.current() != '.' {
-			p.scan.backup()
-			return p.scan.capture(), nil
+		p.consumeRun(isIdent)
+		if !p.consume('.') {
+			return p.input[start:p.pos], nil
 		}
 	}
 }
@@ -210,37 +207,47 @@ func (p *pathParser) parseVariable() error {
 	if err != nil {
 		return err
 	}
-	if p.seenVars[fieldPath] {
-		return fmt.Errorf("duplicate variable %q", fieldPath)
+	for _, seen := range p.variables {
+		if seen.fieldPath == fieldPath {
+			return fmt.Errorf("duplicate variable %q", fieldPath)
+		}
 	}
-	if p.seenVars == nil {
-		p.seenVars = make(map[string]bool)
-	}
-	p.seenVars[fieldPath] = true
-
-	variable := pathVariable{fieldPath: fieldPath, start: len(p.segments.path)}
-
-	switch p.scan.next() {
-	case '}':
-		p.scan.discard()
-		p.segments.path = append(p.segments.path, "*") // default capture.
-	case '=':
-		p.scan.discard()
+	variable := pathVariable{fieldPath: fieldPath, start: p.segmentCount}
+	if p.consume('=') {
 		if err := p.parseSegments(); err != nil {
 			return err
 		}
-		if !p.scan.consume('}') {
-			return p.errExpected('}')
-		}
-	default:
+	} else {
+		p.writeSegment("*") // default capture.
+	}
+	if !p.consume('}') {
 		return p.errExpected('}')
 	}
-	variable.end = len(p.segments.path)
+	variable.end = p.segmentCount
 	if p.seenDoubleStar {
 		variable.end = -1 // double star wildcard.
 	}
 	p.variables = append(p.variables, variable)
 	return nil
+}
+
+func isIdentStart(char byte) bool {
+	return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || char == '_'
+}
+func isIdent(char byte) bool {
+	return isIdentStart(char) || (char >= '0' && char <= '9')
+}
+func isLiteral(char byte) bool {
+	// Allow [-_.~0-9a-zA-Z] and % for escaped characters.
+	return isVariable(char) || char == '%'
+}
+
+// isVariable is used to determine if a character is allowed in a single variable segment.
+//
+// See: https://github.com/googleapis/googleapis/blob/master/google/api/http.proto#L251C34-L251C38
+func isVariable(char byte) bool {
+	// Allow [-_.~0-9a-zA-Z].
+	return isIdent(char) || char == '.' || char == '-' || char == '~'
 }
 
 const upperhex = "0123456789ABCDEF"
@@ -282,9 +289,6 @@ const (
 	pathEncodeMulti
 )
 
-func pathShouldEscape(char byte, _ pathEncoding) bool {
-	return !isVariable(rune(char))
-}
 func pathIsHexSlash(input string) bool {
 	if len(input) < 3 {
 		return false
@@ -296,7 +300,7 @@ func pathEscape(input string, mode pathEncoding) string {
 	// Count the number of characters that possibly escaping.
 	hexCount := 0
 	for i := range len(input) {
-		if pathShouldEscape(input[i], mode) {
+		if !isVariable(input[i]) {
 			hexCount++
 		}
 	}
@@ -311,7 +315,7 @@ func pathEscape(input string, mode pathEncoding) string {
 		case char == '%' && mode == pathEncodeMulti && pathIsHexSlash(input[i:]):
 			sb.WriteString("%2F")
 			i += 2
-		case pathShouldEscape(char, mode):
+		case !isVariable(char):
 			sb.WriteByte('%')
 			sb.WriteByte(upperhex[char>>4])
 			sb.WriteByte(upperhex[char&15])

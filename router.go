@@ -69,15 +69,15 @@ func (t *routeTrie) addRoute(method *method, rule *annotations.HttpRule) (*route
 	if template == "" {
 		return nil, errors.New("invalid HTTP rule: path template is blank")
 	}
-	segments, variables, err := parsePathTemplate(template)
+	template, variables, err := parsePathTemplate(template)
 	if err != nil {
 		return nil, err
 	}
-	target, err := makeTarget(method, httpMethod, rule.GetBody(), rule.GetResponseBody(), segments, variables)
+	target, err := makeTarget(method, httpMethod, rule.GetBody(), rule.GetResponseBody(), template, variables)
 	if err != nil {
 		return nil, err
 	}
-	if err := t.insert(httpMethod, target, segments); err != nil {
+	if err := t.insert(httpMethod, target); err != nil {
 		return nil, err
 	}
 	return target, nil
@@ -106,73 +106,70 @@ func (t *routeTrie) insertVerb(verb string) routeMethods {
 	return methods
 }
 
-// insert the target into the trie using the given method and segment path.
-// The path is followed until the final segment is reached.
-func (t *routeTrie) insert(method string, target *routeTarget, segments pathSegments) error {
+// insert the target into the trie using the given method and the target's
+// template. The path is followed until the final segment is reached.
+func (t *routeTrie) insert(method string, target *routeTarget) error {
+	path, verb := splitVerb(target.template)
 	cursor := t
-	for _, segment := range segments.path {
+	for segment := range strings.SplitSeq(path[1:], "/") {
 		cursor = cursor.insertChild(segment)
 	}
-	if existing := cursor.verbs[segments.verb][method]; existing != nil {
+	if existing := cursor.verbs[verb][method]; existing != nil {
 		return alreadyExistsError{
-			existing: existing, pathPattern: segments.String(), method: method,
+			existing: existing, pathPattern: target.template, method: method,
 		}
 	}
-	cursor.insertVerb(segments.verb)[method] = target
+	cursor.insertVerb(verb)[method] = target
 	return nil
 }
 
-// match finds a route for the given request. If a match is found, the associated target and a map
-// of matched variable values is returned.
-func (t *routeTrie) match(uriPath, httpMethod string) (*routeTarget, []routeTargetVarMatch, routeMethods) {
-	if len(uriPath) == 0 || uriPath[0] != '/' || uriPath[len(uriPath)-1] == ':' {
+// match finds a route for the given request. If no target matches, the
+// methods for a matching path and verb are returned, if any.
+func (t *routeTrie) match(uriPath, httpMethod string) (*routeTarget, routeMethods) {
+	if !strings.HasPrefix(uriPath, "/") || strings.HasSuffix(uriPath, ":") {
 		// Must start with "/" or if it ends with ":" it won't match
-		return nil, nil, nil
+		return nil, nil
 	}
-	uriPath = uriPath[1:] // skip the leading slash
-
-	path := strings.Split(uriPath, "/")
-	var verb string
-	if len(path) > 0 {
-		lastElement := path[len(path)-1]
-		if pos := strings.IndexRune(lastElement, ':'); pos >= 0 {
-			path[len(path)-1] = lastElement[:pos]
-			verb = lastElement[pos+1:]
-		}
-	}
-	target, methods := t.findTarget(path, verb, httpMethod)
-	if target == nil {
-		return nil, nil, methods
-	}
-	vars, err := computeVarValues(path, target)
-	if err != nil {
-		return nil, nil, nil
-	}
-	return target, vars, nil
+	path, verb := splitVerb(uriPath)
+	return t.findTarget(path, verb, httpMethod)
 }
 
-// findTarget finds the target for the given path components, verb, and method.
+// splitVerb splits the ":verb" suffix from the final segment of the URI path.
+func splitVerb(uriPath string) (path, verb string) {
+	last := strings.LastIndexByte(uriPath, '/') + 1
+	if colon := strings.IndexByte(uriPath[last:], ':'); colon >= 0 {
+		return uriPath[:last+colon], uriPath[last+colon+1:]
+	}
+	return uriPath, ""
+}
+
+// findTarget finds the target for the given escaped path, verb, and method.
+// Each segment of the path is preceded by a "/".
 // The method either returns a target OR the set of methods for the given path
 // and verb. If the target is non-nil, the request was matched. If the target
 // is nil but methods are non-nil, the path and verb matched a route, but not
 // the method. This can be used to send back a well-formed "Allow" response
 // header. If both are nil, the path and verb did not match.
-func (t *routeTrie) findTarget(path []string, verb, method string) (*routeTarget, routeMethods) {
-	if len(path) == 0 {
+func (t *routeTrie) findTarget(path, verb, method string) (*routeTarget, routeMethods) {
+	if path == "" {
 		return t.getTarget(verb, method)
 	}
-	current := path[0]
-	path = path[1:]
+	current, rest := path[1:], ""
+	if next := strings.IndexByte(current, '/'); next >= 0 {
+		current, rest = current[:next], current[next:]
+	}
 
-	if child := t.children[current]; child != nil {
-		target, methods := child.findTarget(path, verb, method)
-		if target != nil || methods != nil {
-			return target, methods
+	if literal, ok := canonicalSegment(current); ok {
+		if child := t.children[literal]; child != nil {
+			target, methods := child.findTarget(rest, verb, method)
+			if target != nil || methods != nil {
+				return target, methods
+			}
 		}
 	}
 
 	if childAst := t.children["*"]; childAst != nil {
-		target, methods := childAst.findTarget(path, verb, method)
+		target, methods := childAst.findTarget(rest, verb, method)
 		if target != nil || methods != nil {
 			return target, methods
 		}
@@ -181,9 +178,19 @@ func (t *routeTrie) findTarget(path []string, verb, method string) (*routeTarget
 	// Double-asterisk must be the last element in pattern.
 	// So it consumes all remaining path elements.
 	if childDblAst := t.children["**"]; childDblAst != nil {
-		return childDblAst.findTarget(nil, verb, method)
+		return childDblAst.findTarget("", verb, method)
 	}
 	return nil, nil
+}
+
+// canonicalSegment returns the escaped segment in the canonical form of
+// template literals, or false if it holds an invalid escape.
+func canonicalSegment(segment string) (string, bool) {
+	unescaped, err := pathUnescape(segment, pathEncodeSingle)
+	if err != nil {
+		return "", false
+	}
+	return pathEscape(unescaped, pathEncodeSingle), true
 }
 
 // getTarget gets the target for the given verb and method from the
@@ -206,8 +213,7 @@ type routeMethods map[string]*routeTarget
 type routeTarget struct {
 	method                *method
 	httpMethod            string // HTTP method
-	path                  []string
-	verb                  string
+	template              string // canonical path template
 	requestBodyFieldPath  string
 	requestBodyFields     []protoreflect.FieldDescriptor
 	responseBodyFieldPath string
@@ -218,7 +224,7 @@ type routeTarget struct {
 func makeTarget(
 	method *method,
 	httpMethod, requestBody, responseBody string,
-	segments pathSegments,
+	template string,
 	variables []pathVariable,
 ) (*routeTarget, error) {
 	var requestBodyFields []protoreflect.FieldDescriptor
@@ -281,8 +287,7 @@ func makeTarget(
 	target := &routeTarget{
 		method:                method,
 		httpMethod:            httpMethod,
-		path:                  segments.path,
-		verb:                  segments.verb,
+		template:              template,
 		requestBodyFieldPath:  requestBody,
 		requestBodyFields:     requestBodyFields,
 		responseBodyFieldPath: responseBody,
@@ -340,45 +345,33 @@ func (v routeTargetVar) index(segments []string) []string {
 	}
 	return segments[start:end]
 }
-func (v routeTargetVar) capture(segments []string) (string, error) {
-	parts := v.index(segments)
-	mode := pathEncodeSingle
-	if v.end == -1 || len(parts) > 1 {
-		mode = pathEncodeMulti
-	}
-	var sb strings.Builder
-	for i, part := range parts {
-		val, err := pathUnescape(part, mode)
-		if err != nil {
-			return "", err
+
+// capture returns the unescaped value of the variable from the matched URI
+// path, with any verb removed.
+func (v routeTargetVar) capture(path string) (string, error) {
+	start, end := segmentOffset(path, v.start), len(path)
+	mode := pathEncodeMulti
+	if v.end != -1 {
+		end = start + segmentOffset(path[start:], v.end-v.start)
+		if v.end-v.start == 1 {
+			mode = pathEncodeSingle
 		}
-		if i > 0 {
-			sb.WriteByte('/')
-		}
-		sb.WriteString(val)
 	}
-	return sb.String(), nil
+	return pathUnescape(path[start+1:end], mode)
 }
 
-type routeTargetVarMatch struct {
-	fields []protoreflect.FieldDescriptor
-	value  string
-}
-
-func computeVarValues(path []string, target *routeTarget) ([]routeTargetVarMatch, error) {
-	if len(target.vars) == 0 {
-		return nil, nil
-	}
-	vars := make([]routeTargetVarMatch, len(target.vars))
-	for i, varDef := range target.vars {
-		val, err := varDef.capture(path)
-		if err != nil {
-			return nil, err
+// segmentOffset returns the offset of the "/" preceding segment index of the
+// path, or the length of the path if it has fewer segments.
+func segmentOffset(path string, index int) int {
+	offset := 0
+	for range index {
+		next := strings.IndexByte(path[offset+1:], '/')
+		if next < 0 {
+			return len(path)
 		}
-		vars[i].fields = varDef.fields
-		vars[i].value = val
+		offset += next + 1
 	}
-	return vars, nil
+	return offset
 }
 
 // resolvePathToFieldDescriptors translates the given path string, in the form of
@@ -388,12 +381,20 @@ func computeVarValues(path []string, target *routeTarget) ([]routeTargetVarMatch
 func resolvePathToFieldDescriptors(
 	msg protoreflect.MessageDescriptor, path string, fromJSON bool,
 ) ([]protoreflect.FieldDescriptor, error) {
+	result := make([]protoreflect.FieldDescriptor, 0, strings.Count(path, ".")+1)
+	return appendPathToFieldDescriptors(result, msg, path, fromJSON)
+}
+
+// appendPathToFieldDescriptors is like [resolvePathToFieldDescriptors], but
+// appends the fields to result.
+func appendPathToFieldDescriptors(
+	result []protoreflect.FieldDescriptor, msg protoreflect.MessageDescriptor, path string, fromJSON bool,
+) ([]protoreflect.FieldDescriptor, error) {
 	if path == "" {
 		return nil, errors.New("empty field path")
 	}
 	fields := msg.Fields()
-	result := make([]protoreflect.FieldDescriptor, strings.Count(path, ".")+1)
-	for i, remaining := 0, path; remaining != ""; i++ {
+	for remaining := path; remaining != ""; {
 		part := remaining
 		if i := strings.IndexByte(remaining, '.'); i >= 0 {
 			part, remaining = remaining[:i], remaining[i+1:]
@@ -411,7 +412,7 @@ func resolvePathToFieldDescriptors(
 					errUnknownField, path, part, msg.FullName())
 			}
 		}
-		result[i] = field
+		result = append(result, field)
 		if remaining == "" {
 			break
 		}
