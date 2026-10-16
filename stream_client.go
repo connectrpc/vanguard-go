@@ -375,7 +375,7 @@ func (s *clientStream) Receive(msg any) error {
 		if err != nil {
 			return s.readError(err)
 		}
-		return httpErrorFromResponse(s.response.StatusCode, contentType, body)
+		return httpErrorFromResponse(s.ctx, s.transport.codec, s.response.StatusCode, contentType, body)
 	}
 	pmsg, ok := msg.(proto.Message)
 	if !ok {
