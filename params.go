@@ -301,7 +301,7 @@ func isJSONNumber(data string) bool {
 }
 
 func quote(raw []byte) []byte {
-	if len(raw) == 0 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+	if len(raw) == 0 || raw[0] != '"' || !json.Valid(raw) {
 		raw = strconv.AppendQuote(raw[:0], string(raw))
 	}
 	return raw

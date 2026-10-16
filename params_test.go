@@ -350,6 +350,18 @@ func TestSetParameter(t *testing.T) {
 		},
 	}, {
 		fields: "string_value_wrapper",
+		value:  "\"",
+		want: &testv1.ParameterValues{
+			StringValueWrapper: &wrapperspb.StringValue{Value: "\""},
+		},
+	}, {
+		fields: "string_value_wrapper",
+		value:  "\"hello\"world\"",
+		want: &testv1.ParameterValues{
+			StringValueWrapper: &wrapperspb.StringValue{Value: "\"hello\"world\""},
+		},
+	}, {
+		fields: "string_value_wrapper",
 		value:  "",
 		want: &testv1.ParameterValues{
 			StringValueWrapper: &wrapperspb.StringValue{Value: ""},
@@ -696,6 +708,24 @@ func TestGetParameter(t *testing.T) {
 			StringValueWrapper: &wrapperspb.StringValue{Value: "\"hello world\""},
 		},
 		want: "\"hello world\"",
+	}, {
+		fields: "string_value_wrapper",
+		msg: &testv1.ParameterValues{
+			StringValueWrapper: &wrapperspb.StringValue{},
+		},
+		want: "",
+	}, {
+		fields: "bytes_value_wrapper",
+		msg: &testv1.ParameterValues{
+			BytesValueWrapper: &wrapperspb.BytesValue{},
+		},
+		want: "",
+	}, {
+		fields: "field_mask",
+		msg: &testv1.ParameterValues{
+			FieldMask: &fieldmaskpb.FieldMask{},
+		},
+		want: "",
 	}, {
 		fields: "field_mask",
 		msg: &testv1.ParameterValues{
