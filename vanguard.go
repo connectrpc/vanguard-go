@@ -255,11 +255,12 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 	if target == nil {
 		if len(allowedMethods) > 0 {
 			responseWriter.Header().Set("Allow", strings.Join(slices.Sorted(maps.Keys(allowedMethods)), ", "))
-			httpWriteStatus(responseWriter, http.StatusMethodNotAllowed,
+			httpWriteStatus(request.Context(), responseWriter, h.codec, http.StatusMethodNotAllowed,
 				connect.Errorf(connect.CodeUnimplemented, "HTTP method %s not allowed", request.Method))
 			return
 		}
-		httpWriteError(responseWriter, connect.Errorf(connect.CodeNotFound, "no REST route for %s", request.URL.Path))
+		httpWriteError(request.Context(), responseWriter, h.codec,
+			connect.Errorf(connect.CodeNotFound, "no REST route for %s", request.URL.Path))
 		return
 	}
 	method := target.method
@@ -269,13 +270,14 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 		request.Header.Get("Content-Encoding"), request.Header.Get("Accept-Encoding"))
 	if err != nil {
 		responseWriter.Header().Set("Accept-Encoding", h.compressors.names)
-		httpWriteError(responseWriter, err)
+		httpWriteError(request.Context(), responseWriter, h.codec, err)
 		return
 	}
 	if timeoutStr := request.Header.Get("X-Server-Timeout"); timeoutStr != "" {
 		timeout, err := restDecodeTimeout(timeoutStr)
 		if err != nil {
-			httpWriteError(responseWriter, connect.NewError(connect.CodeInvalidArgument, err.Error()))
+			httpWriteError(request.Context(), responseWriter, h.codec,
+				connect.NewError(connect.CodeInvalidArgument, err.Error()))
 			return
 		}
 		var cancel context.CancelFunc
@@ -314,7 +316,7 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 		panic(http.ErrAbortHandler) //nolint:forbidigo // net/http aborts the response without logging
 	}
 	setMetadataHeaders(responseWriter.Header(), info.ResponseHeader())
-	httpWriteError(responseWriter, err)
+	httpWriteError(request.Context(), responseWriter, h.codec, err)
 }
 
 // NewTransport returns a [connect.Transport] that issues REST requests for

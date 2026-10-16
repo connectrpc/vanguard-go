@@ -15,6 +15,8 @@
 package vanguard
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -24,7 +26,6 @@ import (
 	"google.golang.org/genproto/googleapis/api/annotations"
 	httpbody "google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/genproto/googleapis/rpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -80,38 +81,34 @@ func httpStatusCodeToRPC(code int) connect.Code {
 	}
 }
 
-func httpWriteError(rsp http.ResponseWriter, err error) {
+func httpWriteError(ctx context.Context, rsp http.ResponseWriter, codec RESTCodec, err error) {
 	cerr := asConnectError(err)
-	httpWriteStatus(rsp, httpStatusCodeFromRPC(cerr.Code()), cerr)
+	httpWriteStatus(ctx, rsp, codec, httpStatusCodeFromRPC(cerr.Code()), cerr)
 }
 
 // httpWriteStatus writes cerr as a google.rpc.Status body with statusCode.
-func httpWriteStatus(rsp http.ResponseWriter, statusCode int, cerr *connect.Error) {
-	codec := protojson.MarshalOptions{
-		EmitUnpopulated: true,
-	}
+func httpWriteStatus(ctx context.Context, rsp http.ResponseWriter, codec RESTCodec, statusCode int, cerr *connect.Error) {
 	stat := grpcStatusFromError(cerr)
 
 	hdr := rsp.Header()
-	hdr.Set("Content-Type", "application/json")
+	hdr.Set("Content-Type", "application/"+codec.Name())
 	hdr.Set("Content-Encoding", "identity")
-	bin, err := codec.MarshalAppend(nil, stat)
-	if err != nil {
-		statusCode = http.StatusInternalServerError
-		hdr.Set("Content-Type", "application/json")
-		bin = []byte(`{"code": 12, "message":"` + err.Error() + `"}`)
-	}
 	rsp.WriteHeader(statusCode)
-	_, _ = rsp.Write(bin) //nolint:gosec // writing error response, not user-tainted data
+	_ = codec.MarshalWrite(ctx, rsp, stat)
 }
 
-func httpErrorFromResponse(statusCode int, contentType string, src []byte) *connect.Error {
+func httpErrorFromResponse(
+	ctx context.Context,
+	codec RESTCodec,
+	statusCode int,
+	contentType string,
+	src []byte,
+) *connect.Error {
 	if statusCode == http.StatusOK {
 		return nil
 	}
-	codec := protojson.UnmarshalOptions{}
 	var stat status.Status
-	if err := codec.Unmarshal(src, &stat); err != nil {
+	if err := codec.UnmarshalRead(ctx, bytes.NewReader(src), &stat); err != nil {
 		body, err := anypb.New(&httpbody.HttpBody{
 			ContentType: contentType,
 			Data:        src,

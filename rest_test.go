@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
 	"github.com/google/go-cmp/cmp"
@@ -1141,6 +1142,29 @@ func TestMount_CallInfoEncoding(t *testing.T) {
 	assert.Equal(t, "gzip", info.ResponseEncoding)
 }
 
+func TestMount_ErrorCodec(t *testing.T) {
+	t.Parallel()
+
+	serve := func(context.Context, connect.Spec, connect.ServerStream) error {
+		return connect.NewError(connect.CodeNotFound, "no such book")
+	}
+	handler := mountTestHandler(t, methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetBook")), serve,
+		WithCodec(newLegacyErrorCodec))
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/shelves/s/books/b", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.JSONEq(t, `{"error":{"code":5,"message":"no such book"}}`, rec.Body.String())
+
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/unknown", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.JSONEq(t, `{"error":{"code":5,"message":"no REST route for /v1/unknown"}}`, rec.Body.String())
+}
+
 func TestMount_MaxReadBytes(t *testing.T) {
 	t.Parallel()
 
@@ -1306,6 +1330,46 @@ func bookEchoHandler(t *testing.T, opts ...Option) http.Handler {
 		return stream.Send(req.GetBook())
 	}
 	return mountTestHandler(t, methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.CreateBook")), serve, opts...)
+}
+
+type legacyErrorCodec struct {
+	*JSONCodec
+}
+
+type legacyError struct {
+	Error struct {
+		Code    int32  `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+func newLegacyErrorCodec(resolver connectproto.TypeResolver) RESTCodec {
+	return legacyErrorCodec{JSONCodec: NewJSONCodec(resolver)}
+}
+
+func (c legacyErrorCodec) MarshalWrite(ctx context.Context, writer io.Writer, msg any) error {
+	stat, ok := msg.(*status.Status)
+	if !ok {
+		return c.JSONCodec.MarshalWrite(ctx, writer, msg)
+	}
+	var body legacyError
+	body.Error.Code = stat.GetCode()
+	body.Error.Message = stat.GetMessage()
+	return json.NewEncoder(writer).Encode(body)
+}
+
+func (c legacyErrorCodec) UnmarshalRead(ctx context.Context, reader io.Reader, msg any) error {
+	stat, ok := msg.(*status.Status)
+	if !ok {
+		return c.JSONCodec.UnmarshalRead(ctx, reader, msg)
+	}
+	var body legacyError
+	if err := json.NewDecoder(reader).Decode(&body); err != nil {
+		return err
+	}
+	stat.Code = body.Error.Code
+	stat.Message = body.Error.Message
+	return nil
 }
 
 func gzipBytes(t *testing.T, data []byte) []byte {
