@@ -349,6 +349,36 @@ func TestSetParameter(t *testing.T) {
 			StringValueWrapper: &wrapperspb.StringValue{Value: "hello world"},
 		},
 	}, {
+		fields: "string_value_wrapper",
+		value:  "\"",
+		want: &testv1.ParameterValues{
+			StringValueWrapper: &wrapperspb.StringValue{Value: "\""},
+		},
+	}, {
+		fields: "string_value_wrapper",
+		value:  "\"hello\"world\"",
+		want: &testv1.ParameterValues{
+			StringValueWrapper: &wrapperspb.StringValue{Value: "\"hello\"world\""},
+		},
+	}, {
+		fields: "string_value_wrapper",
+		value:  "",
+		want: &testv1.ParameterValues{
+			StringValueWrapper: &wrapperspb.StringValue{Value: ""},
+		},
+	}, {
+		fields: "bytes_value_wrapper",
+		value:  "",
+		want: &testv1.ParameterValues{
+			BytesValueWrapper: &wrapperspb.BytesValue{Value: []byte{}},
+		},
+	}, {
+		fields: "field_mask",
+		value:  "",
+		want: &testv1.ParameterValues{
+			FieldMask: &fieldmaskpb.FieldMask{},
+		},
+	}, {
 		fields: "field_mask",
 		value:  "foo,bar.baz", // TODO: validate against the descriptor?
 		want: &testv1.ParameterValues{
@@ -678,6 +708,24 @@ func TestGetParameter(t *testing.T) {
 			StringValueWrapper: &wrapperspb.StringValue{Value: "\"hello world\""},
 		},
 		want: "\"hello world\"",
+	}, {
+		fields: "string_value_wrapper",
+		msg: &testv1.ParameterValues{
+			StringValueWrapper: &wrapperspb.StringValue{},
+		},
+		want: "",
+	}, {
+		fields: "bytes_value_wrapper",
+		msg: &testv1.ParameterValues{
+			BytesValueWrapper: &wrapperspb.BytesValue{},
+		},
+		want: "",
+	}, {
+		fields: "field_mask",
+		msg: &testv1.ParameterValues{
+			FieldMask: &fieldmaskpb.FieldMask{},
+		},
+		want: "",
 	}, {
 		fields: "field_mask",
 		msg: &testv1.ParameterValues{
