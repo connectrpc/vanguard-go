@@ -86,6 +86,30 @@ func TestTransport_Unary(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(stream.CloseSend()))
 }
 
+func TestTransport_ErrorCodec(t *testing.T) {
+	t.Parallel()
+
+	spec := methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetBook"))
+	serve := func(context.Context, connect.Spec, connect.ServerStream) error {
+		return connect.NewError(connect.CodeNotFound, "no such book")
+	}
+	srv := httptest.NewServer(mountTestHandler(t, spec, serve, WithCodec(newLegacyErrorCodec)))
+	t.Cleanup(srv.Close)
+
+	restTransport, err := NewTransport(srv.Client(), srv.URL, WithCodec(newLegacyErrorCodec))
+	require.NoError(t, err)
+	stream, err := restTransport.NewClientStream(t.Context(), spec)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stream.Close() })
+	require.NoError(t, stream.Send(&testv1.GetBookRequest{Name: "shelves/s/books/b"}))
+	require.NoError(t, stream.CloseSend())
+	err = stream.Receive(&testv1.Book{})
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+	assert.Equal(t, "no such book", connectErr.Message())
+}
+
 func TestTransport_EscapedPath(t *testing.T) {
 	t.Parallel()
 
