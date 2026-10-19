@@ -107,6 +107,36 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 			path: "foo/bar/baz/123/buzz/buzz:blah",
 		},
 		{
+			path:         "/foo/bar/my:weird:id",
+			expectedPath: "/foo/bar/{name}",
+			expectedVars: map[string]string{"name": "my:weird:id"},
+		},
+		{
+			path:         "/foo/bar/my%3Aweird%3Aid",
+			expectedPath: "/foo/bar/{name}",
+			expectedVars: map[string]string{"name": "my:weird:id"},
+		},
+		{
+			path:         "/foo/bar/a:b/baz/c:d",
+			expectedPath: "/foo/bar/{name}/baz/{child}",
+			expectedVars: map[string]string{"name": "a:b", "child": "c:d"},
+		},
+		{
+			path:         "/foo/bar/baz/123/a:b:do",
+			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}:do",
+			expectedVars: map[string]string{"thing.id": "123", "cat": "a:b"},
+		},
+		{
+			path:         "/foo/bar/some:id/123/then:do",
+			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}:do",
+			expectedVars: map[string]string{"thing.id": "123", "cat": "then"},
+		},
+		{
+			path:         "/foo/bar/baz/123/buzz:blah",
+			expectedPath: "/foo/bar/*/{thing.id}/{cat=**}",
+			expectedVars: map[string]string{"thing.id": "123", "cat": "buzz:blah"},
+		},
+		{
 			path:         "/foo/bob/bar/baz/123/details",
 			expectedPath: "/foo/bob/{book_id={author}/{isbn}/*}/details",
 			expectedVars: map[string]string{"book_id": "bar/baz/123", "author": "bar", "isbn": "baz"},
@@ -192,7 +222,7 @@ func TestRouteTrie_FindTarget(t *testing.T) {
 					require.NotNil(t, target)
 					require.Equal(t, protoreflect.Name(fmt.Sprintf("%s %s", method, testCase.expectedPath)), target.method.descriptor.Name())
 					require.Len(t, target.vars, len(testCase.expectedVars))
-					path, _ := splitVerb(testCase.path)
+					path := target.trimVerb(testCase.path)
 					for _, variable := range target.vars {
 						expectedValue, ok := testCase.expectedVars[variable.fieldPath]
 						assert.True(t, ok, variable.fieldPath)
