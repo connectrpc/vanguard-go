@@ -52,7 +52,7 @@ func decodeRequestURL(
 	// Path variables (in reverse so earlier matches stay authoritative
 	// after later ones are set — mirrors the legacy ordering).
 	mreflect := msg.ProtoReflect()
-	path, _ := splitVerb(request.URL.EscapedPath())
+	path := target.trimVerb(request.URL.EscapedPath())
 	for _, variable := range slices.Backward(target.vars) {
 		value, err := variable.capture(path)
 		if err != nil {
