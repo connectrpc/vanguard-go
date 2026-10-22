@@ -263,6 +263,11 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 			connect.Errorf(connect.CodeNotFound, "no REST route for %s", request.URL.Path))
 		return
 	}
+	if target.unsupported != nil {
+		httpWriteStatus(request.Context(), responseWriter, h.codec, http.StatusUnsupportedMediaType,
+			connect.NewError(connect.CodeUnimplemented, target.unsupported.Error()))
+		return
+	}
 	method := target.method
 	ctx := request.Context()
 
@@ -419,6 +424,9 @@ func (t *transport) resolveMethod(spec connect.Spec) (*method, error) {
 	// trie is for path-matching, which clients don't need.
 	trie := &routeTrie{}
 	target, err := trie.addRoute(method, rule)
+	if err == nil {
+		err = target.unsupported
+	}
 	if err != nil {
 		return nil, fmt.Errorf("attach rule for %s: %w", spec.Procedure, err)
 	}

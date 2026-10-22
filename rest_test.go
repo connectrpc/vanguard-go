@@ -40,6 +40,7 @@ import (
 	"google.golang.org/genproto/googleapis/api/annotations"
 	"google.golang.org/genproto/googleapis/api/httpbody"
 	"google.golang.org/genproto/googleapis/rpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -977,6 +978,42 @@ func TestMount_RejectsUnsupportedStreamType(t *testing.T) {
 		Pattern:  &annotations.HttpRule_Get{Get: "/download/{filename=**}"},
 	}))
 	require.ErrorContains(t, err, "requires a google.api.HttpBody response body")
+}
+
+func TestMount_DefersUnsupportedAnnotatedStream(t *testing.T) {
+	t.Parallel()
+
+	streamSpec := methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetBook"))
+	streamSpec.StreamType = connect.StreamTypeServer
+	unarySpec := methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.CreateBook"))
+	server := connect.NewServer()
+	server.Register(connect.Method{Spec: streamSpec, Handler: func(context.Context, connect.Spec, connect.ServerStream) error {
+		return errors.New("unreachable")
+	}})
+	server.Register(connect.Method{Spec: unarySpec, Handler: func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+		req := &testv1.CreateBookRequest{}
+		if err := stream.Receive(req); err != nil {
+			return err
+		}
+		return stream.Send(req.GetBook())
+	}})
+	mux := http.NewServeMux()
+	require.NoError(t, Mount(mux, server))
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/shelves/1/books/1", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code)
+	got := &status.Status{}
+	require.NoError(t, protojson.Unmarshal(rec.Body.Bytes(), got))
+	assert.Equal(t, int32(connect.CodeUnimplemented), got.GetCode())
+	assert.Contains(t, got.GetMessage(), "requires a google.api.HttpBody response body")
+
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/shelves/1/books",
+		strings.NewReader(`{"name":"shelves/1/books/1"}`))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestMount_UploadChunks(t *testing.T) {
