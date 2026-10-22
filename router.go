@@ -219,6 +219,7 @@ type routeTarget struct {
 	responseBodyFieldPath string
 	responseBodyFields    []protoreflect.FieldDescriptor
 	vars                  []routeTargetVar
+	unsupported           error // non-nil if the route can't be served
 }
 
 func makeTarget(
@@ -294,9 +295,7 @@ func makeTarget(
 		responseBodyFields:    responseBodyFields,
 		vars:                  routeTargetVars,
 	}
-	if err := checkStreamType(target); err != nil {
-		return nil, err
-	}
+	target.unsupported = checkStreamType(target)
 	return target, nil
 }
 
