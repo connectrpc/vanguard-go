@@ -263,6 +263,7 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 			connect.Errorf(connect.CodeNotFound, "no REST route for %s", request.URL.Path))
 		return
 	}
+	request.Pattern = target.pattern
 	method := target.method
 	ctx := request.Context()
 

@@ -1228,6 +1228,23 @@ func TestMount_ErrorCodec(t *testing.T) {
 	assert.JSONEq(t, `{"error":{"code":5,"message":"no REST route for /v1/unknown"}}`, rec.Body.String())
 }
 
+func TestMount_RequestPattern(t *testing.T) {
+	t.Parallel()
+
+	handler := bookEchoHandler(t)
+	serve := func(method, path string, body io.Reader) string {
+		req := httptest.NewRequestWithContext(t.Context(), method, path, body)
+		req.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+		return req.Pattern
+	}
+
+	assert.Equal(t, "POST /v1/{parent=shelves/*}/books",
+		serve(http.MethodPost, "/v1/shelves/s/books", strings.NewReader(`{"title":"tiny"}`)))
+	assert.Equal(t, "/", serve(http.MethodGet, "/v1/shelves/s/books", nil))
+	assert.Equal(t, "/", serve(http.MethodGet, "/v1/unknown", nil))
+}
+
 func TestMount_MaxReadBytes(t *testing.T) {
 	t.Parallel()
 
