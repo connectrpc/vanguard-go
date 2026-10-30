@@ -131,13 +131,22 @@ func (t *routeTrie) match(uriPath, httpMethod string) (*routeTarget, routeMethod
 		return nil, nil
 	}
 	path, verb := splitVerb(uriPath)
-	return t.findTarget(path, verb, httpMethod)
+	target, methods := t.findTarget(path, verb, httpMethod)
+	if target == nil && verb != "" {
+		// No route has this verb, so the colon may belong to the final
+		// segment's value instead, such as "/objects/my:id".
+		if fallback, fallbackMethods := t.findTarget(uriPath, "", httpMethod); fallback != nil || methods == nil {
+			return fallback, fallbackMethods
+		}
+	}
+	return target, methods
 }
 
 // splitVerb splits the ":verb" suffix from the final segment of the URI path.
+// Verbs cannot contain a colon, so the verb follows the last one.
 func splitVerb(uriPath string) (path, verb string) {
 	last := strings.LastIndexByte(uriPath, '/') + 1
-	if colon := strings.IndexByte(uriPath[last:], ':'); colon >= 0 {
+	if colon := strings.LastIndexByte(uriPath[last:], ':'); colon >= 0 {
 		return uriPath[:last+colon], uriPath[last+colon+1:]
 	}
 	return uriPath, ""
@@ -321,6 +330,15 @@ func checkStreamType(target *routeTarget) error {
 	case connect.StreamTypeBidi:
 	}
 	return fmt.Errorf("stream type %s not supported", streamType)
+}
+
+// trimVerb returns the matched URI path with the target's ":verb" suffix
+// removed.
+func (t *routeTarget) trimVerb(uriPath string) string {
+	if _, verb := splitVerb(t.template); verb != "" {
+		return uriPath[:len(uriPath)-len(verb)-1]
+	}
+	return uriPath
 }
 
 type routeTargetVar struct {
