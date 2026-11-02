@@ -149,6 +149,69 @@ func TestMount_RESTRequests(t *testing.T) {
 			body: &testv1.Book{Name: "shelves/a%2Fb/books/c d"},
 		},
 	}, {
+		name: "ListBooks-JSONNameQuery",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books?pageSize=10&page_token=abc",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListBooksProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListBooksRequest{Parent: "shelves/1", PageSize: 10, PageToken: "abc"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.ListBooksResponse{NextPageToken: "def"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.ListBooksResponse{NextPageToken: "def"},
+		},
+	}, {
+		name: "GetBook-ColonInName",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves/1/books/my:weird:id",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetBookRequest{Name: "shelves/1/books/my:weird:id"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/my:weird:id"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/my:weird:id"},
+		},
+	}, {
+		name: "ListCheckouts-ColonBeforeVerb",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v2/shelves/1/books/a:b:checkouts",
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListCheckoutsProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListCheckoutsRequest{Name: "shelves/1/books/a:b"},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.ListCheckoutsResponse{Checkouts: []*testv1.Checkout{{Id: 1}}},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: `[{"id": "1", "books": []}]`,
+		},
+	}, {
 		name: "GetBook-NotAllowed",
 		input: input{
 			method: http.MethodPut,
