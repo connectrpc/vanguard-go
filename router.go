@@ -69,6 +69,7 @@ func (t *routeTrie) addRoute(method *method, rule *annotations.HttpRule) (*route
 	if template == "" {
 		return nil, errors.New("invalid HTTP rule: path template is blank")
 	}
+	pattern := httpMethod + " " + template
 	template, variables, err := parsePathTemplate(template)
 	if err != nil {
 		return nil, err
@@ -77,6 +78,7 @@ func (t *routeTrie) addRoute(method *method, rule *annotations.HttpRule) (*route
 	if err != nil {
 		return nil, err
 	}
+	target.pattern = pattern
 	if err := t.insert(httpMethod, target); err != nil {
 		return nil, err
 	}
@@ -223,6 +225,7 @@ type routeTarget struct {
 	method                *method
 	httpMethod            string // HTTP method
 	template              string // canonical path template
+	pattern               string // HTTP method and path template as written
 	requestBodyFieldPath  string
 	requestBodyFields     []protoreflect.FieldDescriptor
 	responseBodyFieldPath string
