@@ -263,11 +263,13 @@ func (h *restHandler) ServeHTTP(responseWriter http.ResponseWriter, request *htt
 			connect.Errorf(connect.CodeNotFound, "no REST route for %s", request.URL.Path))
 		return
 	}
+
 	if target.unsupported != nil {
 		httpWriteStatus(request.Context(), responseWriter, h.codec, http.StatusUnsupportedMediaType,
 			connect.NewError(connect.CodeUnimplemented, target.unsupported.Error()))
 		return
 	}
+	request.Pattern = target.pattern
 	method := target.method
 	ctx := request.Context()
 
