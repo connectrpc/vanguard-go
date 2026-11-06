@@ -137,6 +137,9 @@ func resolveMethods(
 			return nil, nil, fmt.Errorf("WithRules: selector %q does not match a registered procedure", selector)
 		}
 		target, err := routes.addRoute(method, rule)
+		if err == nil {
+			err = target.unsupported
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("attach external rule for %s: %w", selector, err)
 		}
@@ -144,7 +147,11 @@ func resolveMethods(
 			method.httpRule = target
 		}
 		for _, extra := range rule.GetAdditionalBindings() {
-			if _, err := routes.addRoute(method, extra); err != nil {
+			extraTarget, err := routes.addRoute(method, extra)
+			if err == nil {
+				err = extraTarget.unsupported
+			}
+			if err != nil {
 				return nil, nil, fmt.Errorf("attach additional binding for %s: %w", selector, err)
 			}
 		}

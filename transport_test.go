@@ -171,6 +171,17 @@ func TestTransport_ClientStream_RequestFails(t *testing.T) {
 	}
 }
 
+func TestTransport_RejectsUnsupportedStreamType(t *testing.T) {
+	t.Parallel()
+
+	spec := methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetBook"))
+	spec.StreamType = connect.StreamTypeServer
+	restTransport, err := NewTransport(failingHTTPClient{}, "http://example.invalid")
+	require.NoError(t, err)
+	_, err = restTransport.NewClientStream(t.Context(), spec)
+	require.ErrorContains(t, err, "requires a google.api.HttpBody response body")
+}
+
 func TestTransport_MaxReadBytes(t *testing.T) {
 	t.Parallel()
 
