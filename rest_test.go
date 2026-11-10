@@ -28,9 +28,11 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectgzip"
 	"connectrpc.com/connect/v2/connectproto"
 	testv1 "connectrpc.com/vanguard/internal/gen/vanguard/test/v1"
 	"connectrpc.com/vanguard/internal/gen/vanguard/test/v1/testv1connect"
@@ -1123,6 +1125,15 @@ func TestMount_UploadChunks(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, "empty.bin", got[0].GetFilename())
 	assert.Empty(t, got[0].GetFile().GetData())
+
+	truncated := gzipBytes(t, payload)
+	req = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/truncated.bin:upload",
+		bytes.NewReader(truncated[:len(truncated)-8]))
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Encoding", "gzip")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusBadRequest, rec.Code, "body=%s", rec.Body.String())
 }
 
 func TestMount_CompressionOptions(t *testing.T) {
@@ -1151,6 +1162,53 @@ func TestMount_CompressionOptions(t *testing.T) {
 	assert.Empty(t, rec.Header().Get("Content-Encoding"))
 	rec = post(bookEchoHandler(t, WithCompressors()), "gzip")
 	assert.Equal(t, http.StatusNotImplemented, rec.Code)
+}
+
+func TestMount_ReleasesDecompressor(t *testing.T) {
+	t.Parallel()
+
+	compressor := &closeCountingCompressor{Compressor: connectgzip.New()}
+	handler := bookEchoHandler(t, WithCompressors(compressor))
+	for _, body := range []string{`{"title":"tiny"}`, `{"title":`} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/shelves/s/books",
+			bytes.NewReader(gzipBytes(t, []byte(body))))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Encoding", "gzip")
+		handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	assert.Equal(t, int32(2), compressor.closes.Load())
+}
+
+func TestMount_ReleasesDecompressorAfterReceive(t *testing.T) {
+	t.Parallel()
+
+	var partial bytes.Buffer
+	writer := gzip.NewWriter(&partial)
+	_, err := writer.Write([]byte("partial upload"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Flush())
+	body := &blockingReader{data: partial.Bytes(), blocked: make(chan struct{}), unblock: make(chan struct{})}
+
+	compressor := &closeCountingCompressor{Compressor: connectgzip.New()}
+	received := make(chan error, 1)
+	serve := func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+		go func() { received <- stream.Receive(&testv1.UploadRequest{}) }()
+		<-body.blocked
+		return connect.NewError(connect.CodePermissionDenied, "rejected early")
+	}
+	handler := mountTestHandler(t, methodSpec(methodDesc(t, "vanguard.test.v1.ContentService.Upload")),
+		serve, WithCompressors(compressor))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/file.bin:upload", body)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, int32(0), compressor.closes.Load())
+
+	close(body.unblock)
+	require.Error(t, <-received)
+	assert.Equal(t, int32(1), compressor.closes.Load())
 }
 
 func TestMount_AbortsAfterCommit(t *testing.T) {
@@ -1506,6 +1564,48 @@ func gunzipBytes(t *testing.T, data []byte) []byte {
 	out, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	return out
+}
+
+type closeCountingCompressor struct {
+	*connectgzip.Compressor
+
+	closes atomic.Int32
+}
+
+func (c *closeCountingCompressor) Decompress(src io.Reader) (io.ReadCloser, error) {
+	reader, err := c.Compressor.Decompress(src)
+	if err != nil {
+		return nil, err
+	}
+	return &closeCountingReader{ReadCloser: reader, closes: &c.closes}, nil
+}
+
+type closeCountingReader struct {
+	io.ReadCloser
+
+	closes *atomic.Int32
+}
+
+func (r *closeCountingReader) Close() error {
+	r.closes.Add(1)
+	return r.ReadCloser.Close()
+}
+
+type blockingReader struct {
+	data    []byte
+	blocked chan struct{}
+	unblock chan struct{}
+}
+
+func (r *blockingReader) Read(p []byte) (int, error) {
+	if len(r.data) > 0 {
+		n := copy(p, r.data)
+		r.data = r.data[n:]
+		return n, nil
+	}
+	close(r.blocked)
+	<-r.unblock
+	return 0, io.EOF
 }
 
 func serveRecovered(handler http.Handler, responseWriter http.ResponseWriter, request *http.Request) (recovered any) {

@@ -107,12 +107,20 @@ func queryValues(rawQuery string) iter.Seq2[string, string] {
 // A fresh buffer per chunk, since the message retains it.
 func readChunk(body io.Reader) ([]byte, error) {
 	buf := make([]byte, bodyChunkSize)
-	size, err := io.ReadFull(body, buf)
-	if errors.Is(err, io.ErrUnexpectedEOF) {
-		err = nil
+	size := 0
+	for size < len(buf) {
+		// Unlike io.ReadFull, an io.ErrUnexpectedEOF from body is an error.
+		read, err := body.Read(buf[size:])
+		size += read
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	if err != nil {
-		return nil, err
+	if size == 0 {
+		return nil, io.EOF
 	}
 	return buf[:size], nil
 }
