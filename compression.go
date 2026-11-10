@@ -17,6 +17,7 @@ package vanguard
 import (
 	"errors"
 	"io"
+	"net/http"
 	"strings"
 	"sync"
 
@@ -86,22 +87,55 @@ func decompressBody(compressor connect.Compressor, body io.ReadCloser) (io.ReadC
 	if err != nil {
 		return nil, err
 	}
-	return &decompressedBody{Reader: reader, decompressor: reader, body: body}, nil
+	return &decompressedBody{decompressor: reader, body: body}, nil
 }
 
+// decompressedBody is a body read through a pooled decompressor that may be
+// closed during a Read, which then releases it.
 type decompressedBody struct {
-	io.Reader
-
-	decompressor io.Closer
+	decompressor io.ReadCloser
 	body         io.Closer
-	closeOnce    sync.Once
-	closeErr     error
+
+	mu      sync.Mutex
+	reading bool
+	closed  bool
 }
 
-// Close is idempotent, so a pooled decompressor is released only once.
+// Read returns [http.ErrBodyReadAfterClose] after Close.
+func (d *decompressedBody) Read(data []byte) (int, error) {
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return 0, http.ErrBodyReadAfterClose
+	}
+	d.reading = true
+	d.mu.Unlock()
+
+	size, err := d.decompressor.Read(data)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.reading = false
+	if d.closed {
+		_ = d.release()
+	}
+	return size, err
+}
+
+// Close releases the decompressor and closes body, at most once.
 func (d *decompressedBody) Close() error {
-	d.closeOnce.Do(func() {
-		d.closeErr = errors.Join(d.decompressor.Close(), d.body.Close())
-	})
-	return d.closeErr
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return nil
+	}
+	d.closed = true
+	if d.reading {
+		return nil
+	}
+	return d.release()
+}
+
+func (d *decompressedBody) release() error {
+	return errors.Join(d.decompressor.Close(), d.body.Close())
 }
