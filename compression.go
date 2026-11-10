@@ -19,7 +19,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"connectrpc.com/connect/v2"
 )
@@ -95,43 +95,31 @@ func decompressBody(compressor connect.Compressor, body io.ReadCloser) (io.ReadC
 type decompressedBody struct {
 	decompressor io.ReadCloser
 	body         io.Closer
-
-	mu      sync.Mutex
-	reading bool
-	closed  bool
+	state        atomic.Int32
 }
+
+const (
+	bodyIdle int32 = iota
+	bodyReading
+	bodyClosed
+)
 
 // Read returns [http.ErrBodyReadAfterClose] after Close.
 func (d *decompressedBody) Read(data []byte) (int, error) {
-	d.mu.Lock()
-	if d.closed {
-		d.mu.Unlock()
+	if !d.state.CompareAndSwap(bodyIdle, bodyReading) {
 		return 0, http.ErrBodyReadAfterClose
 	}
-	d.reading = true
-	d.mu.Unlock()
-
 	size, err := d.decompressor.Read(data)
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.reading = false
-	if d.closed {
-		_ = d.release()
+	if !d.state.CompareAndSwap(bodyReading, bodyIdle) {
+		_ = d.release() // Close ran during this Read and left the release to it
 	}
 	return size, err
 }
 
 // Close releases the decompressor and closes body, at most once.
 func (d *decompressedBody) Close() error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.closed {
-		return nil
-	}
-	d.closed = true
-	if d.reading {
-		return nil
+	if d.state.Swap(bodyClosed) != bodyIdle {
+		return nil // already closed, or the in-flight Read releases
 	}
 	return d.release()
 }

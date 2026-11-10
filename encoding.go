@@ -104,12 +104,12 @@ func queryValues(rawQuery string) iter.Seq2[string, string] {
 }
 
 // readChunk returns the next slice of body, or io.EOF once it is exhausted.
-// A fresh buffer per chunk, since the message retains it. Unlike
-// io.ReadFull, an io.ErrUnexpectedEOF from body is an error, not a short read.
+// A fresh buffer per chunk, since the message retains it.
 func readChunk(body io.Reader) ([]byte, error) {
 	buf := make([]byte, bodyChunkSize)
 	size := 0
 	for size < len(buf) {
+		// Unlike io.ReadFull, an io.ErrUnexpectedEOF from body is an error.
 		read, err := body.Read(buf[size:])
 		size += read
 		if errors.Is(err, io.EOF) {
