@@ -1282,6 +1282,25 @@ func TestMount_RequestPattern(t *testing.T) {
 	assert.Equal(t, "/", serve(http.MethodGet, "/v1/unknown", nil))
 }
 
+func TestMount_QueryCannotOverridePathVariable(t *testing.T) {
+	t.Parallel()
+
+	serve := func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
+		req := &testv1.GetCheckoutRequest{}
+		if err := stream.Receive(req); err != nil {
+			return err
+		}
+		return stream.Send(&testv1.Checkout{Id: req.GetId()})
+	}
+	handler := mountTestHandler(t, methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetCheckout")), serve)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/checkouts/1?id=2", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 func TestMount_MaxReadBytes(t *testing.T) {
 	t.Parallel()
 
