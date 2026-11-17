@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"connectrpc.com/connect/v2"
@@ -341,6 +342,16 @@ func (t *routeTarget) trimVerb(uriPath string) string {
 		return uriPath[:len(uriPath)-len(verb)-1]
 	}
 	return uriPath
+}
+
+// bindsPath reports whether a path variable binds the given field.
+func (t *routeTarget) bindsPath(fields []protoreflect.FieldDescriptor) bool {
+	for _, variable := range t.vars {
+		if slices.Equal(variable.fields, fields) {
+			return true
+		}
+	}
+	return false
 }
 
 type routeTargetVar struct {

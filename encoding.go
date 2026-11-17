@@ -72,6 +72,9 @@ func decodeRequestURL(
 			}
 			return fmt.Errorf("query parameter %q: %w", fieldPath, err)
 		}
+		if target.bindsPath(fields) {
+			return fmt.Errorf("query parameter %q: bound by the path", fieldPath)
+		}
 		if err := setParameter(mreflect, fields, value); err != nil {
 			return fmt.Errorf("query parameter %q: %w", fieldPath, err)
 		}
