@@ -819,6 +819,54 @@ func TestGetParameter(t *testing.T) {
 	}
 }
 
+func TestHasParameter(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		fields  string
+		initial *testv1.ParameterValues
+		want    bool
+	}{{
+		fields:  "double_value",
+		initial: &testv1.ParameterValues{},
+		want:    false,
+	}, {
+		fields:  "double_value",
+		initial: &testv1.ParameterValues{DoubleValue: 1},
+		want:    true,
+	}, {
+		fields:  "oneof_double_value",
+		initial: &testv1.ParameterValues{Oneof: &testv1.ParameterValues_OneofDoubleValue{OneofDoubleValue: 0}},
+		want:    true,
+	}, {
+		fields:  "oneof_enum_value",
+		initial: &testv1.ParameterValues{Oneof: &testv1.ParameterValues_OneofDoubleValue{OneofDoubleValue: 1}},
+		want:    true,
+	}, {
+		fields:  "nested.double_value",
+		initial: &testv1.ParameterValues{Nested: &testv1.ParameterValues_Nested{EnumValue: 1}},
+		want:    false,
+	}, {
+		fields:  "nested.double_value",
+		initial: &testv1.ParameterValues{Nested: &testv1.ParameterValues_Nested{DoubleValue: 1}},
+		want:    true,
+	}, {
+		fields:  "timestamp",
+		initial: &testv1.ParameterValues{Timestamp: &timestamppb.Timestamp{}},
+		want:    true,
+	}}
+	for _, testCase := range testCases {
+		t.Run(testCase.fields, func(t *testing.T) {
+			t.Parallel()
+
+			msg := testCase.initial.ProtoReflect()
+			fields, err := resolvePathToFieldDescriptors(msg.Descriptor(), testCase.fields, false)
+			require.NoError(t, err)
+			assert.Equal(t, testCase.want, hasParameter(msg, fields))
+		})
+	}
+}
+
 func assertMatchesJSON[T any](t *testing.T, input string, unmarshal func(string) (T, error)) {
 	t.Helper()
 	var want T

@@ -708,6 +708,74 @@ func TestMount_RESTRequests(t *testing.T) {
 			},
 		},
 	}, {
+		name: "GetCheckout-QueryBoundByPath",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v2/checkouts/1",
+			values: url.Values{"id": []string{"2"}},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetCheckoutProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetCheckoutRequest{},
+					err: connect.NewError(connect.CodeInvalidArgument, ""),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "query parameter \"id\": bound by the path",
+			},
+		},
+	}, {
+		name: "ListShelves-DuplicateQuery",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves",
+			values: url.Values{"page_token": []string{"a", "b"}},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListShelvesProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListShelvesRequest{},
+					err: connect.NewError(connect.CodeInvalidArgument, ""),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "query parameter \"page_token\": already set",
+			},
+		},
+	}, {
+		name: "UpdateBook-NameInPathAndBody",
+		input: input{
+			method: http.MethodPatch,
+			path:   "/v1/shelves/1/books/1",
+			body:   &testv1.Book{Name: "shelves/1/books/1", Title: "t"},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceUpdateBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.UpdateBookRequest{Book: &testv1.Book{Name: "shelves/1/books/1", Title: "t"}},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1", Title: "t"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/1", Title: "t"},
+		},
+	}, {
 		name: "Index",
 		input: input{
 			method: http.MethodGet,
@@ -1280,25 +1348,6 @@ func TestMount_RequestPattern(t *testing.T) {
 		serve(http.MethodPost, "/v1/shelves/s/books", strings.NewReader(`{"title":"tiny"}`)))
 	assert.Equal(t, "/", serve(http.MethodGet, "/v1/shelves/s/books", nil))
 	assert.Equal(t, "/", serve(http.MethodGet, "/v1/unknown", nil))
-}
-
-func TestMount_QueryCannotOverridePathVariable(t *testing.T) {
-	t.Parallel()
-
-	serve := func(_ context.Context, _ connect.Spec, stream connect.ServerStream) error {
-		req := &testv1.GetCheckoutRequest{}
-		if err := stream.Receive(req); err != nil {
-			return err
-		}
-		return stream.Send(&testv1.Checkout{Id: req.GetId()})
-	}
-	handler := mountTestHandler(t, methodSpec(methodDesc(t, "vanguard.test.v1.LibraryService.GetCheckout")), serve)
-
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v2/checkouts/1?id=2", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestMount_MaxReadBytes(t *testing.T) {
