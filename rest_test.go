@@ -710,6 +710,74 @@ func TestMount_RESTRequests(t *testing.T) {
 			},
 		},
 	}, {
+		name: "GetCheckout-QueryBoundByPath",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v2/checkouts/1",
+			values: url.Values{"id": []string{"2"}},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceGetCheckoutProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.GetCheckoutRequest{},
+					err: connect.NewError(connect.CodeInvalidArgument, ""),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "query parameter \"id\": bound by the path",
+			},
+		},
+	}, {
+		name: "ListShelves-DuplicateQuery",
+		input: input{
+			method: http.MethodGet,
+			path:   "/v1/shelves",
+			values: url.Values{"page_token": []string{"a", "b"}},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceListShelvesProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.ListShelvesRequest{},
+					err: connect.NewError(connect.CodeInvalidArgument, ""),
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusBadRequest,
+			body: &status.Status{
+				Code:    int32(connect.CodeInvalidArgument),
+				Message: "query parameter \"page_token\": already set",
+			},
+		},
+	}, {
+		name: "UpdateBook-NameInPathAndBody",
+		input: input{
+			method: http.MethodPatch,
+			path:   "/v1/shelves/1/books/1",
+			body:   &testv1.Book{Name: "shelves/1/books/1", Title: "t"},
+		},
+		stream: testStream{
+			method: testv1connect.LibraryServiceUpdateBookProcedure,
+			msgs: []testMsg{
+				{in: &testMsgIn{
+					msg: &testv1.UpdateBookRequest{Book: &testv1.Book{Name: "shelves/1/books/1", Title: "t"}},
+				}},
+				{out: &testMsgOut{
+					msg: &testv1.Book{Name: "shelves/1/books/1", Title: "t"},
+				}},
+			},
+		},
+		output: output{
+			code: http.StatusOK,
+			body: &testv1.Book{Name: "shelves/1/books/1", Title: "t"},
+		},
+	}, {
 		name: "Index",
 		input: input{
 			method: http.MethodGet,
