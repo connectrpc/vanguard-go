@@ -72,6 +72,7 @@ type serverStream struct {
 	requestCompressor  connect.Compressor // nil for identity
 	responseCompressor connect.Compressor // nil for identity
 	compressWriter     io.WriteCloser     // set when the response is compressed
+	decompressor       io.Closer          // set when the request is compressed
 
 	body io.Reader // opened on the first Receive
 	done bool      // receive side exhausted
@@ -153,6 +154,13 @@ func (s *serverStream) Receive(msg any) error {
 	return s.decodeURL(pmsg)
 }
 
+// closeRequest releases the request decompressor, if any.
+func (s *serverStream) closeRequest() {
+	if s.decompressor != nil {
+		_ = s.decompressor.Close()
+	}
+}
+
 // openBody asserts a rule without a body mapping got none, and otherwise
 // prepares the request body: decompressed, then capped at maxReadBytes.
 func (s *serverStream) openBody() error {
@@ -170,6 +178,7 @@ func (s *serverStream) openBody() error {
 			return connect.Errorf(connect.CodeInvalidArgument, "decompress request: %s", err).WithCause(err)
 		}
 		body = decompressed
+		s.decompressor = decompressed
 	}
 	if limit := s.options.maxReadBytes; limit > 0 {
 		body = http.MaxBytesReader(nil, body, limit)

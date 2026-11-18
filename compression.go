@@ -17,8 +17,9 @@ package vanguard
 import (
 	"errors"
 	"io"
+	"net/http"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"connectrpc.com/connect/v2"
 )
@@ -86,22 +87,43 @@ func decompressBody(compressor connect.Compressor, body io.ReadCloser) (io.ReadC
 	if err != nil {
 		return nil, err
 	}
-	return &decompressedBody{Reader: reader, decompressor: reader, body: body}, nil
+	return &decompressedBody{decompressor: reader, body: body}, nil
 }
 
+// decompressedBody is a body read through a pooled decompressor that may be
+// closed during a Read, which then releases it.
 type decompressedBody struct {
-	io.Reader
-
-	decompressor io.Closer
+	decompressor io.ReadCloser
 	body         io.Closer
-	closeOnce    sync.Once
-	closeErr     error
+	state        atomic.Int32
 }
 
-// Close is idempotent, so a pooled decompressor is released only once.
+const (
+	bodyIdle int32 = iota
+	bodyReading
+	bodyClosed
+)
+
+// Read returns [http.ErrBodyReadAfterClose] after Close.
+func (d *decompressedBody) Read(data []byte) (int, error) {
+	if !d.state.CompareAndSwap(bodyIdle, bodyReading) {
+		return 0, http.ErrBodyReadAfterClose
+	}
+	size, err := d.decompressor.Read(data)
+	if !d.state.CompareAndSwap(bodyReading, bodyIdle) {
+		_ = d.release() // Close ran during this Read and left the release to it
+	}
+	return size, err
+}
+
+// Close releases the decompressor and closes body, at most once.
 func (d *decompressedBody) Close() error {
-	d.closeOnce.Do(func() {
-		d.closeErr = errors.Join(d.decompressor.Close(), d.body.Close())
-	})
-	return d.closeErr
+	if d.state.Swap(bodyClosed) != bodyIdle {
+		return nil // already closed, or the in-flight Read releases
+	}
+	return d.release()
+}
+
+func (d *decompressedBody) release() error {
+	return errors.Join(d.decompressor.Close(), d.body.Close())
 }
