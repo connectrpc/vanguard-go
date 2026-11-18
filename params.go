@@ -100,6 +100,25 @@ func setParameter(msg protoreflect.Message, fields []protoreflect.FieldDescripto
 	return nil
 }
 
+// hasParameter reports whether setting the field path would replace a value
+// already set on msg, including another member of the same oneof.
+func hasParameter(msg protoreflect.Message, fields []protoreflect.FieldDescriptor) bool {
+	for i, field := range fields {
+		if oneof := field.ContainingOneof(); oneof != nil {
+			if set := msg.WhichOneof(oneof); set != nil && set.Number() != field.Number() {
+				return true
+			}
+		}
+		if !msg.Has(field) {
+			return false
+		}
+		if i < len(fields)-1 {
+			msg = msg.Get(field).Message()
+		}
+	}
+	return true
+}
+
 func unmarshalFieldValue(msg protoreflect.Message, field protoreflect.FieldDescriptor, data string) (protoreflect.Value, error) {
 	switch kind := field.Kind(); kind {
 	case protoreflect.BoolKind:

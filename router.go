@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 
 	"connectrpc.com/connect/v2"
@@ -341,6 +342,17 @@ func (t *routeTarget) trimVerb(uriPath string) string {
 		return uriPath[:len(uriPath)-len(verb)-1]
 	}
 	return uriPath
+}
+
+// bindsPath reports whether fields overlaps a path variable's field path.
+func (t *routeTarget) bindsPath(fields []protoreflect.FieldDescriptor) bool {
+	for _, variable := range t.vars {
+		n := min(len(fields), len(variable.fields))
+		if slices.Equal(fields[:n], variable.fields[:n]) {
+			return true
+		}
+	}
+	return false
 }
 
 type routeTargetVar struct {
